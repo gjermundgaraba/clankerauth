@@ -102,7 +102,14 @@ export const ClientInput = Schema.Struct({
 });
 export const ClientId = Schema.Struct({ client_id: Schema.String });
 
+export const ClientBlockInput = Schema.Struct({
+  client_id: Schema.String,
+  blocked: Schema.Boolean,
+});
+
 export const Client = Schema.Struct({
+  onboarding: Schema.optional(Schema.Literals(["managed", "dcr", "cimd"])),
+  blocked: Schema.optional(Schema.Boolean),
   client_id: Schema.String,
   client_name: Schema.optional(Schema.String),
   redirect_uris: Schema.Array(Schema.String),
@@ -165,6 +172,16 @@ export const Api = HttpApi.make("ClankerAuth")
         HttpApiEndpoint.post("delete", "/admin/clients/delete", {
           payload: ClientId,
           success: Schema.Struct({ deleted: Schema.Boolean }),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("revoke", "/admin/clients/revoke", {
+          payload: ClientId,
+          success: Schema.Struct({ revoked: Schema.Boolean }),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("block", "/admin/clients/block", {
+          payload: ClientBlockInput,
+          success: Schema.Struct({ blocked: Schema.Boolean }),
           error: errors,
         }),
         HttpApiEndpoint.post("rotate", "/admin/clients/rotate", {

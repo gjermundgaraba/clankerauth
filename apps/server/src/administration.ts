@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { APIError } from "better-auth/api";
 import {
   BadRequest,
@@ -10,6 +10,7 @@ import {
   TooManyRequests,
   Unauthorized,
   type ClientInput,
+  type ClientBlockInput,
   type ClientId,
   type ClientAccessInput,
   type Resource,
@@ -80,16 +81,56 @@ export function administration(service: Service) {
       return { created: true };
     }),
     list: Effect.fn("Administration.list")(function* (headers: Headers, email: string) {
-      const clients = yield* Effect.tryPromise({
+      const managed = yield* Effect.tryPromise({
         try: () => auth.api.getOAuthClients({ headers }),
         catch: apiError,
       });
+      const rows = yield* service.sql`
+        SELECT p.clientId AS client_id, p.source AS onboarding, p.blocked,
+          c.name, c.tokenEndpointAuthMethod, c.scopes, c.grantTypes,
+          CASE WHEN c.clientId IS NULL THEN '[]' ELSE c.redirectUris END AS redirectUris
+        FROM clientOnboarding p LEFT JOIN oauthClient c ON c.clientId = p.clientId
+      `.pipe(Effect.mapError(apiError));
+      const automatic = (yield* Schema.decodeUnknownEffect(
+        Schema.Array(
+          Schema.Struct({
+            client_id: Schema.String,
+            onboarding: Schema.Literals(["dcr", "cimd"]),
+            blocked: Schema.Number,
+            name: Schema.NullOr(Schema.String),
+            redirectUris: Schema.fromJsonString(Schema.Array(Schema.String)),
+            tokenEndpointAuthMethod: Schema.NullOr(Schema.String),
+            scopes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
+            grantTypes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
+          }),
+        ),
+      )(rows).pipe(Effect.mapError(apiError))).map((row) => ({
+        client_id: row.client_id,
+        onboarding: row.onboarding,
+        blocked: row.blocked !== 0,
+        client_name: row.name ?? undefined,
+        redirect_uris: row.redirectUris,
+        token_endpoint_auth_method: row.tokenEndpointAuthMethod ?? undefined,
+        scope: row.scopes?.join(" "),
+        grant_types: row.grantTypes ?? undefined,
+      }));
+      const automaticIds = new Set(automatic.map((client) => client.client_id));
+      const clients = [
+        ...(managed ?? [])
+          .filter((client) => !automaticIds.has(client.client_id))
+          .map((client) => ({
+            ...client,
+            onboarding: "managed" as const,
+            blocked: client.disabled === true,
+          })),
+        ...automatic,
+      ];
       const catalog = yield* Effect.all({
         resources: service.resources.list(),
         clientAccess: service.resources.access(),
       }).pipe(Effect.mapError(resourceError));
       return {
-        clients: clients ?? [],
+        clients,
         ...catalog,
         email,
         issuer: `${settings.baseURL}/api/auth`,
@@ -165,6 +206,14 @@ export function administration(service: Service) {
         catch: apiError,
       });
       return { deleted: true };
+    }),
+    revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
+      return yield* service.onboarding.revoke(input.client_id).pipe(Effect.mapError(resourceError));
+    }),
+    block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
+      return yield* service.onboarding
+        .block(input.client_id, input.blocked)
+        .pipe(Effect.mapError(resourceError));
     }),
     rotate: Effect.fn("Administration.rotate")(function* (
       headers: Headers,

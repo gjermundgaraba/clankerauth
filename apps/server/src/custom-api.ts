@@ -64,6 +64,8 @@ export function customApi(service: Service) {
       .handle("delete", ({ request, payload }) =>
         admin.delete(new Headers(request.headers), payload),
       )
+      .handle("revoke", ({ payload }) => admin.revoke(payload))
+      .handle("block", ({ payload }) => admin.block(payload))
       .handle("rotate", ({ request, payload }) =>
         admin.rotate(new Headers(request.headers), payload),
       )

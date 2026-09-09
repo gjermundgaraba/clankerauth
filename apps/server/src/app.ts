@@ -13,6 +13,7 @@ const publicPaths = new Set([
   "/get-session",
   "/change-password",
   "/jwks",
+  "/oauth2/register",
   "/oauth2/authorize",
   "/oauth2/token",
   "/oauth2/consent",
@@ -91,6 +92,7 @@ export function application(
     const publicCors =
       [
         "/jwks",
+        "/oauth2/register",
         "/oauth2/token",
         "/oauth2/revoke",
         "/oauth2/introspect",

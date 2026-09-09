@@ -127,8 +127,16 @@ async function consent() {
     throw new Error("Sign in through your application to continue authorization.");
   const scopes = (query.get("scope") ?? "").split(" ").filter(Boolean);
   const resources = query.getAll("resource");
+  let metadataHost: string | undefined;
+  try {
+    const identifier = new URL(clientId);
+    if (identifier.protocol === "https:") metadataHost = identifier.hostname;
+  } catch {
+    // Registered identifiers need not be URLs.
+  }
+  const redirect = query.get("redirect_uri");
   main.className = "center";
-  main.innerHTML = `<section class="card consent"><p class="eyebrow">PERMISSION REQUEST</p><h1>Allow this connection?</h1><p><strong>${escape(client.data.client_name ?? clientId)}</strong> wants to act on your behalf.</p><div class="resource"><span class="eyebrow">ONLY FOR THIS RESOURCE</span>${resources.map((r) => `<code>${escape(r)}</code>`).join("")}</div><h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><span>✓</span><code>${escape(scope)}</code></li>`).join("")}</ul>${query.has("claims") ? `<h3>Additional identity claims</h3><pre>${escape(query.get("claims")!)}</pre>` : ""}<p class="help">Access tokens expire after five minutes. Offline access allows this Client to renew access until its authorization is revoked.</p><p id="message" role="alert"></p><form id="consent"><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
+  main.innerHTML = `<section class="card consent"><p class="eyebrow">PERMISSION REQUEST</p><h1>Allow this connection?</h1><p><strong>${escape(client.data.client_name ?? clientId)}</strong> wants to act on your behalf.</p>${metadataHost ? `<p>Client metadata host: <strong>${escape(metadataHost)}</strong></p>` : ""}<label>Client ID<code>${escape(clientId)}</code></label><label>Callback destination<code>${escape(redirect ?? "Not supplied in this request")}</code></label><p class="help">The client supplies its display name. Review the identifier and callback before approving.</p><div class="resource"><span class="eyebrow">ONLY FOR THIS RESOURCE</span>${resources.map((r) => `<code>${escape(r)}</code>`).join("")}</div><h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><span>✓</span><code>${escape(scope)}</code></li>`).join("")}</ul>${query.has("claims") ? `<h3>Additional identity claims</h3><pre>${escape(query.get("claims")!)}</pre>` : ""}<p class="help">Access tokens expire after five minutes. Offline access allows this Client to renew access until its authorization is revoked.</p><p id="message" role="alert"></p><form id="consent"><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#consent")!;
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -233,42 +241,46 @@ async function dashboard() {
       data.resources.length
         ? data.resources
             .map((resource) => {
-              const dependencies = data.clients.filter((client) =>
-                allowed(client.client_id).includes(resource.identifier),
+              const dependencies = data.clients.filter(
+                (client) =>
+                  (!client.onboarding || client.onboarding === "managed") &&
+                  allowed(client.client_id).includes(resource.identifier),
               );
               return `<article class="resource"><h3>${escape(resource.name)}</h3><code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span>
-      <p class="help dependencies">Clients with access: ${dependencies.length ? dependencies.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
+      <p class="help dependencies">Managed Clients eligible to request access: ${dependencies.length ? dependencies.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
       <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">${scopeHelp} Clients with access follow these scopes. Added scopes require approval; removing scopes revokes affected renewal credentials. Issued access tokens may remain valid for up to five minutes.</p><button>Save resource</button></form></details>
       <button class="danger" data-resource-delete="${escape(resource.identifier)}" ${dependencies.length ? "disabled" : ""}>Delete resource</button>${dependencies.length ? '<p class="help dependencies">Remove Client access using Manage access below before deleting this Resource.</p>' : ""}</article>`;
             })
             .join("")
-        : '<div class="empty"><h3>Add your first Resource</h3><p>Define a protected API or MCP server, then register a Client that can access it.</p></div>'
+        : '<div class="empty"><h3>Add your first Resource</h3><p>Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.</p></div>'
     }
     </section><section class="card registration"><h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="OKF MCP"></label><label>HTTPS identifier<input name="identifier" type="url" required placeholder="https://okf.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be edited later.</p><label>Scopes<input name="scopes" required placeholder="okf:read okf:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form></section></div>
-    <div class="columns dashboard-section"><section><h2>Clients <span class="count">${data.clients.length}</span></h2><p class="muted">Registered software identities with explicit access to Resources.</p><div class="clients">
+    <div class="columns dashboard-section"><section><h2>Clients <span class="count">${data.clients.length}</span></h2><p class="muted">Connect a compatible MCP client using your MCP server URL, then sign in and approve access. Registration alone grants no access.</p><div class="clients">
     ${
       data.clients.length
         ? data.clients
             .map(
               (
                 client,
-              ) => `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><label>Client ID<code>${escape(client.client_id)}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label>
-    <h3>Allowed Resources</h3>${
-      data.resources
-        .filter((resource) => allowed(client.client_id).includes(resource.identifier))
-        .map(
-          (resource) =>
-            `<div class="allowed-resource"><strong>${escape(resource.name)}</strong><code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span></div>`,
-        )
-        .join("") || '<p class="help">No Resource access configured.</p>'
+              ) => `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${client.onboarding === "cimd" ? "Client ID Metadata Document" : client.onboarding === "dcr" ? "Dynamic registration" : "Managed registration"}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${escape(client.client_id)}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label>
+    <h3>Resources eligible for consent</h3>${
+      client.onboarding && client.onboarding !== "managed"
+        ? '<p class="help">May request any configured Resource and its current scopes. Owner consent is required separately for each Resource.</p>'
+        : data.resources
+            .filter((resource) => allowed(client.client_id).includes(resource.identifier))
+            .map(
+              (resource) =>
+                `<div class="allowed-resource"><strong>${escape(resource.name)}</strong><code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span></div>`,
+            )
+            .join("") || '<p class="help">No Resource access configured.</p>'
     }
-    <details><summary>Manage access</summary><form data-client-access="${escape(client.client_id)}"><fieldset><legend>Allowed Resources</legend>${choices(allowed(client.client_id)) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Allows requesting all current and future scopes on selected Resources. Consent is required separately for each Resource. Removing access revokes consent and renewal credentials; issued access tokens may remain valid for up to five minutes.</p><button>Save access</button></form></details>
-    <div class="actions">${client.token_endpoint_auth_method !== "none" ? `<button class="secondary" data-rotate="${escape(client.client_id)}">Rotate secret</button>` : ""}<button class="danger" data-delete="${escape(client.client_id)}">Delete client</button></div></article>`,
+    ${!client.onboarding || client.onboarding === "managed" ? `<details><summary>Manage access</summary><form data-client-access="${escape(client.client_id)}"><fieldset><legend>Allowed Resources</legend>${choices(allowed(client.client_id)) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Allows requesting all current and future scopes on selected Resources. Consent is required separately for each Resource. Removing access revokes consent and renewal credentials; issued access tokens may remain valid for up to five minutes.</p><button>Save access</button></form></details>` : ""}
+    <div class="actions"><button class="secondary" data-revoke="${escape(client.client_id)}">Revoke authorization</button><button class="secondary" data-block="${escape(client.client_id)}" data-blocked="${client.blocked ? "true" : "false"}">${client.blocked ? "Unblock client" : "Block client"}</button>${client.token_endpoint_auth_method !== "none" && (!client.onboarding || client.onboarding === "managed") ? `<button class="secondary" data-rotate="${escape(client.client_id)}">Rotate secret</button>` : ""}${!client.onboarding || client.onboarding === "managed" ? `<button class="danger" data-delete="${escape(client.client_id)}">Delete client</button>` : ""}</div>${client.onboarding && client.onboarding !== "managed" ? '<p class="help">Revocation requires fresh consent. Blocking also prevents new authorization for this client ID and survives metadata rediscovery. Issued access tokens may remain valid for up to five minutes.</p>' : ""}</article>`,
             )
             .join("")
-        : '<div class="empty"><h3>No Clients registered</h3><p>Register a Client with an exact redirect URI and one or more Resources.</p></div>'
+        : '<div class="empty"><h3>No Clients registered</h3><p>Connect your MCP client to a configured server to onboard automatically, or register a managed Client here.</p></div>'
     }
-    </div></section><section class="card registration"><p class="eyebrow">EXPLICIT REGISTRATION</p><h2>Register client</h2>${data.resources.length ? "" : '<p class="help">Add your first Resource before registering a Client.</p>'}<form id="register"><fieldset ${data.resources.length ? "" : "disabled"}><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (select at least one)</legend>${choices([])}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Dynamic registration is disabled. Client access follows each Resource’s current and future scopes.</p></form></section></div></fieldset>`;
+    </div></section><section class="card registration"><p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2>${data.resources.length ? "" : '<p class="help">Add your first Resource before registering a Client.</p>'}<form id="register"><fieldset ${data.resources.length ? "" : "disabled"}><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (select at least one)</legend>${choices([])}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Compatible MCP clients can use automatic registration. Managed Client access follows each selected Resource’s current and future scopes.</p></form></section></div></fieldset>`;
   renderCredentials();
   document.querySelector("#logout")!.addEventListener("click", () => {
     void submit(async () => {
@@ -345,6 +357,24 @@ async function dashboard() {
         return;
       void submit(async () => {
         await request(api.clients.access({ payload: { client_id, resources } }));
+        await refreshDashboard();
+      });
+    });
+  }
+  for (const button of main.querySelectorAll<HTMLButtonElement>("[data-revoke], [data-block]")) {
+    button.addEventListener("click", () => {
+      if (submitting) return;
+      const client_id = button.dataset.revoke ?? button.dataset.block!;
+      const blocked = button.dataset.blocked !== "true";
+      const prompt = button.dataset.revoke
+        ? "Revoke this Client's authorization and renewal credentials? It can request fresh consent. Issued access tokens may remain valid for up to five minutes."
+        : blocked
+          ? "Block this client ID and revoke its authorization? It cannot authorize again until unblocked. Issued access tokens may remain valid for up to five minutes."
+          : "Unblock this client ID? Fresh authorization is required to regain access.";
+      if (!confirm(prompt)) return;
+      void submit(async () => {
+        if (button.dataset.revoke) await request(api.clients.revoke({ payload: { client_id } }));
+        else await request(api.clients.block({ payload: { client_id, blocked } }));
         await refreshDashboard();
       });
     });

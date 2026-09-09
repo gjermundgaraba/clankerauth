@@ -133,6 +133,17 @@ describe("API integration", () => {
           expect(rotated.client_secret).toBeTypeOf("string");
           expect(rotated.client_secret).not.toBe(created.client_secret);
         }
+        expect(yield* api.clients.revoke({ payload: { client_id: created.client_id } })).toEqual({
+          revoked: true,
+        });
+        expect(
+          yield* api.clients.block({ payload: { client_id: created.client_id, blocked: true } }),
+        ).toEqual({ blocked: true });
+        expect((yield* api.clients.list()).clients[0]?.blocked).toBe(true);
+        expect(
+          yield* api.clients.block({ payload: { client_id: created.client_id, blocked: false } }),
+        ).toEqual({ blocked: false });
+        expect((yield* api.clients.list()).clients[0]?.blocked).toBe(false);
         // Persisted values must satisfy the outgoing contract; corrupt data is a
         // server failure, not a bad request from this correctly typed caller.
         yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
@@ -153,6 +164,117 @@ describe("API integration", () => {
       );
     },
   );
+
+  test("automatic clients are visible and manageable through the generated owner API", async () => {
+    await Effect.gen(function* () {
+      const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
+      yield* api.setup.create({ payload: { email, password } });
+      const login = yield* Effect.promise(() =>
+        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }),
+      );
+      cookie = login.headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; ");
+      yield* api.resources.create({
+        payload: { identifier: resource, name: "MCP", scopes: ["example:read"] },
+      });
+      const registration = yield* Effect.promise(() =>
+        handle(
+          new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-clankerauth-peer": "127.0.0.1" },
+            body: JSON.stringify({
+              client_name: "Automatic MCP",
+              redirect_uris: ["http://127.0.0.1:9876/callback"],
+              token_endpoint_auth_method: "none",
+              grant_types: ["authorization_code", "refresh_token"],
+            }),
+          }),
+        ),
+      );
+      expect(registration.status).toBe(201);
+      expect(registration.headers.get("access-control-allow-origin")).toBe("*");
+      expect(registration.headers.has("access-control-allow-credentials")).toBe(false);
+      const preflight = yield* Effect.promise(() =>
+        handle(
+          new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
+            method: "OPTIONS",
+            headers: {
+              origin: "https://mcp-client.example",
+              "access-control-request-method": "POST",
+              "access-control-request-headers": "content-type",
+            },
+          }),
+        ),
+      );
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
+      const registered = yield* Effect.promise(() => registration.json());
+      const client_id = yield* Schema.decodeUnknownEffect(Schema.String)(registered.client_id);
+      const listing = yield* api.clients.list();
+      expect(listing.clients).toHaveLength(1);
+      expect(listing.clients[0]).toMatchObject({ client_id, onboarding: "dcr", blocked: false });
+      expect(listing.clients[0]).not.toHaveProperty("client_secret");
+      expect(listing.clientAccess).toEqual([{ client_id, resource }]);
+      expect(
+        (yield* Effect.flip(api.clients.access({ payload: { client_id, resources: [] } })))._tag,
+      ).toBe("BadRequest");
+      expect(yield* api.clients.revoke({ payload: { client_id } })).toEqual({ revoked: true });
+      expect(yield* api.clients.block({ payload: { client_id, blocked: true } })).toEqual({
+        blocked: true,
+      });
+      expect((yield* api.clients.list()).clients[0]?.blocked).toBe(true);
+      expect(yield* api.clients.block({ payload: { client_id, blocked: false } })).toEqual({
+        blocked: false,
+      });
+      expect((yield* api.clients.list()).clients[0]?.blocked).toBe(false);
+      expect(yield* api.resources.delete({ payload: { identifier: resource } })).toEqual({
+        deleted: true,
+      });
+      expect((yield* api.clients.list()).clientAccess).toEqual([]);
+
+      // Retained policy and nullable live metadata are distinct cases. An owned
+      // automatic client must also appear only once in the combined listing.
+      const retainedId = "https://retained.example/client.json";
+      yield* service.sql`INSERT INTO clientOnboarding (clientId, source, blocked) VALUES (${retainedId}, 'cimd', 1)`;
+      yield* service.sql`UPDATE clientOnboarding SET source = 'cimd' WHERE clientId = ${client_id}`;
+      yield* service.sql`UPDATE oauthClient SET userId = ${yield* service.owner()}, name = NULL, tokenEndpointAuthMethod = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
+      const combined = (yield* api.clients.list()).clients;
+      expect(combined).toHaveLength(2);
+      expect(combined.find((client) => client.client_id === retainedId)).toEqual({
+        client_id: retainedId,
+        onboarding: "cimd",
+        blocked: true,
+        redirect_uris: [],
+      });
+      expect(combined.find((client) => client.client_id === client_id)).toEqual({
+        client_id,
+        onboarding: "cimd",
+        blocked: false,
+        redirect_uris: ["http://127.0.0.1:9876/callback"],
+      });
+      for (const invalidRedirects of ["null", "[42]"]) {
+        yield* service.sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
+        expect((yield* Effect.flip(api.clients.list()))._tag).toBe("InternalServerError");
+      }
+      cookie = "";
+      expect(
+        (yield* Effect.flip(api.clients.block({ payload: { client_id, blocked: true } })))._tag,
+      ).toBe("Unauthorized");
+      expect((yield* Effect.flip(api.clients.revoke({ payload: { client_id } })))._tag).toBe(
+        "Unauthorized",
+      );
+    }).pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, appFetch),
+      Effect.runPromise,
+    );
+  });
 
   test("malformed setup payload returns 400 without reflecting sensitive input", async () => {
     const response = await appFetch(`${settings.baseURL}/api/setup`, {

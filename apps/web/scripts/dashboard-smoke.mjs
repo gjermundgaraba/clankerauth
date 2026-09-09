@@ -52,7 +52,10 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     const key = `${request.method()} ${url.pathname}`;
-    if (url.origin === origin && (url.pathname === "/" || url.pathname.startsWith("/assets/"))) {
+    if (
+      url.origin === origin &&
+      (url.pathname === "/" || url.pathname === "/consent" || url.pathname.startsWith("/assets/"))
+    ) {
       await route.continue();
       return;
     }
@@ -90,6 +93,26 @@ try {
         case "POST /admin/clients/rotate":
           response = ok({ ...created, client_secret: "fixture-rotated-secret" });
           break;
+        case "GET /api/auth/oauth2/public-client":
+          response = ok({
+            client_id: "https://client.fixture.invalid/metadata.json",
+            client_name: "<em>Client name</em>",
+          });
+          break;
+        case "POST /admin/clients/revoke":
+          assert.equal(request.postDataJSON().client_id, data.clients[0].client_id);
+          response = ok({ revoked: true });
+          break;
+        case "POST /admin/clients/block": {
+          const payload = request.postDataJSON();
+          assert.equal(payload.client_id, data.clients[0].client_id);
+          data = {
+            ...data,
+            clients: data.clients.map((client) => ({ ...client, blocked: payload.blocked })),
+          };
+          response = ok({ blocked: payload.blocked });
+          break;
+        }
         case "POST /admin/clients/delete":
           response = ok({ deleted: true });
           break;
@@ -253,6 +276,54 @@ try {
   assert.equal(await page.locator("#credentials").isVisible(), false);
   assert.equal(await page.locator("#credentials").textContent(), "");
   assert.equal(count("POST /admin/clients/delete"), 1);
+  // Automatic clients expose authorization lifecycle controls without managed-only mutations.
+  const automatic = {
+    ...existing,
+    client_id: "https://client.fixture.invalid/metadata.json",
+    onboarding: "cimd",
+    blocked: false,
+  };
+  data = {
+    ...data,
+    clients: [automatic],
+    clientAccess: [{ client_id: automatic.client_id, resource: resource.identifier }],
+  };
+  listResponse = async () => ok(data);
+  await retry.click();
+  await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
+  await waitForIdle();
+  assert.match(await page.locator(".client").textContent(), /Client ID Metadata Document/);
+  assert.equal(await page.locator("[data-client-access], [data-delete], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
+  await page.getByRole("button", { name: "Revoke authorization", exact: true }).click();
+  await waitForIdle();
+  assert.equal(count("POST /admin/clients/revoke"), 1);
+  await page.getByRole("button", { name: "Block client", exact: true }).click();
+  await page.getByRole("button", { name: "Unblock client", exact: true }).waitFor();
+  await waitForIdle();
+  assert.match(await page.locator(".client").textContent(), /BLOCKED/);
+  await page.getByRole("button", { name: "Unblock client", exact: true }).click();
+  await page.getByRole("button", { name: "Block client", exact: true }).waitFor();
+  await waitForIdle();
+  assert.equal(count("POST /admin/clients/block"), 2);
+  data = { ...data, clients: [{ ...automatic, onboarding: "dcr" }] };
+  await page.reload();
+  await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
+  assert.match(await page.locator(".client").textContent(), /Dynamic registration/);
+  assert.equal(await page.locator("[data-client-access], [data-delete], [data-rotate]").count(), 0);
+
+  // Consent renders the actual identifier/callback and escapes client-supplied display names.
+  const callback = "http://127.0.0.1:43129/callback";
+  await page.goto(
+    `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "fixture:read", sig: "fixture" })}`,
+  );
+  await page.getByRole("heading", { name: "Allow this connection?" }).waitFor();
+  const consent = await page.locator(".consent").textContent();
+  assert.ok(consent.includes(automatic.client_id));
+  assert.ok(consent.includes("Client metadata host: client.fixture.invalid"));
+  assert.ok(consent.includes(callback));
+  assert.ok(consent.includes("<em>Client name</em>"));
+  assert.equal(await page.locator(".consent em").count(), 0);
   assert.deepEqual(errors, []);
   console.log("Dashboard browser regressions passed.");
 } finally {

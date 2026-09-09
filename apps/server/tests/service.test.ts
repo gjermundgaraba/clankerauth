@@ -482,10 +482,6 @@ describe("owner boundary", () => {
       (await request("/api/auth/oauth2/create-client", { redirect_uris: ["https://evil.example"] }))
         .status,
     ).toBe(404);
-    expect(
-      (await request("/api/auth/oauth2/register", { redirect_uris: ["https://evil.example"] }))
-        .status,
-    ).toBe(404);
     expect((await request("/api/auth/token")).status).toBe(404);
     expect((await request("/api/auth/sign-out", {})).status).toBe(200);
     expect((await request("/admin/clients")).status).toBe(401);
@@ -873,7 +869,7 @@ describe("OAuth boundaries and lifecycle", () => {
     expect((await refresh.json()).error).toBe("invalid_grant");
   });
 
-  test("discovery pins issuer and advertises S256, no registration or machine grants", async () => {
+  test("discovery pins issuer and advertises S256 and automatic onboarding without machine grants", async () => {
     for (const path of [
       "/.well-known/oauth-authorization-server/api/auth",
       "/api/auth/.well-known/oauth-authorization-server",
@@ -884,7 +880,8 @@ describe("OAuth boundaries and lifecycle", () => {
       const metadata = await response.json();
       expect(metadata.issuer).toBe(`${settings.baseURL}/api/auth`);
       expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-      expect(metadata.registration_endpoint).toBeUndefined();
+      expect(metadata.registration_endpoint).toBe(`${settings.baseURL}/api/auth/oauth2/register`);
+      expect(metadata.client_id_metadata_document_supported).toBe(true);
       expect(metadata.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
     }
   });

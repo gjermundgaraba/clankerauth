@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { getCurrentAuthEndpointContext } from "@better-auth/core/context";
 import { openDatabase } from "./database.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -6,15 +7,35 @@ import { randomUUID } from "node:crypto";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
-import { getOAuthProviderState, oauthProvider } from "@better-auth/oauth-provider";
+import { cimd } from "@better-auth/cimd";
+import { fetchClientMetadataResource } from "./cimd-transport.ts";
+import { onboardingStore } from "./onboarding.ts";
+import {
+  getOAuthProviderState,
+  oauthProvider,
+  type ClientMetadataResourceFetch,
+} from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 import { protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
-export async function openAuth(settings: Settings) {
+export async function openAuth(
+  settings: Settings,
+  integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
+) {
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
   const database = await openDatabase(settings.database);
   const { sql } = database;
+  const onboarding = onboardingStore(sql);
+  const metadataRevision = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const rows = yield* sql`SELECT revision FROM clientMetadataRevision WHERE id = 1`;
+        return (yield* Schema.decodeUnknownEffect(Schema.Struct({ revision: Schema.Number }))(
+          rows[0],
+        )).revision;
+      }),
+    );
   const owner = Effect.fn("Auth.owner")(function* () {
     const rows = yield* sql`SELECT userId FROM serviceOwner WHERE id = 1`;
     if (!rows.length) return undefined;
@@ -53,8 +74,10 @@ export async function openAuth(settings: Settings) {
       },
     },
     grantTypes: ["authorization_code", "refresh_token"],
-    allowDynamicClientRegistration: false,
-    allowUnauthenticatedClientRegistration: false,
+    allowDynamicClientRegistration: true,
+    allowUnauthenticatedClientRegistration: true,
+    clientRegistrationRequirePKCE: true,
+    clientRegistrationDefaultResources: Array<string>(),
     enforcePerClientResources: true,
     accessTokenExpiresIn: 300,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
@@ -68,6 +91,15 @@ export async function openAuth(settings: Settings) {
           error: "invalid_grant",
           error_description: "Owner grant required",
         });
+      const context = getCurrentAuthEndpointContext().context;
+      if (
+        "clientMetadataRevision" in context &&
+        context.clientMetadataRevision !== (await metadataRevision())
+      )
+        throw new APIError("BAD_REQUEST", {
+          error: "invalid_grant",
+          error_description: "Client metadata changed; authorize again",
+        });
       return {};
     },
     customUserInfoClaims: async ({ user }) => {
@@ -75,6 +107,10 @@ export async function openAuth(settings: Settings) {
         throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
       return {};
     },
+    // Session-backed DCR needs a source marker distinct from owner-managed clients.
+    // Anonymous DCR is already unowned; both are tracked by the creation trigger.
+    clientReference: () =>
+      getCurrentAuthEndpointContext().path === "/oauth2/register" ? "clankerauth:dcr" : undefined,
     clientPrivileges: async ({ user, action }) =>
       !!user &&
       user.id === (await Effect.runPromise(owner())) &&
@@ -82,17 +118,9 @@ export async function openAuth(settings: Settings) {
     resourcePrivileges: async ({ user }) =>
       !!user && user.id === (await Effect.runPromise(owner())),
   });
-  const synchronizeScopes = () =>
-    resources.supportedScopes().pipe(
-      Effect.tap((scopes) =>
-        Effect.sync(() => {
-          provider.options.scopes = scopes;
-        }),
-      ),
-      Effect.asVoid,
-    );
-  const resources = resourceStore(sql, (scopes) => {
+  const resources = resourceStore(sql, (scopes, identifiers) => {
     provider.options.scopes = scopes;
+    provider.options.clientRegistrationDefaultResources = identifiers;
   });
   const options = {
     appName: "Clanker Auth",
@@ -120,6 +148,55 @@ export async function openAuth(settings: Settings) {
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
+        const basic = ctx.headers?.get("authorization");
+        let basicClientId: string | undefined;
+        if (basic?.startsWith("Basic ")) {
+          try {
+            basicClientId = decodeURIComponent(
+              Buffer.from(basic.slice(6), "base64").toString("utf8").split(":")[0] ?? "",
+            );
+          } catch {
+            /* Provider rejects malformed credentials. */
+          }
+        }
+        const clientId =
+          typeof ctx.body?.client_id === "string"
+            ? ctx.body.client_id
+            : typeof ctx.query?.client_id === "string"
+              ? ctx.query.client_id
+              : typeof ctx.body?.oauth_query === "string"
+                ? new URLSearchParams(ctx.body.oauth_query).get("client_id")
+                : basicClientId;
+        if (clientId && (await Effect.runPromise(onboarding.isBlocked(clientId))))
+          throw new APIError("BAD_REQUEST", {
+            error: "invalid_client",
+            error_description: "Client is blocked",
+          });
+        if (ctx.path === "/oauth2/token")
+          Object.assign(ctx.context, { clientMetadataRevision: await metadataRevision() });
+        if (ctx.path === "/oauth2/register") {
+          if (!(await Effect.runPromise(onboarding.admit())))
+            throw new APIError("TOO_MANY_REQUESTS", {
+              error: "temporarily_unavailable",
+              error_description: "Client registration capacity reached",
+            });
+          // Trust and PKCE are local policy, never self-asserted metadata.
+
+          const redirects = ctx.body.redirect_uris;
+          if (
+            !ctx.body.application_type &&
+            Array.isArray(redirects) &&
+            redirects.some((uri) => {
+              if (typeof uri !== "string") return false;
+              try {
+                return new URL(uri).protocol !== "https:";
+              } catch {
+                return false;
+              }
+            })
+          )
+            ctx.body.application_type = "native";
+        }
         // A legacy cookie may be discarded or replaced, but may not authorize work.
         if (ctx.path === "/sign-out" || ctx.path === "/sign-in/email") return;
         // Login continuation carries a newly created session before the browser
@@ -150,7 +227,10 @@ export async function openAuth(settings: Settings) {
       storage: "database",
       window: 60,
       max: 100,
-      customRules: { "/sign-in/email": { window: 60, max: 5 } },
+      customRules: {
+        "/sign-in/email": { window: 60, max: 5 },
+        "/oauth2/register": { window: 60, max: 10 },
+      },
     },
     plugins: [
       jwt({
@@ -158,6 +238,19 @@ export async function openAuth(settings: Settings) {
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
       }),
       provider,
+      cimd({
+        fetchClientMetadataResource: integrations.cimdTransport ?? fetchClientMetadataResource,
+        metadataProfile: "mcp-2026-07-28",
+        metadataRevalidationInterval: 300,
+        maxCacheEntries: 1000,
+        metadataFetchPolicy: {
+          maximumConcurrentFetches: 8,
+          maximumConcurrentFetchesPerOrigin: 2,
+          maximumFetchesPerMinute: 60,
+          maximumFetchesPerOriginPerMinute: 15,
+        },
+        isMetadataDocumentUrlAllowed: (clientId) => Effect.runPromise(onboarding.admit(clientId)),
+      }),
     ],
   } satisfies BetterAuthOptions;
   // Defer provider initialization until migrations finish.
@@ -191,7 +284,7 @@ export async function openAuth(settings: Settings) {
     owner,
     settings,
     resources,
-    synchronizeScopes,
+    onboarding,
     exclusive,
     close,
   };
@@ -211,7 +304,37 @@ const sqlInitialize = (service: Service) =>
     yield* service.sql`CREATE TABLE IF NOT EXISTS serviceOwner (id INTEGER PRIMARY KEY CHECK(id = 1), userId TEXT NOT NULL UNIQUE REFERENCES user(id))`;
     if (!(yield* service.owner()) && (yield* service.sql`SELECT id FROM user LIMIT 1`).length)
       return yield* Effect.fail(new Error("Database contains accounts without an owner marker"));
-    yield* service.synchronizeScopes();
+    yield* service.sql`CREATE TABLE IF NOT EXISTS clientOnboarding (clientId TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('dcr', 'cimd')), blocked INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)))`;
+    // Enforce the bound inside canonical persistence, including cached CIMD recreation.
+    yield* service.sql`CREATE TRIGGER IF NOT EXISTS automaticClientCapacity BEFORE INSERT ON clientOnboarding
+      WHEN NOT EXISTS (SELECT 1 FROM clientOnboarding WHERE clientId = NEW.clientId)
+        AND (SELECT count(*) FROM clientOnboarding) >= 1000
+      BEGIN SELECT RAISE(ABORT, 'Automatic client capacity reached'); END`;
+    // Managed creation always has an owner. DCR is anonymous or carries the
+    // server-owned reference above; CIMD supplies its discovery provenance.
+    // This runs in the provider's transaction, so tracking failure rolls back registration.
+    yield* service.sql`CREATE TRIGGER IF NOT EXISTS automaticClientProvenance AFTER INSERT ON oauthClient
+      WHEN NEW.clientDiscoveryId IS NOT NULL OR NEW.userId IS NULL OR NEW.referenceId = 'clankerauth:dcr'
+      BEGIN
+        INSERT OR IGNORE INTO clientOnboarding (clientId, source, blocked)
+          VALUES (NEW.clientId, CASE WHEN NEW.clientDiscoveryId IS NOT NULL THEN 'cimd' ELSE 'dcr' END, 0);
+        UPDATE oauthClient SET disabled = 1 WHERE clientId = NEW.clientId
+          AND EXISTS (SELECT 1 FROM clientOnboarding WHERE clientId = NEW.clientId AND blocked = 1);
+      END`;
+    yield* service.sql`CREATE TABLE IF NOT EXISTS clientMetadataRevision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL)`;
+    yield* service.sql`INSERT OR IGNORE INTO clientMetadataRevision (id, revision) VALUES (1, 0)`;
+    // Security-relevant document changes revoke grants in the same transaction
+    // as metadata reconciliation; plugin notifications are only best effort.
+    yield* service.sql`CREATE TRIGGER IF NOT EXISTS cimdMetadataRevocation AFTER UPDATE OF redirectUris, tokenEndpointAuthMethod, jwks, jwksUri, name, uri ON oauthClient
+      WHEN NEW.clientDiscoveryId IS NOT NULL AND (OLD.redirectUris IS NOT NEW.redirectUris OR OLD.tokenEndpointAuthMethod IS NOT NEW.tokenEndpointAuthMethod OR OLD.jwks IS NOT NEW.jwks OR OLD.jwksUri IS NOT NEW.jwksUri OR OLD.name IS NOT NEW.name OR OLD.uri IS NOT NEW.uri)
+      BEGIN
+        UPDATE clientMetadataRevision SET revision = revision + 1 WHERE id = 1;
+        DELETE FROM oauthConsent WHERE clientId = NEW.clientId;
+        DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = NEW.clientId;
+        DELETE FROM oauthAccessToken WHERE clientId = NEW.clientId;
+        DELETE FROM oauthRefreshToken WHERE clientId = NEW.clientId;
+      END`;
+    yield* service.resources.synchronize();
   });
 
 export async function createOwner(service: Service, input: { email: string; password: string }) {

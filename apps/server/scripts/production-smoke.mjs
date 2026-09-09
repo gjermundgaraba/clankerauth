@@ -109,6 +109,27 @@ try {
     await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)
   ).json();
   assert.equal(metadata.issuer, `${baseURL}/api/auth`);
+  assert.equal(metadata.client_id_metadata_document_supported, true);
+  assert.equal(metadata.registration_endpoint, `${baseURL}/api/auth/oauth2/register`);
+  const registration = await fetch(metadata.registration_endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Package MCP client",
+      redirect_uris: ["http://127.0.0.1:49152/callback"],
+      token_endpoint_auth_method: "none",
+    }),
+  });
+  assert.equal(registration.status, 201, await registration.clone().text());
+  const registered = await registration.json();
+  assert.equal(typeof registered.client_id, "string");
+  assert.equal(registered.client_secret, undefined);
+  const blocked = await fetch(`${baseURL}/admin/clients/block`, {
+    method: "POST",
+    headers: { cookie, origin: baseURL, "content-type": "application/json" },
+    body: JSON.stringify({ client_id: registered.client_id, blocked: true }),
+  });
+  assert.equal(blocked.status, 200, await blocked.clone().text());
   const keys = await (await fetch(metadata.jwks_uri)).json();
   assert.ok(keys.keys.length > 0);
   await stop();
@@ -116,7 +137,12 @@ try {
   assert.deepEqual(await (await fetch(metadata.jwks_uri)).json(), keys);
   const persistedClients = await fetch(`${baseURL}/admin/clients`, { headers: { cookie } });
   assert.equal(persistedClients.status, 200);
-  assert.deepEqual((await persistedClients.json()).resources, [resource]);
+  const persisted = await persistedClients.json();
+  assert.deepEqual(persisted.resources, [resource]);
+  assert.equal(persisted.clients.length, 1);
+  assert.equal(persisted.clients[0].client_id, registered.client_id);
+  assert.equal(persisted.clients[0].onboarding, "dcr");
+  assert.equal(persisted.clients[0].blocked, true);
   assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: false });
   const repeatedSetup = await fetch(`${baseURL}/api/setup`, {
     method: "POST",
@@ -125,7 +151,7 @@ try {
   });
   assert.equal(repeatedSetup.status, 409);
   console.log(
-    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, discovery, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
+    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, CIMD discovery, DCR and persisted block policy, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
   );
 } finally {
   await stop();

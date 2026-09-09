@@ -30,7 +30,10 @@ type ResourceValue = typeof Resource.Type;
 
 // Callers admit resource operations through Service.exclusive so provider writes
 // cannot interleave with transactions using the same SQLite database.
-export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => void) {
+export function resourceStore(
+  sql: SqlClient,
+  changed: (scopes: string[], identifiers: string[]) => void,
+) {
   const decodeResource = Effect.fn("Resources.decode")(function* (value: unknown) {
     const row = yield* resourceRow(value);
     const scopes = yield* decodeScopes(row.allowedScopes);
@@ -171,20 +174,20 @@ export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => voi
         }
     }
   });
-  const supportedScopes = Effect.fn("Resources.supportedScopes")(function* () {
-    const resources = yield* list();
-    return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
-  });
+  const publish = (catalog: ResourceValue[]) =>
+    changed(
+      [...new Set([...protocolScopes, ...catalog.flatMap((resource) => resource.scopes)])],
+      catalog.map((resource) => resource.identifier),
+    );
   const commit = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const committed = yield* sql.withTransaction(
         Effect.gen(function* () {
           const result = yield* operation;
-          const scopes = yield* supportedScopes();
-          return { result, scopes };
+          return { result, catalog: yield* list() };
         }),
       );
-      changed(committed.scopes);
+      publish(committed.catalog);
       return committed.result;
     });
   return {
@@ -197,7 +200,9 @@ export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => voi
       return rows.length > 0;
     }),
     scopesFor,
-    supportedScopes,
+    synchronize: Effect.fn("Resources.synchronize")(function* () {
+      publish(yield* list());
+    }),
     create: Effect.fn("Resources.create")(function* (input: ResourceValue) {
       const resource = yield* validateInput(input);
       return yield* commit(
@@ -208,6 +213,14 @@ export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => voi
             );
           const now = Date.now();
           yield* sql`INSERT INTO oauthResource (id, identifier, name, allowedScopes, accessTokenTtl, createdAt, updatedAt) VALUES (${randomUUID()}, ${resource.identifier}, ${resource.name}, ${JSON.stringify([...protocolScopes, ...resource.scopes])}, 300, ${now}, ${now})`;
+          for (const client of yield* Schema.decodeUnknownEffect(
+            Schema.Array(Schema.Struct({ clientId: Schema.String })),
+          )(
+            yield* sql`SELECT clientId FROM clientOnboarding WHERE clientId IN (SELECT clientId FROM oauthClient)`,
+          )) {
+            yield* sql`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES (${randomUUID()}, ${client.clientId}, ${resource.identifier}, ${now})`;
+            yield* syncClient(client.clientId);
+          }
           return resource;
         }),
       );
@@ -235,13 +248,18 @@ export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => voi
           if (!(yield* get(identifier)))
             return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Resource not found" }));
           const links =
-            yield* sql`SELECT 1 FROM oauthClientResource WHERE resourceId = ${identifier} LIMIT 1`;
+            yield* sql`SELECT 1 FROM oauthClientResource WHERE resourceId = ${identifier} AND clientId NOT IN (SELECT clientId FROM clientOnboarding) LIMIT 1`;
           if (links.length)
             return yield* Effect.fail(
               new APIError("CONFLICT", {
                 message: "Remove Client access before deleting this Resource",
               }),
             );
+          for (const link of yield* accessForResource(identifier)) {
+            yield* cleanup(link.client_id, identifier);
+            yield* sql`DELETE FROM oauthClientResource WHERE clientId = ${link.client_id} AND resourceId = ${identifier}`;
+            yield* syncClient(link.client_id);
+          }
           yield* sql`DELETE FROM oauthResource WHERE identifier = ${identifier}`;
           return { deleted: true };
         }),
@@ -256,6 +274,12 @@ export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => voi
           const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
           if (!clients.length)
             return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+          if ((yield* sql`SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`).length)
+            return yield* Effect.fail(
+              new APIError("BAD_REQUEST", {
+                message: "Automatically onboarded Clients use owner consent for Resource access",
+              }),
+            );
           yield* validateSelection(identifiers);
           const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
           for (const identifier of previous.filter((id) => !identifiers.includes(id))) {

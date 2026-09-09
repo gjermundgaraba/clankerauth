@@ -1,93 +1,45 @@
-# Official MCP SDK / clanker-okf prototype interoperability
+# MCP interoperability
 
-Verified on 2026-09-08 against clanker-okf's remote `origin/main` at
-[`db488828904d6eae627a088bfe5a41e8429414a1`](https://github.com/gjermundgaraba/clanker-okf/commit/db488828904d6eae627a088bfe5a41e8429414a1),
-using official `@modelcontextprotocol/client@2.0.0`, its Streamable HTTP transport,
-OAuth orchestrator and PKCE implementation, and clanker-okf's actual HTTP/MCP server.
+The interoperability runner exercises clanker-okf's shipped HTTP authentication
+with clankerauth and the official MCP SDK. It uses temporary auth state and fake
+Code Storage; no production credentials, `.env`, or deployed services are used.
 
-**This is prototype integration, not authentication shipped in clanker-okf.** That
-checkout's `/mcp` is unauthenticated. The optional harness installs an independent
-resource verifier/challenge layer in front of the real server, uses clanker-okf's
-own fake Code Storage adapter, and counts every forwarded request and store-method
-invocation. It does not treat attaching a token to the unprotected server as success.
+## Run
 
-## Reproduce
-
-Run from the clankerauth repository, with Node ≥26 and pnpm available:
+Build both repositories first. Supply a separate fixture directory containing
+`@modelcontextprotocol/client@2.0.0` and `tsx`:
 
 ```sh
-pnpm install --frozen-lockfile
-git clone https://github.com/gjermundgaraba/clanker-okf.git /tmp/clankerauth-okf-interop
-git -C /tmp/clankerauth-okf-interop checkout db488828904d6eae627a088bfe5a41e8429414a1
-pnpm --dir /tmp/clankerauth-okf-interop install --frozen-lockfile
-pnpm --dir /tmp/clankerauth-okf-interop add -Dw @modelcontextprotocol/client@2.0.0
-pnpm --dir /tmp/clankerauth-okf-interop exec vp run -r build
-pnpm test:interop /tmp/clankerauth-okf-interop
+pnpm ready
+pnpm --dir ../clanker-okf exec vp run ready
+mkdir -p /tmp/okf-oauth-sdk
+pnpm --dir /tmp/okf-oauth-sdk add @modelcontextprotocol/client@2.0.0 tsx
+pnpm test:interop ../clanker-okf /tmp/okf-oauth-sdk
 ```
 
-The SDK installation modifies only the temporary clone's dependency manifests, not
-its server code. The harness lives in `apps/server/scripts/mcp-interop.mjs` and imports
-the server workspace source. Remove the temporary clone after testing. In `finally`,
-the harness attempts to close every client, upstream and listener, dispose the app,
-close the auth service, and remove its temporary auth database and fake storage,
-even if an earlier cleanup step fails. Cleanup errors are reported without replacing
-the original test failure.
-Startup migrates the temporary database automatically; the harness creates its sole
-owner through the first-run setup HTTP endpoint before signing in. It then creates
-its two resources through the owner API and explicitly grants each test client access;
-resource policy is not seeded from environment settings.
-It does not load `.env`, reuse preview accounts/clients, or instantiate the real
-Code Storage client. It is intentionally outside `pnpm test`: normal unit tests
-must not clone another repository or require network package installation.
+`apps/server/scripts/mcp-interop.mjs` invokes the downstream harness at
+`packages/cli/tests/oauth-interop.mjs`. Both checkouts must contain automatic
+onboarding support. See that checkout's `packages/cli/tests/oauth-interop.md`
+for detailed coverage and fixture setup.
 
-## Decisive results
+## Coverage
 
-The command exits 0 and prints:
+The official SDK discovers the protected Resource and issuer, automatically
+registers a client through DCR, follows owner login and signed consent, exchanges
+an S256 PKCE code, and calls the real MCP server. A separate CIMD client uses an
+HTTPS metadata identifier without pre-registration and makes an authenticated
+MCP call. Tests also cover resource audiences, missing and invalid tokens,
+insufficient scopes, callback issuer validation, and refresh rotation.
 
-```text
-PASS missing/invalid tokens: HTTP 401; forwarded=0; storageCalls=0
-PASS official SDK challenge -> resource metadata -> issuer discovery -> owner login/consent -> S256 exchange
-PASS real clanker-okf tools/list (14 tools), create_bundle and list_repos => {repos:["interop"]}; JWKS fetched
-PASS validly signed wrong-audience token and tampered JWT: HTTP 401; zero additional forwarding/storage execution
-PASS read-only token cannot execute create_bundle: HTTP 403 insufficient_scope; zero additional forwarding/storage execution
-PASS official SDK refresh rotation followed by authenticated real MCP action
-PROTOTYPE INTEGRATION PASSED; no shipped clanker-okf auth, real storage credentials, or preview state used
-```
+Ordinary server tests separately cover onboarding policy, metadata rejection,
+client blocking and revocation, resource changes, and registration limits.
+Browser tests exercise the shipped consent and administration UI.
 
-The initial unauthenticated SDK connection consumes the wrapper's `WWW-Authenticate`
-challenge, discovers RFC 9728 protected-resource metadata and clankerauth's RFC 8414
-metadata, and starts authorization using a pre-registered public client. The harness
-submits local-owner login and signed consent over HTTP. The SDK exchanges the result
-using its own saved PKCE verifier and checks callback `iss`. A deliberately wrong
-callback issuer is rejected **before any token-endpoint request**.
+## Boundaries
 
-The verifier pins the discovered issuer, JWKS URL, `EdDSA`, `typ=at+jwt`, the exact
-resource audience and required scopes. Its small prototype access policy permits
-only the isolated test owner's `sub`; read operations require `okf:read` and the
-three mutating tools require `okf:write`. Authentication failure returns before any
-forwarding. A valid token creates `interop/proof` in fake storage, and a separate
-MCP read returns exactly `{repos:["interop"]}`. The negative tests use the real
-mutating MCP request, including a correctly signed token issued for another audience
-and a correctly signed read-only token. Both counters must remain unchanged.
-
-## What this does not establish
-
-- No named desktop product (Claude Desktop, Cursor, etc.) was tested. This is an
-  actual official SDK client, not external-product compatibility certification.
-- The owner interaction is scripted HTTP login/consent, not a browser-driven run
-  inside a desktop MCP client. The service's browser UI was tested separately.
-- Reserved HTTPS resource identities are mapped by the SDK's custom fetch option
-  to a real loopback HTTP listener. Authorization-server discovery/token exchange,
-  JWKS fetching, and MCP requests use actual HTTP. Private DNS, TLS certificates,
-  VPN routing, browser CORS and private-CA trust are not validated by this mapping.
-- No DCR/CIMD, DPoP, live Code Storage, Docker runtime or production writes are
-  involved. The second resource's metadata is a test fixture used to obtain the
-  wrong-audience token; the tested MCP resource's metadata is served over HTTP.
-- The verifier is a test harness, not a hardened deployable reverse proxy. A real
-  downstream integration must prevent direct access to the unprotected upstream,
-  define its own user/action policy, propagate identity for auditing, and handle
-  deployment-specific transports and revocation requirements.
-
-The result establishes that the current provider and official SDK agree on the
-pre-registered OAuth flow, resource audience, JWKS, refresh tokens and real MCP
-messages. It does not change clanker-okf's existing authentication boundary.
+The harness substitutes local listeners for reserved HTTPS Resource URLs and an
+injected transport for a fixed CIMD metadata fixture. Production CIMD uses the
+provider's secure Node transport with public-address validation and DNS pinning.
+This test does not certify private DNS, VPN routing, TLS trust, a named desktop
+client, live Code Storage, or deployment. It does exercise the actual resource
+server's token and scope enforcement, without the historical prototype proxy.
