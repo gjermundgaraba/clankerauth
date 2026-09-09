@@ -30,7 +30,9 @@ its server code. The harness lives in `apps/server/scripts/mcp-interop.mjs` and 
 the server workspace source. Remove the temporary clone after testing. The harness closes all
 listeners and removes its temporary auth database and fake storage in `finally`.
 Startup migrates the temporary database automatically; the harness creates its sole
-owner through the first-run setup HTTP endpoint before signing in.
+owner through the first-run setup HTTP endpoint before signing in. It then creates
+its two resources through the owner API and explicitly grants each test client access;
+resource policy is not seeded from environment settings.
 It does not load `.env`, reuse preview accounts/clients, or instantiate the real
 Code Storage client. It is intentionally outside `pnpm test`: normal unit tests
 must not clone another repository or require network package installation.

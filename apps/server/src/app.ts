@@ -54,10 +54,7 @@ export function application(
           const body = Schema.decodeUnknownOption(ResourceRequest)(await req.clone().json());
           resources = body._tag === "Some" ? [body.value.resource] : [];
         } else resources = new URLSearchParams(await req.clone().text()).getAll("resource");
-        if (
-          resources.length !== 1 ||
-          !settings.resources.some((r) => r.identifier === resources[0])
-        ) {
+        if (resources.length !== 1 || !service.resources.get(resources[0] ?? "")) {
           return json(
             {
               error: "invalid_target",

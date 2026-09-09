@@ -59,7 +59,14 @@ export function customApi(service: Service) {
       )
       .handle("rotate", ({ request, payload }) =>
         admin.rotate(new Headers(request.headers), payload),
-      ),
+      )
+      .handle("access", ({ payload }) => admin.access(payload)),
+  );
+  const resources = HttpApiBuilder.group(Api, "resources", (handlers) =>
+    handlers
+      .handle("create", ({ payload }) => admin.createResource(payload))
+      .handle("update", ({ payload }) => admin.updateResource(payload))
+      .handle("delete", ({ payload }) => admin.deleteResource(payload)),
   );
   const validation = HttpApiMiddleware.layerSchemaErrorTransform(ApiValidation, (error) =>
     Effect.fail(
@@ -69,7 +76,7 @@ export function customApi(service: Service) {
     ),
   );
   const routes = HttpApiBuilder.layer(Api).pipe(
-    Layer.provide([setup, clients]),
+    Layer.provide([setup, clients, resources]),
     Layer.provide([ownerAuthorization, setupProtection, validation]),
     Layer.provide(NodeHttpServer.layerHttpServices),
   );

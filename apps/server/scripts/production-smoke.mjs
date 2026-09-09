@@ -23,9 +23,6 @@ const env = {
   AUTH_BASE_URL: baseURL,
   BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
   AUTH_DATABASE: join(directory, "auth.sqlite"),
-  AUTH_RESOURCES: JSON.stringify([
-    { identifier: "https://package.invalid/mcp", name: "Test", scopes: ["read"] },
-  ]),
   HOST: "127.0.0.1",
   PORT: String(port),
 };
@@ -83,6 +80,19 @@ try {
     .getSetCookie()
     .map((value) => value.split(";")[0])
     .join("; ");
+  const resource = {
+    identifier: "https://package.invalid/mcp",
+    name: "Package MCP",
+    scopes: ["read"],
+  };
+  const empty = await (await fetch(`${baseURL}/admin/clients`, { headers: { cookie } })).json();
+  assert.deepEqual(empty.resources, []);
+  const createdResource = await fetch(`${baseURL}/admin/resources`, {
+    method: "POST",
+    headers: { cookie, origin: baseURL, "content-type": "application/json" },
+    body: JSON.stringify(resource),
+  });
+  assert.equal(createdResource.status, 201, await createdResource.clone().text());
   const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
   assert.equal(session.status, 200);
   assert.equal(session.headers.has("set-auth-jwt"), false);
@@ -104,7 +114,9 @@ try {
   await stop();
   await start();
   assert.deepEqual(await (await fetch(metadata.jwks_uri)).json(), keys);
-  assert.equal((await fetch(`${baseURL}/admin/clients`, { headers: { cookie } })).status, 200);
+  const persistedClients = await fetch(`${baseURL}/admin/clients`, { headers: { cookie } });
+  assert.equal(persistedClients.status, 200);
+  assert.deepEqual((await persistedClients.json()).resources, [resource]);
   assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: false });
   const repeatedSetup = await fetch(`${baseURL}/api/setup`, {
     method: "POST",

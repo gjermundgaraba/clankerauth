@@ -15,7 +15,7 @@ Open http://localhost:3000 and create the owner account on first use. No `.env` 
 
 The command builds the shared API once, then starts its compiler watcher, the server with automatic restarts, and the Vite website with hot reload. Vite proxies API, administration, discovery and health requests to `127.0.0.1:3001`; ports 3000 and 3001 must be available. Ctrl-C stops all three watchers. `pnpm dev` runs the same workflow.
 
-Development uses fixed localhost configuration and the sample OKF resources, with its own secret and database regardless of `.env` or exported production settings. Production startup still requires explicit configuration.
+Development uses fixed localhost configuration with its own secret and database regardless of `.env` or exported production settings. New databases start without resources; create them in the dashboard after signing in. Production startup still requires explicit configuration.
 
 ## Run the production build locally
 
@@ -23,7 +23,7 @@ Development uses fixed localhost configuration and the sample OKF resources, wit
 cp .env.example .env
 chmod 600 .env
 # Edit .env: set BETTER_AUTH_SECRET to output from `openssl rand -hex 32`.
-# Choose the canonical URL and resource policy before issuing any tokens.
+# Choose the canonical URL before issuing any tokens.
 pnpm ready
 pnpm start
 ```
@@ -36,9 +36,9 @@ The Vite+ monorepo conventions were generated in a safe scratch directory with
 `vp create vite:monorepo --directory clankerauth-workspace-scaffold --no-agent --no-editor --no-git --no-hooks --package-manager pnpm --no-interactive`,
 then integrated without replacing existing auth code or Git history. The workspace uses pnpm catalogs and Vite+ recursive task orchestration, following clanker-okf's conventions. No unused scaffold example packages are retained.
 
-- `packages/api` (`@clankerauth/api`): shared Effect schemas and `HttpApi` contract for setup and client administration, compiled to JavaScript and declarations. The server implements it with `HttpApiBuilder`; the browser derives its client with `HttpApiClient`. Better Auth retains its own client and handler for authentication/OAuth.
+- `packages/api` (`@clankerauth/api`): shared Effect schemas and `HttpApi` contract for setup, resource and client administration, compiled to JavaScript and declarations. The server implements it with `HttpApiBuilder`; the browser derives its client with `HttpApiClient`. Better Auth retains its own client and handler for authentication/OAuth.
 - `apps/server` (`@clankerauth/server`): native HTTP service, auth/configuration, first-run setup, SQLite integration tests and the optional MCP interoperability harness. `vp pack` emits `dist/main.mjs`.
-- `apps/web` (`@clankerauth/web`): browser account setup, login, consent and client administration. Vite builds `dist`; the server resolves these assets through its workspace dependency, independent of its working directory.
+- `apps/web` (`@clankerauth/web`): browser account setup, login, consent, resources and client access. Vite builds `dist`; the server resolves these assets through its workspace dependency, independent of its working directory.
 
 The root owns orchestration and shared TypeScript/check configuration; package dependencies are pinned centrally in `pnpm-workspace.yaml`. `vp run -r build` builds the API contract before the browser and server, and the browser assets before the server. `vp run dev` and `pnpm check` build the contract first; development watches shared schemas and rebuilds them automatically. Tests exercise built browser assets, so run `pnpm build` before a standalone `pnpm test` on a fresh checkout. `pnpm ready` handles that ordering. Production packaging uses `pnpm --filter @clankerauth/server deploy --prod <directory>`; the result includes the packed server, browser assets and production dependency closure.
 
@@ -58,29 +58,32 @@ First-run HTTP routes:
 | `AUTH_BASE_URL`      | Stable HTTPS **origin**, no path/trailing slash. Private LAN/VPN DNS is fine.                                                |
 | `BETTER_AUTH_SECRET` | At least 32 characters from a cryptographic RNG. Keep permanently with backups; encrypts signing material and signs cookies. |
 | `AUTH_DATABASE`      | SQLite path; default `data/auth.sqlite`. Persist the whole directory.                                                        |
-| `AUTH_RESOURCES`     | JSON array of `{identifier, name, scopes}`. Exact HTTPS identifiers, no fragments/query/credentials.                         |
 | `HOST`, `PORT`       | Bind address and port; defaults `127.0.0.1:3000`. Containers use `0.0.0.0:3000`.                                             |
 
-The **issuer is `AUTH_BASE_URL/api/auth`**, not the origin alone. All integrations must pin that exact value. The server reconstructs requests from configured `AUTH_BASE_URL`, not `Host`, `Forwarded`, or `X-Forwarded-*`. Use one canonical hostname; proxies must not rewrite the public path. Only the canonical origin is trusted for account setup, owner login, consent and administrative writes. Browser cookies are HttpOnly, SameSite=Lax, and Secure on HTTPS. Mutating client administration also requires a session established within the last 15 minutes.
+The **issuer is `AUTH_BASE_URL/api/auth`**, not the origin alone. All integrations must pin that exact value. The server reconstructs requests from configured `AUTH_BASE_URL`, not `Host`, `Forwarded`, or `X-Forwarded-*`. Use one canonical hostname; proxies must not rewrite the public path. Only the canonical origin is trusted for account setup, owner login, consent and administrative writes. Browser cookies are HttpOnly, SameSite=Lax, and Secure on HTTPS. Mutating resource and client administration also requires a session established within the last 15 minutes.
 
 Only explicitly mounted endpoints are reachable: native Better Auth account signup, generic JWT minting, and client/resource administrative routes are not exposed. Client administration uses owner-authenticated wrappers with fixed PKCE/consent/grant policy. Protocol endpoints and discovery allow non-credentialed CORS; login and owner administration do not.
 
 The owner marker is the identity eligibility boundary, not merely an admin role. Existing non-owner accounts cannot log in or use old sessions for authorization, consent, continuation or password changes. Code exchange and refresh recheck the grant's user even without a browser session; UserInfo rejects ineligible users and introspection reports their JWT/refresh tokens inactive. Legacy records are retained, not silently deleted. Sign-out remains available to discard a legacy cookie. Setup creates the owner without a session; session creation requires the owner marker. Generic session JWT emission is explicitly disabled with `disableSettingJwtHeader`; `/get-session` returns no `set-auth-jwt` header. Public OAuth subject identifiers are used; pairwise subjects and machine grants are not configured.
 
-Resource configuration is authoritative on restart. Configured resources overwrite their persisted policy; removed identifiers immediately stop passing this service's issuance/refresh allowlist. Already issued JWTs still live until expiry.
+Resources, their scopes, and client access are managed in the dashboard and stored in SQLite. A fresh database has no resources. Restarts retain dashboard changes; there are no environment seeds or configuration overrides. Resource identifiers are exact HTTPS audience URLs without fragments, queries or credentials. A resource owns its scope names: two resources can both define `read` with separate meaning and consent. See [domain language](docs/domain-language.md) for the shared vocabulary.
 
 Downstream apps may delegate identity eligibility to this issuer's owner-only issuance policy; they do not need a separate configured owner ID or `sub` equality check. They must still verify the access token's signature, exact issuer, token type, expiry and their own resource audience, and enforce the required endpoint scopes. Resource registration alone does not grant access: the verified token must carry the required scopes. Keep `sub` for identity and audit attribution. This contract depends on owner-only issuance; adding other eligible users or grant types requires reviewing downstream access policy. Do not authorize by email or assume `email_verified` is true; this service has no email verification transport.
 
 ## Register a client
 
-Sign in, then use **Add an application**. Supply a name, exact redirect URI, one resource, and the client type. Public desktop/native clients cannot keep secrets: select native and leave confidential unchecked. Web backends can select confidential and securely store the one-time secret. Confidential clients use `client_secret_basic`; public clients use `none`. All clients require S256 PKCE and consent. Redirect validation comes from Better Auth (HTTPS for web, exact loopback/private-use schemes for native; loopback ports follow native-client rules).
+Sign in and create the protected Resources first, then use **Register client**. Supply **Client name**, **Exact redirect URI**, and select its **Allowed Resources**. Public desktop/native clients cannot keep secrets: select **Native / desktop client (loopback redirect)** and leave **Confidential client (can securely store a secret)** unchecked. Web backends can select confidential and securely store the one-time secret. Confidential clients use `client_secret_basic`; public clients use `none`. All clients require S256 PKCE and consent. Redirect validation comes from Better Auth (HTTPS for web, exact loopback/private-use schemes for native; loopback ports follow native-client rules).
 
-Each registration links **one** resource and its configured scope ceiling. Register a separate client ID for a different resource, even if the same application consumes both. No client may request an unrelated resource, no token request may omit `resource`, and repeated/multiple resources are rejected. This deliberately favors explicit administration over universal bearer authority. To change redirect/resource policy, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants; offline JWT verification still accepts existing access tokens for at most five minutes.
+A client can access multiple resources through its **Client access** settings. Each authorization and token request still targets exactly one resource, with consent stored independently for that resource. Missing, repeated or multiple `resource` parameters are rejected. Scope changes take effect immediately for new requests and update linked clients' scope ceilings; newly added scopes require consent. Removing access clears that client's consent and outstanding grants for the removed resource. Re-adding access does not restore old codes or refresh tokens, and access to other resources remains intact. A resource cannot be deleted while clients still have access; remove those dependencies first. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. Existing JWTs at offline downstream verifiers remain usable for at most five minutes.
 
 Administrative HTTP routes (session cookie + exact `Origin`, never an API bearer token):
 
-- `GET /admin/clients`: list clients and configured resources.
-- `POST /admin/clients`: `{name, redirect, resource, native, confidential}`; returns client metadata and a one-time secret when confidential.
+- `GET /admin/clients`: list clients, resources and `clientAccess: [{client_id, resource}]`.
+- `POST /admin/clients`: `{name, redirect, resources: string[], native, confidential}`; returns client metadata and a one-time secret when confidential.
+- `POST /admin/clients/access`: `{client_id, resources: string[]}`; replaces the client's resource access.
+- `POST /admin/resources`: `{identifier, name, scopes: string[]}`; creates a resource.
+- `POST /admin/resources/update`: `{identifier, name, scopes: string[]}`; updates its name and scopes, retaining its identifier.
+- `POST /admin/resources/delete`: `{identifier}`; deletes an unlinked resource.
 - `POST /admin/clients/rotate`: `{client_id}`; returns a new one-time secret.
 - `POST /admin/clients/delete`: `{client_id}`.
 
@@ -165,14 +168,14 @@ Use trusted TLS behind a reverse proxy; distribute your private CA to every brow
 
 ```sh
 docker build -t clankerauth:local .
-# Prepare .env.production: HTTPS URL, random secret, resources, HOST=0.0.0.0,
+# Prepare .env.production: HTTPS URL, random secret, HOST=0.0.0.0,
 # AUTH_DATABASE=/data/auth.sqlite. JSON values must not have outer shell quotes.
 docker volume create clankerauth-data
 docker run --name clankerauth --env-file .env.production -v clankerauth-data:/data \
   -p 127.0.0.1:3000:3000 --restart unless-stopped clankerauth:local
 ```
 
-Open the configured HTTPS origin and create the owner account, then sign in. The image runs as non-root; bind-mounted directories must be writable by UID 1000 with restrictive permissions. `/healthz` checks database connectivity. SQLite WAL is suitable for **one instance on a local persistent filesystem**, not NFS, autoscaling replicas or ephemeral serverless storage. Keep the SQLite database, WAL/SHM files and encryption secret persistent; the `jwks` table contains encrypted private signing keys. Do not regenerate the secret or delete signing rows on restart. No automatic signing-key rotation schedule is configured; plan deliberate rotation with an overlap window and verify every downstream JWKS cache before retiring old keys.
+Open the configured HTTPS origin and create the owner account, then sign in and add resources and clients. The image runs as non-root; bind-mounted directories must be writable by UID 1000 with restrictive permissions. `/healthz` checks database connectivity. SQLite WAL is suitable for **one instance on a local persistent filesystem**, not NFS, autoscaling replicas or ephemeral serverless storage. Keep the SQLite database, WAL/SHM files and encryption secret persistent; the `jwks` table contains encrypted private signing keys. Do not regenerate the secret or delete signing rows on restart. No automatic signing-key rotation schedule is configured; plan deliberate rotation with an overlap window and verify every downstream JWKS cache before retiring old keys.
 
 **Migrations:** startup invokes Better Auth's supported version-pinned migrator for core and provider tables plus the singleton owner marker before accepting HTTP requests. Migrations are repeatable; a migration failure stops startup. Before upgrading dependencies: stop the service, back up, rehearse startup against an isolated backup, run the complete tests, then start the upgraded service. Unsafe schema changes fail closed; do not force them past the migrator. Rollback requires the old code **and matching database backup**, not just an older image.
 
@@ -182,7 +185,7 @@ Open the configured HTTPS origin and create the owner account, then sign in. The
 
 ## Verification and limits
 
-`pnpm ready` runs Vite+ formatting/type-aware lint/TypeScript checks, both production workspace builds, and real SQLite integration tests. Tests cover automatic migrations, first-run setup, built workspace asset serving, owner login/logout, signup closure, legacy non-owner session/grant denial, CSRF, discovery, signed consent and login continuation, PKCE/redirect failures, audience isolation, JWT expiry, persisted keys/sessions, controlled concurrent refresh/revocation/deletion, cross-client revocation isolation, signing-failure draining, disconnected-client shutdown and atomic account creation. Chromium verification covers login/admin/consent against the service; delayed-response browser fixtures additionally check duplicate dashboard mutations and success/error control recovery without touching real registrations.
+`pnpm ready` runs Vite+ formatting/type-aware lint/TypeScript checks, both production workspace builds, and real SQLite integration tests. Tests cover dashboard resource persistence and validation, multiple-resource client access, resource-specific consent, targeted access removal, automatic migrations, first-run setup, built workspace asset serving, owner login/logout, signup closure, legacy non-owner session/grant denial, CSRF, discovery, signed consent and login continuation, PKCE/redirect failures, audience isolation, JWT expiry, persisted keys/sessions, controlled concurrent refresh/revocation/deletion, cross-client revocation isolation, signing-failure draining, disconnected-client shutdown and atomic account creation. Chromium verification covers login/admin/consent against the service; delayed-response browser fixtures additionally check duplicate dashboard mutations and success/error control recovery without touching real registrations.
 
 CI also packages and executes the production output from an unrelated working directory with a disposable database. Reproduce that smoke check after building:
 
@@ -191,7 +194,7 @@ pnpm --filter @clankerauth/server deploy --prod /tmp/clankerauth-production
 pnpm test:package /tmp/clankerauth-production
 ```
 
-It verifies automatic migration, setup before and after a fresh restart, owner login and session-header policy, browser assets, discovery, restart-persisted keys/session and permanent setup closure, then stops its child process and removes test state. This is not a Docker-runtime test. The smoke script never reads the preview `.env` or database.
+It verifies automatic migration, setup before and after a fresh restart, owner login and session-header policy, browser assets, discovery, dashboard-created resource persistence, restart-persisted keys/session and permanent setup closure, then stops its child process and removes test state. This is not a Docker-runtime test. The smoke script never reads the preview `.env` or database.
 
 This is a narrow single-owner initial service, not a multi-user IAM product or an OAuth conformance certification. Docker image execution, third-party MCP clients, DPoP, private-key-JWT clients and reverse-proxy/CA configurations require validation in the target environment. The provider's current bad-PKCE response is `401 invalid_request`; do not assume every OAuth failure has the same status. No external deployment, push or infrastructure mutation is part of this repository setup.
 

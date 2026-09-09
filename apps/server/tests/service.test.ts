@@ -65,11 +65,29 @@ async function request(
 async function login(pass = password) {
   return request("/api/auth/sign-in/email", { email, password: pass });
 }
+const resourceFixtures = [
+  { identifier: resourceA, name: "OKF MCP", scopes: ["okf:read", "okf:write"] },
+  { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
+];
+async function createResourceFixtures() {
+  const listing = await (await request("/admin/clients")).json();
+  for (const resource of resourceFixtures) {
+    if (
+      listing.resources.some(
+        (row: { identifier: string }) => row.identifier === resource.identifier,
+      )
+    )
+      continue;
+    const response = await request("/admin/resources", resource);
+    expect(response.status, await response.clone().text()).toBe(201);
+  }
+}
 async function client(resource = resourceA, confidential = false) {
+  await createResourceFixtures();
   const response = await request("/admin/clients", {
     name: "Test application",
     redirect: "http://127.0.0.1:9876/callback",
-    resource,
+    resources: [resource],
     native: true,
     confidential,
   });
@@ -92,11 +110,15 @@ function authorization(clientId: string, resource = resourceA, extra: Record<str
   });
   return { verifier, path: `/api/auth/oauth2/authorize?${query}` };
 }
-async function authorize(clientId: string, resource = resourceA) {
+async function authorize(clientId: string, resource = resourceA, scope?: string) {
   const flow = authorization(
     clientId,
     resource,
-    resource === resourceB ? { scope: "openid offline_access reports:read" } : {},
+    scope
+      ? { scope }
+      : resource === resourceB
+        ? { scope: "openid offline_access reports:read" }
+        : {},
   );
   const response = await request(flow.path);
   expect(response.status, await response.clone().text()).toBe(302);
@@ -112,8 +134,13 @@ async function authorize(clientId: string, resource = resourceA) {
   expect(redirect.searchParams.get("iss")).toBe(`${settings.baseURL}/api/auth`);
   return { code: redirect.searchParams.get("code")!, verifier: flow.verifier };
 }
-async function tokens(clientId: string, resource = resourceA, authorization?: string) {
-  const grant = await authorize(clientId, resource);
+async function tokens(
+  clientId: string,
+  resource = resourceA,
+  authorization?: string,
+  scope?: string,
+) {
+  const grant = await authorize(clientId, resource, scope);
   const response = await request(
     "/api/auth/oauth2/token",
     {
@@ -139,10 +166,6 @@ beforeEach(async () => {
     database: join(directory, "auth.sqlite"),
     host: "127.0.0.1",
     port: 3000,
-    resources: [
-      { identifier: resourceA, name: "OKF MCP", scopes: ["okf:read", "okf:write"] },
-      { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
-    ],
   });
   service = openAuth(settings);
   await initialize(service);
@@ -359,7 +382,7 @@ describe("owner boundary", () => {
     expect((await request("/src/main.ts")).status).toBe(404);
   });
 
-  test("configuration rejects insecure issuers, empty secrets and ambiguous resources", () => {
+  test("configuration rejects insecure issuers and empty secrets", () => {
     for (const baseURL of [
       "http://auth.internal",
       "https://auth.internal/",
@@ -369,13 +392,6 @@ describe("owner boundary", () => {
       expect(() => validateSettings({ ...settings, baseURL })).toThrow();
     }
     expect(() => validateSettings({ ...settings, secret: "" })).toThrow();
-    expect(() => validateSettings({ ...settings, resources: [] })).toThrow();
-    expect(() =>
-      validateSettings({
-        ...settings,
-        resources: [settings.resources[0]!, settings.resources[0]!],
-      }),
-    ).toThrow();
     expect(validateSettings({ ...settings, baseURL: "https://auth.internal" }).baseURL).toBe(
       "https://auth.internal",
     );
@@ -586,7 +602,7 @@ describe("owner boundary", () => {
 
 describe("OAuth boundaries and lifecycle", () => {
   beforeEach(setupOwner);
-  test.each(["replay", "revoke", "delete"])(
+  test.each(["replay", "revoke", "delete", "unlink", "remove scope"])(
     "concurrent refresh and %s cannot leave the winning replacement usable",
     async (action) => {
       await login();
@@ -641,7 +657,15 @@ describe("OAuth boundaries and lifecycle", () => {
                 { token: original.refresh_token, client_id: app.client_id },
                 { anonymous: true, form: true },
               )
-            : request("/admin/clients/delete", { client_id: app.client_id });
+            : action === "unlink"
+              ? request("/admin/clients/access", { client_id: app.client_id, resources: [] })
+              : action === "remove scope"
+                ? request("/admin/resources/update", {
+                    identifier: resourceA,
+                    name: "MCP",
+                    scopes: ["okf:write"],
+                  })
+                : request("/admin/clients/delete", { client_id: app.client_id });
       await queued.promise;
       try {
         expect(started).toBe(1); // Second request cannot read the same unrevoked row.
@@ -651,7 +675,10 @@ describe("OAuth boundaries and lifecycle", () => {
       }
       const responses = await Promise.all([first, second]);
       // Provider 1.7.3 invalidates the family but returns 400 for revoked-token revocation.
-      expect(responses.map((r) => r.status)).toEqual([200, action === "delete" ? 200 : 400]);
+      expect(responses.map((r) => r.status)).toEqual([
+        200,
+        ["delete", "unlink", "remove scope"].includes(action) ? 200 : 400,
+      ]);
       const winner = await responses[0]!.json();
       expect((await refresh(winner.refresh_token)).status).toBe(400);
       expect(
@@ -1057,5 +1084,265 @@ describe("OAuth boundaries and lifecycle", () => {
     );
     expect(jwtRevocation.status).toBe(400);
     expect((await jwtRevocation.json()).error).toBe("unsupported_token_type");
+  });
+});
+
+describe("dashboard resources and client access", () => {
+  beforeEach(async () => {
+    await setupOwner();
+    expect((await login()).status).toBe(200);
+  });
+
+  const listing = async () => (await request("/admin/clients")).json();
+  const access = (clientId: string, resources: string[]) =>
+    request("/admin/clients/access", { client_id: clientId, resources });
+  const updateResource = (identifier: string, scopes: string[], name = "Updated resource") =>
+    request("/admin/resources/update", { identifier, name, scopes });
+  const exchange = (
+    clientId: string,
+    grant: { code: string; verifier: string },
+    resource: string,
+  ) =>
+    request(
+      "/api/auth/oauth2/token",
+      {
+        grant_type: "authorization_code",
+        client_id: clientId,
+        redirect_uri: "http://127.0.0.1:9876/callback",
+        code: grant.code,
+        code_verifier: grant.verifier,
+        resource,
+      },
+      { anonymous: true, form: true },
+    );
+  const refresh = (clientId: string, token: string, resource: string) =>
+    request(
+      "/api/auth/oauth2/token",
+      {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: token,
+        resource,
+      },
+      { anonymous: true, form: true },
+    );
+
+  test("a fresh database stays empty across restart; CRUD persists without configuration seeds", async () => {
+    expect((await listing()).resources).toEqual([]);
+    await restart();
+    expect((await listing()).resources).toEqual([]);
+    const resource = { identifier: resourceA, name: "Personal MCP", scopes: ["read", "write"] };
+    expect((await request("/admin/resources", resource)).status).toBe(201);
+    expect((await request("/admin/resources", resource)).status).toBe(409);
+    expect((await updateResource(resourceA, ["read"], "Renamed MCP")).status).toBe(200);
+    await restart();
+    expect((await listing()).resources).toEqual([
+      { ...resource, name: "Renamed MCP", scopes: ["read"] },
+    ]);
+    expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(200);
+    await restart();
+    expect((await listing()).resources).toEqual([]);
+    expect((await updateResource(resourceA, ["read"])).status).toBe(404);
+    expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(404);
+  });
+
+  test("resource mutations reject invalid input, anonymous, cross-origin and stale sessions", async () => {
+    const valid = { identifier: resourceA, name: "MCP", scopes: ["read"] };
+    for (const input of [
+      { ...valid, identifier: "http://api.internal" },
+      { ...valid, identifier: "https://api.internal/#fragment" },
+      { ...valid, identifier: "https://api.internal/?query=1" },
+      { ...valid, identifier: "https://user:password@api.internal" },
+      { ...valid, name: " " },
+      { ...valid, scopes: [] },
+      { ...valid, scopes: ["read write"] },
+      { ...valid, scopes: ["openid"] },
+      { ...valid, scopes: [42] },
+    ]) {
+      expect((await request("/admin/resources", input)).status, JSON.stringify(input)).toBe(400);
+    }
+    expect((await request("/admin/resources", valid, { anonymous: true })).status).toBe(401);
+    expect(
+      (await request("/admin/resources", valid, { origin: "https://evil.example" })).status,
+    ).toBe(403);
+    expect((await listing()).resources).toEqual([]);
+    const context = await service.auth.$context;
+    await context.adapter.update({
+      model: "session",
+      where: [{ field: "userId", value: service.owner()! }],
+      update: { createdAt: new Date(Date.now() - 16 * 60_000) },
+    });
+    expect((await request("/admin/resources", valid)).status).toBe(403);
+    expect((await listing()).resources).toEqual([]);
+  });
+
+  test("one client accesses multiple resources but each token request targets one", async () => {
+    const app = await client();
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    const rows = (await listing()).clientAccess;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { client_id: app.client_id, resource: resourceA },
+        { client_id: app.client_id, resource: resourceB },
+      ]),
+    );
+    expect((await tokens(app.client_id, resourceA)).access_token).toBeTypeOf("string");
+    expect((await tokens(app.client_id, resourceB)).access_token).toBeTypeOf("string");
+    expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(409);
+    expect((await access(app.client_id, [resourceA, "https://missing.internal/api"])).status).toBe(
+      400,
+    );
+    expect((await listing()).clientAccess).toEqual(rows);
+    expect((await access(app.client_id, [])).status).toBe(200);
+    expect((await listing()).clientAccess).toEqual([]);
+    expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(200);
+  });
+
+  test("the same scope label has independent consent on each resource", async () => {
+    const app = await client();
+    expect((await updateResource(resourceB, ["okf:read", "okf:write"])).status).toBe(200);
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    await authorize(app.client_id, resourceA);
+    const flowB = authorization(app.client_id, resourceB, { prompt: "" });
+    const authorizationB = new URL(flowB.path, settings.baseURL);
+    authorizationB.searchParams.delete("prompt");
+    const responseB = await request(`${authorizationB.pathname}${authorizationB.search}`);
+    const consentB = new URL(responseB.headers.get("location")!, settings.baseURL);
+    expect(consentB.pathname).toBe("/consent");
+    expect(
+      (
+        await request("/api/auth/oauth2/consent", {
+          accept: true,
+          oauth_query: consentB.search.slice(1),
+        })
+      ).status,
+    ).toBe(200);
+    const consents = service.db
+      .prepare(
+        "SELECT referenceId, resources FROM oauthConsent WHERE clientId = ? ORDER BY referenceId",
+      )
+      .all(app.client_id);
+    expect(consents).toEqual(
+      [
+        { referenceId: `resource:${resourceA}`, resources: JSON.stringify([resourceA]) },
+        { referenceId: `resource:${resourceB}`, resources: JSON.stringify([resourceB]) },
+      ].sort((a, b) => a.referenceId.localeCompare(b.referenceId)),
+    );
+    for (const resource of [resourceA, resourceB]) {
+      const prior = await request(authorization(app.client_id, resource, { prompt: "none" }).path);
+      const redirect = new URL(prior.headers.get("location")!, settings.baseURL);
+      expect(redirect.searchParams.has("code")).toBe(true);
+      expect(redirect.searchParams.has("error")).toBe(false);
+    }
+  });
+
+  test("new scopes appear immediately and need consent; name-only changes preserve refresh grants", async () => {
+    const app = await client();
+    const issued = await tokens(app.client_id);
+    expect((await updateResource(resourceA, ["okf:read", "okf:write"], "Renamed")).status).toBe(
+      200,
+    );
+    expect((await refresh(app.client_id, issued.refresh_token, resourceA)).status).toBe(200);
+    expect((await updateResource(resourceA, ["okf:read", "okf:write", "okf:admin"])).status).toBe(
+      200,
+    );
+    const metadata = await (
+      await request("/.well-known/oauth-authorization-server/api/auth")
+    ).json();
+    expect(metadata.scopes_supported).toContain("okf:admin");
+    const stored = (await listing()).clients.find(
+      (row: { client_id: string }) => row.client_id === app.client_id,
+    );
+    expect(stored.scope.split(" ")).toContain("okf:admin");
+    const response = await request(
+      authorization(app.client_id, resourceA, { scope: "openid okf:admin", prompt: "none" }).path,
+    );
+    expect(
+      new URL(response.headers.get("location")!, settings.baseURL).searchParams.get("error"),
+    ).toBe("consent_required");
+  });
+
+  test("scope removal retires affected grants and codes while another resource survives", async () => {
+    const app = await client();
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    expect((await updateResource(resourceB, ["okf:read", "okf:write"])).status).toBe(200);
+    const sharedScopes = "openid offline_access okf:read";
+    const issuedA = await tokens(app.client_id, resourceA);
+    const issuedB = await tokens(app.client_id, resourceB, undefined, sharedScopes);
+    const pendingA = await authorize(app.client_id, resourceA);
+    const pendingB = await authorize(app.client_id, resourceB, sharedScopes);
+    expect((await updateResource(resourceA, ["okf:write"])).status).toBe(200);
+    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
+    expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
+    expect((await refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
+    expect((await exchange(app.client_id, pendingB, resourceB)).status).toBe(200);
+    expect((await updateResource(resourceA, ["okf:read", "okf:write"])).status).toBe(200);
+    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
+    expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
+  });
+
+  test("unlink and re-add cannot revive old grants or consent and preserve other resource access", async () => {
+    const app = await client();
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    const issuedA = await tokens(app.client_id, resourceA);
+    const issuedB = await tokens(app.client_id, resourceB);
+    const pendingA = await authorize(app.client_id, resourceA);
+    expect((await access(app.client_id, [resourceB])).status).toBe(200);
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
+    expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
+    expect((await refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
+    const again = await request(authorization(app.client_id, resourceA, { prompt: "none" }).path);
+    expect(
+      new URL(again.headers.get("location")!, settings.baseURL).searchParams.get("error"),
+    ).toBe("consent_required");
+    const unaffected = await request(
+      authorization(app.client_id, resourceB, {
+        scope: "openid offline_access reports:read",
+        prompt: "none",
+      }).path,
+    );
+    expect(
+      new URL(unaffected.headers.get("location")!, settings.baseURL).searchParams.has("code"),
+    ).toBe(true);
+  });
+
+  test("a failed scope write rolls back resource policy, client scopes and live discovery", async () => {
+    const app = await client();
+    const before = await listing();
+    const metadataBefore = await (
+      await request("/.well-known/oauth-authorization-server/api/auth")
+    ).json();
+    service.db.exec(
+      "CREATE TRIGGER reject_scope_update BEFORE UPDATE OF scopes ON oauthClient BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END",
+    );
+    try {
+      expect((await updateResource(resourceA, ["okf:read", "new:scope"])).status).toBe(500);
+      expect(await listing()).toEqual(before);
+      const metadataAfter = await (
+        await request("/.well-known/oauth-authorization-server/api/auth")
+      ).json();
+      expect(metadataAfter.scopes_supported).toEqual(metadataBefore.scopes_supported);
+    } finally {
+      service.db.exec("DROP TRIGGER reject_scope_update");
+    }
+    expect((await tokens(app.client_id)).access_token).toBeTypeOf("string");
+  });
+
+  test("concurrent linking and deletion cannot leave access to a deleted resource", async () => {
+    const app = await client();
+    const results = await Promise.all([
+      access(app.client_id, [resourceA, resourceB]),
+      request("/admin/resources/delete", { identifier: resourceB }),
+    ]);
+    expect(results.map((response) => response.status)).toEqual([200, 409]);
+    const state = await listing();
+    for (const link of state.clientAccess) {
+      expect(
+        state.resources.some(
+          (resource: { identifier: string }) => resource.identifier === link.resource,
+        ),
+      ).toBe(true);
+    }
   });
 });

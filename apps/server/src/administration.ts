@@ -11,6 +11,9 @@ import {
   Unauthorized,
   type ClientInput,
   type ClientId,
+  type ClientAccessInput,
+  type Resource,
+  type ResourceId,
   type SetupInput,
 } from "@clankerauth/api";
 import { createOwner, type Service } from "./auth.ts";
@@ -38,6 +41,17 @@ function apiError(error: unknown) {
   return new InternalServerError(body);
 }
 
+// Only the local Resource store supplies these user-facing domain errors.
+function resourceError(error: unknown) {
+  if (error instanceof APIError) {
+    const body = { error: error.body?.message ?? "Resource request could not be completed" };
+    if (error.statusCode === 400) return new BadRequest(body);
+    if (error.statusCode === 404) return new NotFound(body);
+    if (error.statusCode === 409) return new Conflict(body);
+  }
+  return new InternalServerError({ error: "Request could not be completed" });
+}
+
 export function administration(service: Service) {
   const { auth, settings } = service;
   const requireOwner = Effect.fn("Administration.requireOwner")(function* (
@@ -54,7 +68,7 @@ export function administration(service: Service) {
       return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
     if (mutate && Date.now() - session.session.createdAt.getTime() > 15 * 60 * 1000)
       return yield* Effect.fail(
-        new Forbidden({ error: "Sign out and sign in again before changing clients" }),
+        new Forbidden({ error: "Sign out and sign in again before changing Clients or Resources" }),
       );
     return session;
   });
@@ -69,9 +83,16 @@ export function administration(service: Service) {
         try: () => auth.api.getOAuthClients({ headers }),
         catch: apiError,
       });
+      const catalog = yield* Effect.try({
+        try: () => ({
+          resources: service.resources.list(),
+          clientAccess: service.resources.access(),
+        }),
+        catch: resourceError,
+      });
       return {
         clients: clients ?? [],
-        resources: settings.resources,
+        ...catalog,
         email,
         issuer: `${settings.baseURL}/api/auth`,
       };
@@ -80,12 +101,21 @@ export function administration(service: Service) {
       headers: Headers,
       input: typeof ClientInput.Type,
     ) {
-      const resource = settings.resources.find((r) => r.identifier === input.resource);
-      if (!resource || !input.name.trim() || input.name.length > 100)
-        return yield* Effect.fail(new BadRequest({ error: "Invalid client name or resource" }));
-      return yield* Effect.tryPromise({
-        try: async () => {
-          const client = await auth.api.createOAuthClient({
+      if (!input.name.trim() || input.name.length > 100)
+        return yield* Effect.fail(
+          new BadRequest({ error: "Client names require 1–100 characters" }),
+        );
+      const scopes = yield* Effect.try({
+        try: () => {
+          if (!input.resources.length)
+            throw new APIError("BAD_REQUEST", { message: "Choose unique Resources" });
+          return service.resources.scopesFor(input.resources);
+        },
+        catch: resourceError,
+      });
+      const client = yield* Effect.tryPromise({
+        try: () =>
+          auth.api.createOAuthClient({
             headers,
             body: {
               client_name: input.name.trim(),
@@ -93,21 +123,57 @@ export function administration(service: Service) {
               token_endpoint_auth_method: input.confidential ? "client_secret_basic" : "none",
               application_type: input.native ? "native" : "web",
               grant_types: ["authorization_code", "refresh_token"],
-              scope: ["openid", "profile", "email", "offline_access", ...resource.scopes].join(" "),
+              scope: scopes.join(" "),
             },
-          });
-          try {
-            await auth.api.adminLinkClientResource({
-              headers,
-              params: { identifier: resource.identifier, client_id: client.client_id },
-            });
-          } catch (error) {
-            await auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } });
-            throw error;
-          }
-          return client;
-        },
+          }),
         catch: apiError,
+      });
+      yield* Effect.try({
+        try: () => service.resources.setAccess(client.client_id, input.resources),
+        catch: resourceError,
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* Effect.tryPromise({
+              try: () =>
+                auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+              catch: apiError,
+            });
+            return yield* Effect.fail(error);
+          }),
+        ),
+      );
+      return client;
+    }),
+    access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
+      const clientAccess = yield* Effect.try({
+        try: () => service.resources.setAccess(input.client_id, input.resources),
+        catch: resourceError,
+      });
+      return { clientAccess };
+    }),
+    createResource: Effect.fn("Administration.createResource")(function* (
+      input: typeof Resource.Type,
+    ) {
+      return yield* Effect.try({
+        try: () => service.resources.create(input),
+        catch: resourceError,
+      });
+    }),
+    updateResource: Effect.fn("Administration.updateResource")(function* (
+      input: typeof Resource.Type,
+    ) {
+      return yield* Effect.try({
+        try: () => service.resources.update(input),
+        catch: resourceError,
+      });
+    }),
+    deleteResource: Effect.fn("Administration.deleteResource")(function* (
+      input: typeof ResourceId.Type,
+    ) {
+      return yield* Effect.try({
+        try: () => service.resources.delete(input.identifier),
+        catch: resourceError,
       });
     }),
     delete: Effect.fn("Administration.delete")(function* (

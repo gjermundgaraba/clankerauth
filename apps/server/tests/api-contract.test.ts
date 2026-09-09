@@ -29,7 +29,6 @@ describe("API integration", () => {
       database: join(directory, "auth.sqlite"),
       host: "127.0.0.1",
       port: 3000,
-      resources: [{ identifier: resource, name: "Example MCP", scopes: ["example:read"] }],
     });
     service = openAuth(settings);
     await initialize(service);
@@ -85,11 +84,18 @@ describe("API integration", () => {
           .join("; ");
         expect(cookie).not.toBe("");
 
+        const resourceInput = {
+          identifier: resource,
+          name: "Example MCP",
+          scopes: ["example:read"],
+        };
+        expect((yield* api.clients.list()).resources).toEqual([]);
+        yield* api.resources.create({ payload: resourceInput });
         const created = yield* api.clients.create({
           payload: {
             name: "Contract test client",
             redirect: "http://127.0.0.1:9876/callback",
-            resource,
+            resources: [resource],
             native: true,
             confidential,
           },
@@ -99,9 +105,28 @@ describe("API integration", () => {
         const listing = yield* api.clients.list();
         expect(listing.email).toBe(email);
         expect(listing.issuer).toBe(`${settings.baseURL}/api/auth`);
-        expect(listing.resources).toEqual(settings.resources);
+        expect(listing.resources).toEqual([resourceInput]);
+        expect(listing.clientAccess).toEqual([{ client_id: created.client_id, resource }]);
         expect(listing.clients.map((client) => client.client_id)).toEqual([created.client_id]);
         expect(listing.clients[0]).not.toHaveProperty("client_secret");
+
+        const updatedResource = {
+          ...resourceInput,
+          name: "Renamed MCP",
+          scopes: ["example:read", "example:write"],
+        };
+        expect(yield* api.resources.update({ payload: updatedResource })).toEqual(updatedResource);
+        expect(
+          (yield* Effect.flip(api.resources.delete({ payload: { identifier: resource } })))._tag,
+        ).toBe("Conflict");
+        expect(
+          yield* api.clients.access({ payload: { client_id: created.client_id, resources: [] } }),
+        ).toEqual({ clientAccess: [] });
+        expect(
+          yield* api.clients.access({
+            payload: { client_id: created.client_id, resources: [resource] },
+          }),
+        ).toEqual({ clientAccess: [{ client_id: created.client_id, resource }] });
 
         if (confidential) {
           const rotated = yield* api.clients.rotate({ payload: { client_id: created.client_id } });
@@ -119,6 +144,10 @@ describe("API integration", () => {
           deleted: true,
         });
         expect((yield* api.clients.list()).clients).toEqual([]);
+        expect(yield* api.resources.delete({ payload: { identifier: resource } })).toEqual({
+          deleted: true,
+        });
+        expect((yield* api.clients.list()).resources).toEqual([]);
       }).pipe(
         Effect.provide(FetchHttpClient.layer),
         Effect.provideService(FetchHttpClient.Fetch, appFetch),

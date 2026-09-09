@@ -98,7 +98,7 @@ async function register(target) {
   const response = await ownerRequest("/admin/clients", {
     name: "Official SDK interoperability",
     redirect: "http://127.0.0.1:9876/callback",
-    resource: target,
+    resources: [target],
     native: true,
     confidential: false,
   });
@@ -120,10 +120,6 @@ try {
     database: join(directory, "auth.sqlite"),
     host: "127.0.0.1",
     port: Number(new URL(authURL).port),
-    resources: [
-      { identifier: resource, name: "MCP", scopes: ["okf:read", "okf:write"] },
-      { identifier: otherResource, name: "Other", scopes: ["okf:read", "okf:write"] },
-    ],
   };
   service = openAuth(settings);
   await initialize(service);
@@ -134,6 +130,13 @@ try {
   issuer = `${authURL}/api/auth`;
   const login = await ownerRequest("/api/auth/sign-in/email", { email, password });
   assert.equal(login.status, 200);
+  for (const input of [
+    { identifier: resource, name: "MCP", scopes: ["okf:read", "okf:write"] },
+    { identifier: otherResource, name: "Other", scopes: ["okf:read", "okf:write"] },
+  ]) {
+    const created = await ownerRequest("/admin/resources", input);
+    assert.equal(created.status, 201, await created.clone().text());
+  }
   const registered = await register(resource);
   const otherClient = await register(otherResource);
   const backing = makeCodeStorageStoreWithClient(makeFakeClient(join(directory, "fake-storage")));
@@ -222,7 +225,13 @@ try {
         scope: "okf:read okf:write offline_access",
       },
       state: () => "interop-state",
-      clientInformation: () => ({ ...client, issuer }),
+      // This fixture registers public clients. Provider responses may include
+      // null secret fields; the SDK interprets any defined secret as confidential.
+      clientInformation: () => ({
+        client_id: client.client_id,
+        token_endpoint_auth_method: "none",
+        issuer,
+      }),
       tokens: () => savedTokens,
       saveTokens: (value) => {
         savedTokens = value;

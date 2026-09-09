@@ -96,7 +96,7 @@ export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema
 export const ClientInput = Schema.Struct({
   name: Schema.String,
   redirect: Schema.String,
-  resource: Schema.String,
+  resources: Schema.Array(Schema.String),
   confidential: Schema.Boolean,
   native: Schema.Boolean,
 });
@@ -121,6 +121,16 @@ export const Resource = Schema.Struct({
   name: Schema.String,
   scopes: Schema.Array(Schema.String),
 });
+export const ResourceId = Schema.Struct({ identifier: Schema.String });
+export const ClientAccess = Schema.Struct({
+  client_id: Schema.String,
+  resource: Schema.String,
+});
+export const ClientAccessInput = Schema.Struct({
+  client_id: Schema.String,
+  resources: Schema.Array(Schema.String),
+});
+export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(ClientAccess) });
 
 export const Api = HttpApi.make("ClankerAuth")
   .add(
@@ -141,6 +151,7 @@ export const Api = HttpApi.make("ClankerAuth")
           success: Schema.Struct({
             clients: Schema.Array(Client),
             resources: Schema.Array(Resource),
+            clientAccess: Schema.Array(ClientAccess),
             email: Schema.String,
             issuer: Schema.String,
           }),
@@ -159,6 +170,30 @@ export const Api = HttpApi.make("ClankerAuth")
         HttpApiEndpoint.post("rotate", "/admin/clients/rotate", {
           payload: ClientId,
           success: ClientCredentials,
+          error: errors,
+        }),
+        HttpApiEndpoint.post("access", "/admin/clients/access", {
+          payload: ClientAccessInput,
+          success: ClientAccessResult,
+          error: errors,
+        }),
+      )
+      .middleware(OwnerAuthorization),
+    HttpApiGroup.make("resources")
+      .add(
+        HttpApiEndpoint.post("create", "/admin/resources", {
+          payload: Resource,
+          success: Resource.pipe(HttpApiSchema.status(201)),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("update", "/admin/resources/update", {
+          payload: Resource,
+          success: Resource,
+          error: errors,
+        }),
+        HttpApiEndpoint.post("delete", "/admin/resources/delete", {
+          payload: ResourceId,
+          success: Schema.Struct({ deleted: Schema.Boolean }),
           error: errors,
         }),
       )

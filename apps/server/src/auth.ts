@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
-import { oauthProvider } from "@better-auth/oauth-provider";
+import { getOAuthProviderState, oauthProvider } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
+import { protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
 export function openAuth(settings: Settings) {
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
@@ -18,15 +19,73 @@ export function openAuth(settings: Settings) {
   const owner = () =>
     db.prepare<[], { userId: string }>("SELECT userId FROM serviceOwner WHERE id = 1").get()
       ?.userId;
-  const scopes = [
-    ...new Set([
-      "openid",
-      "profile",
-      "email",
-      "offline_access",
-      ...settings.resources.flatMap((r) => r.scopes),
-    ]),
-  ];
+  const provider = oauthProvider({
+    loginPage: "/login",
+    consentPage: "/consent",
+    scopes: [...protocolScopes],
+    postLogin: {
+      page: "/consent",
+      shouldRedirect: () => false,
+      consentReferenceId: async ({ scopes }) => {
+        const state = await getOAuthProviderState();
+        const query = new URLSearchParams(state?.query);
+        const identifiers = query.getAll("resource");
+        if (identifiers.length !== 1 || !resources.get(identifiers[0]))
+          throw new APIError("BAD_REQUEST", {
+            error: "invalid_target",
+            error_description: "Choose exactly one Resource",
+          });
+        const clientId = query.get("client_id");
+        if (
+          !resources
+            .access()
+            .some((link) => link.client_id === clientId && link.resource === identifiers[0])
+        )
+          throw new APIError("BAD_REQUEST", {
+            error: "invalid_target",
+            error_description: "Client access is required",
+          });
+        const allowed = resources.scopesFor(identifiers);
+        if (scopes.some((scope) => !allowed.includes(scope)))
+          throw new APIError("BAD_REQUEST", {
+            error: "invalid_scope",
+            error_description: "Resource scopes changed; start authorization again",
+          });
+        return resourceReference(identifiers[0]);
+      },
+    },
+    grantTypes: ["authorization_code", "refresh_token"],
+    allowDynamicClientRegistration: false,
+    allowUnauthenticatedClientRegistration: false,
+    enforcePerClientResources: true,
+    accessTokenExpiresIn: 300,
+    refreshTokenExpiresIn: 60 * 60 * 24 * 30,
+    codeExpiresIn: 120,
+    refreshTokenReuseInterval: 0,
+    // Supported callback runs before token writes/signing for both code
+    // exchange and refresh, including legacy grants without a live session.
+    customTokenResponseFields: ({ user }) => {
+      if (!user || user.id !== owner())
+        throw new APIError("BAD_REQUEST", {
+          error: "invalid_grant",
+          error_description: "Owner grant required",
+        });
+      return {};
+    },
+    customUserInfoClaims: ({ user }) => {
+      if (user.id !== owner()) throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
+      return {};
+    },
+    clientPrivileges: ({ user, action }) =>
+      !!user && user.id === owner() && action !== "configure-client-credentials-scopes",
+    resourcePrivileges: ({ user }) => !!user && user.id === owner(),
+  });
+  const synchronizeScopes = () => {
+    provider.options.scopes = resources.supportedScopes();
+  };
+  const resources = resourceStore(db, (scopes) => {
+    provider.options.scopes = scopes;
+  });
   const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
@@ -90,46 +149,10 @@ export function openAuth(settings: Settings) {
         disableSettingJwtHeader: true,
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
       }),
-      oauthProvider({
-        loginPage: "/login",
-        consentPage: "/consent",
-        scopes,
-        grantTypes: ["authorization_code", "refresh_token"],
-        allowDynamicClientRegistration: false,
-        allowUnauthenticatedClientRegistration: false,
-        enforcePerClientResources: true,
-        accessTokenExpiresIn: 300,
-        refreshTokenExpiresIn: 60 * 60 * 24 * 30,
-        codeExpiresIn: 120,
-        refreshTokenReuseInterval: 0,
-        // Supported callback runs before token writes/signing for both code
-        // exchange and refresh, including legacy grants without a live session.
-        customTokenResponseFields: ({ user }) => {
-          if (!user || user.id !== owner())
-            throw new APIError("BAD_REQUEST", {
-              error: "invalid_grant",
-              error_description: "Owner grant required",
-            });
-          return {};
-        },
-        customUserInfoClaims: ({ user }) => {
-          if (user.id !== owner()) throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
-          return {};
-        },
-        resources: settings.resources.map((r) => ({
-          identifier: r.identifier,
-          name: r.name,
-          allowedScopes: ["openid", "profile", "email", "offline_access", ...r.scopes],
-          accessTokenTtl: 300,
-        })),
-        resourceSeedMode: "overwrite",
-        clientPrivileges: ({ user, action }) =>
-          !!user && user.id === owner() && action !== "configure-client-credentials-scopes",
-        resourcePrivileges: ({ user }) => !!user && user.id === owner(),
-      }),
+      provider,
     ],
   } satisfies BetterAuthOptions;
-  // Provider initialization seeds resources, so defer it until migrations finish.
+  // Defer provider initialization until migrations finish.
   const makeAuth = () => betterAuth(options);
   let auth: ReturnType<typeof makeAuth> | undefined;
   // All online operations enter here, including admin operations that call auth.api.
@@ -159,6 +182,8 @@ export function openAuth(settings: Settings) {
     db,
     owner,
     settings,
+    resources,
+    synchronizeScopes,
     exclusive,
     close,
   };
@@ -174,6 +199,7 @@ export async function initialize(service: Service) {
   );
   if (!service.owner() && service.db.prepare("SELECT id FROM user LIMIT 1").get())
     throw new Error("Database contains accounts without an owner marker");
+  service.synchronizeScopes();
   await service.auth.$context;
 }
 
