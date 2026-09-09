@@ -1,0 +1,39 @@
+packages:
+  - apps/*
+
+catalogMode: prefer
+catalog:
+  "@better-auth/oauth-provider": 1.7.3
+  better-auth: 1.7.3
+  better-sqlite3: 12.11.1
+  effect: 4.0.0-rc.112
+  "@types/better-sqlite3": 9.6.0
+  "@types/node": 26.5.0
+  jose: 6.2.12
+  typescript: 7.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.1
+  vite-plus: 0.3.1
+
+overrides:
+  vite@*: "catalog:"
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+allowBuilds:
+  better-sqlite3: true
+  msgpackr-extract: false
+minimumReleaseAgeExclude:
+  - "@voidzero-dev/vite-plus-core@0.3.1"
+  - "@voidzero-dev/vite-plus-darwin-arm64@0.3.1"
+  - "@voidzero-dev/vite-plus-darwin-x64@0.3.1"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.3.1"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.3.1"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.3.1"
+  - "@voidzero-dev/vite-plus-linux-x64-musl@0.3.1"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.1"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.1"
+  - vite-plus@0.3.1
+patchedDependencies:
+  "@better-auth/oauth-provider@1.7.3": patches/@better-auth__oauth-provider@1.7.3.patch

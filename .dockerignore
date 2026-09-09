@@ -1,0 +1,9 @@
+.git
+.amp
+.env*
+data
+node_modules
+dist
+**/node_modules
+**/dist
+*.sqlite*

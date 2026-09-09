@@ -1,0 +1,45 @@
+diff --git a/dist/authorize-9whjxVLJ.mjs b/dist/authorize-9whjxVLJ.mjs
+index 6c1d5c51cc553db32900bc750dfd0687420b12b7..1dc017761f1f21202b5dba08ffcc7f73b548d4b5 100644
+--- a/dist/authorize-9whjxVLJ.mjs
++++ b/dist/authorize-9whjxVLJ.mjs
+@@ -3508,6 +3508,8 @@ async function revokeRefreshToken(ctx, opts, token, clientId) {
+ 		error_description: "token not found",
+ 		error: "invalid_request"
+ 	});
++	// Authenticate the token's client binding before any revocation side effect.
++	if (!refreshToken.clientId || refreshToken.clientId !== clientId) return null;
+ 	if (refreshToken.revoked) {
+ 		await invalidateRefreshFamily(ctx, clientId, refreshToken.userId);
+ 		throw new APIError$1("BAD_REQUEST", {
+@@ -3515,7 +3517,6 @@ async function revokeRefreshToken(ctx, opts, token, clientId) {
+ 			error: "invalid_request"
+ 		});
+ 	}
+-	if (!refreshToken.clientId || refreshToken.clientId !== clientId) return null;
+ 	const iat = Math.floor(Date.now() / 1e3);
+ 	if (!await ctx.context.adapter.incrementOne({
+ 		model: "oauthRefreshToken",
+diff --git a/dist/introspect-CbhhXT0E.mjs b/dist/introspect-CbhhXT0E.mjs
+index e5829d8e200dbb7fe3f451b62d085b0f29856b05..862dedc13a7404ba9a8ef9058dce0793ef7aa1d5 100644
+--- a/dist/introspect-CbhhXT0E.mjs
++++ b/dist/introspect-CbhhXT0E.mjs
+@@ -1849,7 +1849,9 @@ async function createUserTokens(ctx, opts, params) {
+ 		perRequestClaims: params.accessTokenClaims,
+ 		resourcePolicyClaims: grantIssuance.resourceCustomClaims
+ 	}) : void 0;
+-	const [accessToken, refreshToken] = await Promise.all([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
++	// Do not let a signing failure finish the request while refresh writes are
++	// still running outside the single-instance service's request lock.
++	const tokenResults = await Promise.allSettled([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
+ 		iat,
+ 		exp,
+ 		sid: sessionId,
+@@ -1866,6 +1868,8 @@ async function createUserTokens(ctx, opts, params) {
+ 		exp: refreshTokenExp,
+ 		sid: sessionId
+ 	}, existingRefreshToken, authTime, refreshResources, confirmation, requestedUserInfoClaims) : void 0]);
++	for (const result of tokenResults) if (result.status === "rejected") throw result.reason;
++	const [accessToken, refreshToken] = tokenResults.map((result) => result.value);
+ 	const idToken = isIdToken ? await createIdToken(ctx, opts, user, client, effectiveScopes, nonce, sessionId, authTime, accessToken, additionalIdTokenClaims) : void 0;
+ 	const responseBody = {
+ 		...customFields,

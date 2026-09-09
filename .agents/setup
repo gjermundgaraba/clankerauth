@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$(node -p 'process.versions.node.split(".")[0]')" -lt 26 ]]; then
+  echo "Node >=26 is required. Select the Node 26 orb toolchain."
+  exit 1
+fi
+if ! command -v g++ >/dev/null || ! command -v make >/dev/null || ! command -v python3 >/dev/null; then
+  sudo apt-get update
+  sudo apt-get install -y g++ make python3
+fi
+echo "Installing pinned pnpm workspace dependencies and building both apps"
+if ! command -v pnpm >/dev/null; then npm install -g pnpm@12.3.4; fi
+pnpm install --frozen-lockfile
+pnpm build
+# Do not snapshot identity state, owner credentials or signing secrets.

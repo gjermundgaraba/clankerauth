@@ -1,0 +1,27 @@
+{
+  "name": "@clankerauth/server",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@better-auth/oauth-provider": "catalog:",
+    "@clankerauth/web": "workspace:*",
+    "better-auth": "catalog:",
+    "better-sqlite3": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:",
+    "@types/node": "catalog:",
+    "jose": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
