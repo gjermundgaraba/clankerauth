@@ -8,8 +8,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { requestToResourceInput, verifyAccessTokenRequest } from "better-auth/oauth2";
 import { application } from "../src/app.ts";
-import { assertMigrated, migrate, openAuth, type Service } from "../src/auth.ts";
-import { bootstrapOwner, recoverOwner } from "../src/admin.ts";
+import { initialize, openAuth, type Service } from "../src/auth.ts";
 import { validateSettings, type Settings } from "../src/config.ts";
 
 const password = "test-only owner password 8rS!";
@@ -138,12 +137,8 @@ beforeEach(async () => {
       { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
     ],
   });
-  service = openAuth(settings, true);
-  await migrate(service);
-  await bootstrapOwner(service, email, password);
-  service.db.close();
   service = openAuth(settings);
-  await assertMigrated(service);
+  await initialize(service);
   handle = application(service);
   cookies = new Map();
 });
@@ -153,7 +148,153 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
+async function setupOwner() {
+  const response = await request("/api/setup", { email, password });
+  expect(response.status, await response.clone().text()).toBe(201);
+}
+
+async function restart() {
+  await service.close();
+  service = openAuth(settings);
+  await initialize(service);
+  handle = application(service);
+}
+
+describe("first-run setup", () => {
+  test("fresh startup and restart permit setup, which creates no session and closes permanently", async () => {
+    expect(await (await request("/api/setup")).json()).toEqual({ required: true });
+    await restart();
+    const status = await request("/api/setup");
+    expect(await status.json()).toEqual({ required: true });
+    expect(status.headers.get("cache-control")).toContain("no-store");
+    expect((await request("/admin/clients")).status).toBe(401);
+    expect(
+      (await request("/api/auth/sign-up/email", { email, password, name: "Owner" })).status,
+    ).toBe(404);
+    await expect(
+      service.auth.api.signUpEmail({ body: { email, password, name: "Owner" } }),
+    ).rejects.toThrow();
+
+    const created = await request("/api/setup", { email: "Owner@Example.Internal", password });
+    expect(created.status, await created.clone().text()).toBe(201);
+    expect(await created.json()).toEqual({ created: true });
+    expect(created.headers.getSetCookie()).toEqual([]);
+    expect(service.db.prepare("SELECT count(*) AS n FROM session").get()).toEqual({ n: 0 });
+    expect(service.db.prepare("SELECT name, email, emailVerified FROM user").get()).toEqual({
+      name: "Owner",
+      email,
+      emailVerified: 0,
+    });
+    const owner = service.owner();
+    expect(owner).toBeTypeOf("string");
+    expect(await (await request("/api/setup")).json()).toEqual({ required: false });
+    expect((await request("/admin/clients")).status).toBe(401);
+    expect((await login()).status).toBe(200);
+    await restart();
+    expect(service.owner()).toBe(owner);
+    expect(await (await request("/api/setup")).json()).toEqual({ required: false });
+    expect((await request("/admin/clients")).status).toBe(200);
+    expect((await request("/api/setup", { email, password })).status).toBe(409);
+  });
+
+  test("invalid setup input, origin, and encoding never create an account", async () => {
+    for (const body of [
+      {},
+      null,
+      [],
+      { email: "invalid", password },
+      { email: ".owner@example.internal", password },
+      { email: "owner..name@example.internal", password },
+      { email: "owner@example.123", password },
+      { email, password: "x".repeat(15) },
+      { email, password: "x".repeat(129) },
+      { email: 42, password },
+      { email, password: 42 },
+    ]) {
+      const response = await handle(
+        new Request(`${settings.baseURL}/api/setup`, {
+          method: "POST",
+          headers: { origin: settings.baseURL, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(response.status, await response.clone().text()).toBe(400);
+    }
+    for (const origin of [undefined, "https://evil.example", `${settings.baseURL}/`]) {
+      const headers = new Headers({ "content-type": "application/json" });
+      if (origin !== undefined) headers.set("origin", origin);
+      const response = await handle(
+        new Request(`${settings.baseURL}/api/setup`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ email, password }),
+        }),
+      );
+      expect(response.status).toBe(403);
+    }
+    for (const [contentType, body] of [
+      ["application/json", "{"],
+      ["text/plain", JSON.stringify({ email, password })],
+      ["application/x-www-form-urlencoded", new URLSearchParams({ email, password }).toString()],
+    ]) {
+      const response = await handle(
+        new Request(`${settings.baseURL}/api/setup`, {
+          method: "POST",
+          headers: { origin: settings.baseURL, "content-type": contentType! },
+          body,
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).not.toContain(password);
+    }
+    expect(service.db.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 0 });
+    expect(service.owner()).toBeUndefined();
+    await setupOwner();
+  });
+
+  test("simultaneous submissions create exactly one owner", async () => {
+    const responses = await Promise.all([
+      request("/api/setup", { email, password }),
+      request("/api/setup", { email: "second@example.internal", password }),
+    ]);
+    expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([201, 409]);
+    for (const table of ["user", "account", "serviceOwner"])
+      expect(service.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 1 });
+    expect(service.db.prepare("SELECT count(*) AS n FROM session").get()).toEqual({ n: 0 });
+  });
+
+  test("a failed owner-marker insert rolls back all account writes and permits retry", async () => {
+    service.db.exec(`CREATE TRIGGER fail_setup BEFORE INSERT ON serviceOwner
+      BEGIN SELECT RAISE(ABORT, 'Injected owner-marker failure'); END`);
+    const failed = await request("/api/setup", { email, password });
+    expect(failed.status).toBe(500);
+    const error = await failed.text();
+    expect(error).not.toContain(password);
+    expect(error).not.toContain("Injected owner-marker failure");
+    for (const table of ["user", "account", "serviceOwner", "session"])
+      expect(service.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+    expect(await (await request("/api/setup")).json()).toEqual({ required: true });
+    service.db.exec("DROP TRIGGER fail_setup");
+    await setupOwner();
+    expect((await login()).status).toBe(200);
+  });
+
+  test("startup rejects an existing account without an owner marker", async () => {
+    service.db
+      .prepare(
+        "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)",
+      )
+      .run("orphan", "Orphan", email, Date.now(), Date.now());
+    await service.close();
+    service = openAuth(settings);
+    await expect(initialize(service)).rejects.toThrow();
+    expect(service.db.prepare("SELECT id FROM user").all()).toEqual([{ id: "orphan" }]);
+    expect(service.owner()).toBeUndefined();
+  });
+});
+
 describe("owner boundary", () => {
+  beforeEach(setupOwner);
   test("shutdown drains admitted work even after its HTTP client disconnects", async () => {
     const admitted = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -190,7 +331,7 @@ describe("owner boundary", () => {
   });
 
   test("serves the built web workspace rather than the server working directory", async () => {
-    for (const path of ["/", "/login", "/consent"]) {
+    for (const path of ["/", "/setup", "/login", "/consent"]) {
       const response = await request(path);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
@@ -278,29 +419,6 @@ describe("owner boundary", () => {
     expect((await request("/api/auth/token")).status).toBe(404);
     expect((await request("/api/auth/sign-out", {})).status).toBe(200);
     expect((await request("/admin/clients")).status).toBe(401);
-  });
-
-  test("bootstrap refuses existing accounts; recovery replaces password and clears authority", async () => {
-    await expect(bootstrapOwner(service, email, password)).rejects.toThrow("already exist");
-    await login();
-    const app = await client();
-    const issued = await tokens(app.client_id);
-    await recoverOwner(service, "replacement test password 42!");
-    expect((await request("/admin/clients")).status).toBe(401);
-    expect((await login()).status).toBe(401);
-    expect((await login("replacement test password 42!")).status).toBe(200);
-    const refresh = await request(
-      "/api/auth/oauth2/token",
-      {
-        grant_type: "refresh_token",
-        client_id: app.client_id,
-        refresh_token: issued.refresh_token,
-        resource: resourceA,
-      },
-      { form: true, anonymous: true },
-    );
-    expect(refresh.status).toBe(400);
-    expect((await refresh.json()).error).toBe("invalid_grant");
   });
 
   test("existing non-owner credentials, sessions, codes and grants cannot convey authority", async () => {
@@ -459,6 +577,7 @@ describe("owner boundary", () => {
 });
 
 describe("OAuth boundaries and lifecycle", () => {
+  beforeEach(setupOwner);
   test.each(["replay", "revoke", "delete"])(
     "concurrent refresh and %s cannot leave the winning replacement usable",
     async (action) => {
@@ -833,7 +952,7 @@ describe("OAuth boundaries and lifecycle", () => {
     await expect(jwtVerify(tokenB.access_token, keys, { audience: resourceA })).rejects.toThrow();
     service.db.close();
     service = openAuth(settings);
-    await assertMigrated(service);
+    await initialize(service);
     handle = application(service);
     expect(await (await request("/api/auth/jwks")).json()).toEqual(jwks);
     expect((await request("/admin/clients")).status).toBe(200);
@@ -848,8 +967,7 @@ describe("OAuth boundaries and lifecycle", () => {
       { anonymous: true, form: true },
     );
     expect(refresh.status, await refresh.clone().text()).toBe(200);
-    await migrate(service);
-    await assertMigrated(service);
+    await initialize(service);
   });
 
   test("a rotated token cannot revoke another public client's refresh family", async () => {

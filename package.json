@@ -10,7 +10,6 @@
     "test": "vp run -r test",
     "ready": "vp check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
-    "auth:admin": "node --env-file-if-exists=.env apps/server/src/admin.ts",
     "test:interop": "node apps/server/scripts/mcp-interop.mjs",
     "test:package": "node apps/server/scripts/production-smoke.mjs"
   },

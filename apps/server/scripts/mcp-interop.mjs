@@ -13,8 +13,7 @@ import {
   isInsufficientScopeError,
 } from "better-auth/oauth2";
 import { application } from "../src/app.ts";
-import { openAuth, migrate, assertMigrated } from "../src/auth.ts";
-import { bootstrapOwner } from "../src/admin.ts";
+import { openAuth, initialize } from "../src/auth.ts";
 
 const root = resolve(process.argv[2] ?? "missing-okf-checkout");
 const external = createRequire(join(root, "package.json"));
@@ -126,13 +125,12 @@ try {
       { identifier: otherResource, name: "Other", scopes: ["okf:read", "okf:write"] },
     ],
   };
-  service = openAuth(settings, true);
-  await migrate(service);
-  await bootstrapOwner(service, email, password);
-  service.db.close();
   service = openAuth(settings);
-  await assertMigrated(service);
+  await initialize(service);
   handler = application(service);
+  const setup = await ownerRequest("/api/setup", { email, password });
+  assert.equal(setup.status, 201, await setup.clone().text());
+  assert.equal(setup.headers.has("set-cookie"), false);
   issuer = `${authURL}/api/auth`;
   const login = await ownerRequest("/api/auth/sign-in/email", { email, password });
   assert.equal(login.status, 200);

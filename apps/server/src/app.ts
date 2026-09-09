@@ -3,7 +3,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 import { APIError } from "better-auth/api";
-import type { Service } from "./auth.ts";
+import { createOwner, type Service } from "./auth.ts";
+
+const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
 
 const ClientInput = Schema.Struct({
   name: Schema.String,
@@ -45,6 +47,19 @@ export function application(
     if (url.pathname === "/healthz" && req.method === "GET") {
       service.db.prepare("SELECT 1").get();
       return json({ status: "ok" });
+    }
+    if (url.pathname === "/api/setup") {
+      if (req.method === "GET") return json({ required: !service.owner() });
+      if (req.method !== "POST") return json({ error: "Not found" }, 404);
+      if (req.headers.get("origin") !== settings.baseURL)
+        return json({ error: "Invalid origin" }, 403);
+      if (
+        req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json"
+      )
+        return json({ error: "JSON required" }, 400);
+      const input = Schema.decodeUnknownSync(SetupInput)(await req.json());
+      await createOwner(service, input);
+      return json({ created: true }, 201);
     }
     if (url.pathname.startsWith("/admin/")) {
       const session = await auth.api.getSession({ headers: req.headers });
@@ -133,7 +148,7 @@ export function application(
     }
     if (req.method !== "GET" && req.method !== "HEAD") return json({ error: "Not found" }, 404);
     let file: string;
-    if (["/", "/login", "/consent"].includes(url.pathname)) file = "index.html";
+    if (["/", "/login", "/consent", "/setup"].includes(url.pathname)) file = "index.html";
     else if (/^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(url.pathname))
       file = url.pathname.slice(1);
     else return json({ error: "Not found" }, 404);

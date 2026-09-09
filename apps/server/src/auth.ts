@@ -1,14 +1,15 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { betterAuth } from "better-auth";
+import { randomUUID } from "node:crypto";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 
-export function openAuth(settings: Settings, bootstrap = false) {
+export function openAuth(settings: Settings) {
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
   const db = new Database(settings.database);
   db.pragma("journal_mode = WAL");
@@ -26,7 +27,7 @@ export function openAuth(settings: Settings, bootstrap = false) {
       ...settings.resources.flatMap((r) => r.scopes),
     ]),
   ];
-  const auth = betterAuth({
+  const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
     secret: settings.secret,
@@ -36,7 +37,7 @@ export function openAuth(settings: Settings, bootstrap = false) {
     disabledPaths: ["/token"],
     emailAndPassword: {
       enabled: true,
-      disableSignUp: !bootstrap,
+      disableSignUp: true,
       minPasswordLength: 16,
       maxPasswordLength: 128,
     },
@@ -44,7 +45,7 @@ export function openAuth(settings: Settings, bootstrap = false) {
       session: {
         create: {
           before: async (session) => {
-            if (session.userId !== owner() && !(bootstrap && !owner()))
+            if (session.userId !== owner())
               throw new APIError("UNAUTHORIZED", { message: "Owner login required" });
           },
         },
@@ -127,7 +128,10 @@ export function openAuth(settings: Settings, bootstrap = false) {
         resourcePrivileges: ({ user }) => !!user && user.id === owner(),
       }),
     ],
-  });
+  } satisfies BetterAuthOptions;
+  // Provider initialization seeds resources, so defer it until migrations finish.
+  const makeAuth = () => betterAuth(options);
+  let auth: ReturnType<typeof makeAuth> | undefined;
   // All online operations enter here, including admin operations that call auth.api.
   // Kept on the service so multiple HTTP application wrappers share admission.
   let tail = Promise.resolve();
@@ -147,30 +151,64 @@ export function openAuth(settings: Settings, bootstrap = false) {
     await tail;
     if (db.open) db.close();
   };
-  return { auth, db, owner, settings, exclusive, close };
+  return {
+    get auth() {
+      return (auth ??= makeAuth());
+    },
+    options,
+    db,
+    owner,
+    settings,
+    exclusive,
+    close,
+  };
 }
 export type Service = ReturnType<typeof openAuth>;
 
-export async function migrate(service: Service) {
-  const plan = await getMigrations(service.auth.options);
+export async function initialize(service: Service) {
+  const plan = await getMigrations(service.options);
   if (plan.schemaProblems.length) throw new Error("Database schema requires manual repair");
   await plan.runMigrations();
   service.db.exec(
     "CREATE TABLE IF NOT EXISTS serviceOwner (id INTEGER PRIMARY KEY CHECK(id = 1), userId TEXT NOT NULL UNIQUE REFERENCES user(id))",
   );
+  if (!service.owner() && service.db.prepare("SELECT id FROM user LIMIT 1").get())
+    throw new Error("Database contains accounts without an owner marker");
+  await service.auth.$context;
 }
 
-export async function assertMigrated(service: Service) {
-  const plan = await getMigrations(service.auth.options);
+export async function createOwner(service: Service, input: { email: string; password: string }) {
+  if (service.owner()) throw new APIError("CONFLICT", { message: "Setup already completed" });
+  const email = input.email.trim().toLowerCase();
+  const context = await service.auth.$context;
+  // Match the pinned provider's email validator: setup must produce a usable login.
   if (
-    plan.toBeCreated.length ||
-    plan.toBeAdded.length ||
-    plan.toBeAddedIndexes.length ||
-    plan.schemaProblems.length
-  ) {
-    throw new Error("Database migration required; run pnpm auth:admin migrate while stopped");
-  }
-  if (!service.owner())
-    throw new Error("Owner bootstrap required; run pnpm auth:admin bootstrap while stopped");
-  await service.auth.$context;
+    email.length > 254 ||
+    !/^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+.-]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z]{2,}$/.test(
+      email,
+    ) ||
+    input.password.length < context.password.config.minPasswordLength ||
+    input.password.length > context.password.config.maxPasswordLength
+  )
+    throw new APIError("BAD_REQUEST", { message: "Invalid email or password" });
+  const hash = await context.password.hash(input.password);
+  // Keep provider hashing outside the synchronous transaction. These writes target
+  // the pinned Better Auth schema so account creation and ownership commit together.
+  service.db
+    .transaction(() => {
+      const id = randomUUID();
+      const now = Date.now();
+      service.db
+        .prepare(
+          "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, 'Owner', ?, 0, ?, ?)",
+        )
+        .run(id, email, now, now);
+      service.db
+        .prepare(
+          "INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)",
+        )
+        .run(randomUUID(), id, id, hash, now, now);
+      service.db.prepare("INSERT INTO serviceOwner (id, userId) VALUES (1, ?)").run(id);
+    })
+    .immediate();
 }

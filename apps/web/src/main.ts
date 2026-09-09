@@ -41,9 +41,47 @@ async function submit(task: () => Promise<void>) {
   }
 }
 
+function setup() {
+  main.innerHTML = `<section class="intro"><p class="eyebrow">YOUR NETWORK, YOUR IDENTITY</p><h1>Your identity.<br>Starts here.</h1><p>Create the owner account for your private applications.<br>Your account stays on your infrastructure.</p><div class="note"><span class="dot"></span> One owner · Explicit access</div></section><section class="card login"><p class="eyebrow">FIRST-TIME SETUP</p><h2>Create your account</h2><p class="muted">This account manages applications and approves access.</p><form id="setup"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="owner@example.internal"></label><label>Password<input name="password" type="password" autocomplete="new-password" required minlength="16" maxlength="128" aria-describedby="password-help"></label><p id="password-help" class="help">Use 16–128 characters. Save your password somewhere safe.</p><label>Confirm password<input name="confirmation" type="password" autocomplete="new-password" required minlength="16" maxlength="128"></label><p id="message" role="alert"></p><button>Create account <span>→</span></button></form></section>`;
+  const form = document.querySelector<HTMLFormElement>("#setup")!;
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submit(async () => {
+      const password = form.querySelector<HTMLInputElement>('[name="password"]')!.value;
+      const confirmation = form.querySelector<HTMLInputElement>('[name="confirmation"]')!.value;
+      if (password.length < 16 || password.length > 128)
+        throw new Error("Use a password between 16 and 128 characters.");
+      if (password !== confirmation) throw new Error("Passwords do not match.");
+      const response = await fetch("/api/setup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+          password,
+        }),
+      });
+      if (response.status === 409) {
+        location.replace("/login");
+        return;
+      }
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error ?? "Account creation failed. Please try again.");
+      }
+      location.replace("/login?setup=complete");
+    });
+  });
+}
+
 function login() {
-  main.innerHTML = `<section class="intro"><p class="eyebrow">YOUR NETWORK, YOUR IDENTITY</p><h1>One identity.<br>Deliberate access.</h1><p>Sign in to authorize your private applications.<br>Your account stays on your infrastructure.</p><div class="note"><span class="dot"></span> Password login · No external identity provider</div></section><section class="card login"><p class="eyebrow">OWNER ACCESS</p><h2>Welcome back</h2><p class="muted">Use your local account to continue.</p><form id="login"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="owner@example.internal"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><p id="message" role="alert"></p><button>Sign in <span>→</span></button></form><p class="help">Accounts are provisioned by the operator. Lost access? Use the offline recovery command on the server.</p></section>`;
+  main.innerHTML = `<section class="intro"><p class="eyebrow">YOUR NETWORK, YOUR IDENTITY</p><h1>One identity.<br>Deliberate access.</h1><p>Sign in to authorize your private applications.<br>Your account stays on your infrastructure.</p><div class="note"><span class="dot"></span> Password login · No external identity provider</div></section><section class="card login"><p class="eyebrow">OWNER ACCESS</p><h2>Welcome back</h2><p class="muted">Use your local account to continue.</p><form id="login"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="owner@example.internal"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><p id="message" role="alert"></p><button>Sign in <span>→</span></button></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#login")!;
+  if (new URLSearchParams(location.search).get("setup") === "complete") {
+    const confirmation = document.createElement("p");
+    confirmation.setAttribute("role", "status");
+    confirmation.textContent = "Account created. Sign in to continue.";
+    form.before(confirmation);
+  }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void submit(async () => {
@@ -157,7 +195,14 @@ async function dashboard() {
 }
 
 try {
-  if (location.pathname === "/consent") await consent();
+  const state: { required: boolean } = await api("/api/setup");
+  if (state.required) {
+    if (location.pathname !== "/setup") location.replace("/setup");
+    else setup();
+  } else if (location.pathname === "/setup") {
+    const session = await auth.getSession();
+    location.replace(session.data ? "/" : "/login");
+  } else if (location.pathname === "/consent") await consent();
   else {
     const session = await auth.getSession();
     if (!session.data || location.pathname === "/login") login();

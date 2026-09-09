@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { Effect } from "effect";
 import { application } from "./app.ts";
-import { assertMigrated, openAuth } from "./auth.ts";
+import { initialize, openAuth } from "./auth.ts";
 import { loadSettings } from "./config.ts";
 
 process.umask(0o077);
@@ -12,7 +12,7 @@ const program = Effect.scoped(
       Effect.sync(() => openAuth(settings)),
       (s) => Effect.promise(() => s.close()),
     );
-    yield* Effect.tryPromise(() => assertMigrated(service));
+    yield* Effect.tryPromise(() => initialize(service));
     const handler = application(service);
     const server = createServer(async (incoming, outgoing) => {
       try {
@@ -90,6 +90,6 @@ const program = Effect.scoped(
   }),
 );
 await Effect.runPromise(program).catch(() => {
-  console.error("Startup failed. Check configuration and run offline migration/bootstrap first.");
+  console.error("Startup failed. Check configuration, database schema and owner state.");
   process.exitCode = 1;
 });

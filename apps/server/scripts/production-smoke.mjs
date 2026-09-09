@@ -1,6 +1,6 @@
 // Run against a pnpm deploy --prod output, never a live database or .env.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -31,14 +31,6 @@ const env = {
 };
 const password = randomBytes(24).toString("hex");
 let child;
-const admin = (args, input) =>
-  execFileSync(process.execPath, [join(root, "dist/admin.mjs"), ...args], {
-    cwd: directory,
-    env,
-    input,
-    stdio: ["pipe", "pipe", "pipe"],
-    timeout: 15000,
-  });
 async function start() {
   child = spawn(process.execPath, [join(root, "dist/main.mjs")], {
     cwd: directory,
@@ -72,9 +64,19 @@ const login = (value) =>
   });
 
 try {
-  admin(["migrate"]);
-  admin(["bootstrap", "package@example.internal"], password);
   await start();
+  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: true });
+  await stop();
+  await start();
+  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: true });
+  const setup = await fetch(`${baseURL}/api/setup`, {
+    method: "POST",
+    headers: { origin: baseURL, "content-type": "application/json" },
+    body: JSON.stringify({ email: "package@example.internal", password }),
+  });
+  assert.equal(setup.status, 201);
+  assert.deepEqual(await setup.json(), { created: true });
+  assert.equal(setup.headers.has("set-cookie"), false);
   const signedIn = await login(password);
   assert.equal(signedIn.status, 200);
   const cookie = signedIn.headers
@@ -84,7 +86,7 @@ try {
   const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
   assert.equal(session.status, 200);
   assert.equal(session.headers.has("set-auth-jwt"), false);
-  for (const path of ["/", "/login", "/consent"]) {
+  for (const path of ["/", "/setup", "/login", "/consent"]) {
     const page = await fetch(baseURL + path);
     assert.equal(page.status, 200);
     const html = await page.text();
@@ -103,15 +105,15 @@ try {
   await start();
   assert.deepEqual(await (await fetch(metadata.jwks_uri)).json(), keys);
   assert.equal((await fetch(`${baseURL}/admin/clients`, { headers: { cookie } })).status, 200);
-  await stop();
-  const replacement = randomBytes(24).toString("hex");
-  admin(["recover"], replacement);
-  await start();
-  assert.equal((await fetch(`${baseURL}/admin/clients`, { headers: { cookie } })).status, 401);
-  assert.equal((await login(password)).status, 401);
-  assert.equal((await login(replacement)).status, 200);
+  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: false });
+  const repeatedSetup = await fetch(`${baseURL}/api/setup`, {
+    method: "POST",
+    headers: { origin: baseURL, "content-type": "application/json" },
+    body: JSON.stringify({ email: "another@example.internal", password }),
+  });
+  assert.equal(repeatedSetup.status, 409);
   console.log(
-    "PASS production package: bootstrap/login, no session JWT header, UI/assets, discovery, persisted keys/session, recovery; isolated DB and unrelated cwd",
+    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, discovery, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
   );
 } finally {
   await stop();
