@@ -2,7 +2,7 @@
 
 A single-instance, self-hosted identity and OAuth authorization server for private-network apps. Local password login, first-run web account creation, explicit client registration, signed consent, S256 PKCE, and audience-bound access tokens. No external identity provider, open signup, dynamic registration, organizations, or API keys.
 
-Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth and `@better-auth/oauth-provider` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles configuration/schema boundaries and process resource lifetime. SQLite via the provider-supported better-sqlite3 12 line owns all persistent auth state.
+Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth and `@better-auth/oauth-provider` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles the shared typed HTTP API, configuration/schema boundaries and process resource lifetime. SQLite via the provider-supported better-sqlite3 12 line owns all persistent auth state.
 
 ## Start locally
 
@@ -24,10 +24,11 @@ The Vite+ monorepo conventions were generated in a safe scratch directory with
 `vp create vite:monorepo --directory clankerauth-workspace-scaffold --no-agent --no-editor --no-git --no-hooks --package-manager pnpm --no-interactive`,
 then integrated without replacing existing auth code or Git history. The workspace uses pnpm catalogs and Vite+ recursive task orchestration, following clanker-okf's conventions. No unused scaffold example packages are retained.
 
+- `packages/api` (`@clankerauth/api`): shared Effect schemas and `HttpApi` contract for setup and client administration, compiled to JavaScript and declarations. The server implements it with `HttpApiBuilder`; the browser derives its client with `HttpApiClient`. Better Auth retains its own client and handler for authentication/OAuth.
 - `apps/server` (`@clankerauth/server`): native HTTP service, auth/configuration, first-run setup, SQLite integration tests and the optional MCP interoperability harness. `vp pack` emits `dist/main.mjs`.
 - `apps/web` (`@clankerauth/web`): browser account setup, login, consent and client administration. Vite builds `dist`; the server resolves these assets through its workspace dependency, independent of its working directory.
 
-The root owns orchestration and shared TypeScript/check configuration; package dependencies are pinned centrally in `pnpm-workspace.yaml`. `vp run -r build` orders the browser build before the server. Tests exercise built browser assets, so run `pnpm build` before a standalone `pnpm test` on a fresh checkout. `pnpm ready` handles that ordering. Production packaging uses `pnpm --filter @clankerauth/server deploy --prod <directory>`; the result includes the packed server, browser assets and production dependency closure.
+The root owns orchestration and shared TypeScript/check configuration; package dependencies are pinned centrally in `pnpm-workspace.yaml`. `vp run -r build` builds the API contract before the browser and server, and the browser assets before the server. `pnpm dev` and `pnpm check` build the contract first; rebuild it after changing shared schemas during development. Tests exercise built browser assets, so run `pnpm build` before a standalone `pnpm test` on a fresh checkout. `pnpm ready` handles that ordering. Production packaging uses `pnpm --filter @clankerauth/server deploy --prod <directory>`; the result includes the packed server, browser assets and production dependency closure.
 
 The scaffold's optional `vite-plus/prefer-vite-plus-imports` JavaScript lint plugin is omitted because Vite+ 0.3.1 crashes before analysis when loading it in this orb. Formatting, native lint rules, type-aware lint and TypeScript checking remain enabled.
 

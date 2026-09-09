@@ -1,6 +1,32 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
+import { Api, type ClientCredentials } from "@clankerauth/api";
+import { Effect } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { HttpApiClient } from "effect/unstable/httpapi";
 import "./style.css";
+
+const api = await Effect.runPromise(
+  HttpApiClient.make(Api, { baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
+);
+
+function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  return Effect.runPromise(
+    effect.pipe(
+      Effect.mapError(
+        (error) =>
+          new Error(
+            typeof error === "object" &&
+              error !== null &&
+              "error" in error &&
+              typeof error.error === "string"
+              ? error.error
+              : "Request could not be completed. Please try again.",
+          ),
+      ),
+    ),
+  );
+}
 
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -13,16 +39,6 @@ const escape = (text: string) =>
   );
 function message(text: string) {
   document.querySelector<HTMLElement>("#message")!.textContent = text;
-}
-async function api(path: string, body?: unknown) {
-  const response = await fetch(path, {
-    method: body ? "POST" : "GET",
-    headers: { "content-type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? "Request failed");
-  return data;
 }
 let submitting = false;
 async function submit(task: () => Promise<void>) {
@@ -52,23 +68,24 @@ function setup() {
       if (password.length < 16 || password.length > 128)
         throw new Error("Use a password between 16 and 128 characters.");
       if (password !== confirmation) throw new Error("Passwords do not match.");
-      const response = await fetch("/api/setup", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-          password,
-        }),
-      });
-      if (response.status === 409) {
-        location.replace("/login");
-        return;
-      }
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error ?? "Account creation failed. Please try again.");
-      }
-      location.replace("/login?setup=complete");
+      await request(
+        api.setup
+          .create({
+            payload: {
+              email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+              password,
+            },
+          })
+          .pipe(
+            Effect.matchEffect({
+              onFailure: (error) =>
+                error._tag === "Conflict"
+                  ? Effect.sync(() => location.replace("/login"))
+                  : Effect.fail(error),
+              onSuccess: () => Effect.sync(() => location.replace("/login?setup=complete")),
+            }),
+          ),
+      );
     });
   });
 }
@@ -122,22 +139,10 @@ async function consent() {
   });
 }
 
-interface Client {
-  client_id: string;
-  client_name?: string;
-  redirect_uris?: string[];
-  token_endpoint_auth_method?: string;
-}
-interface Resource {
-  identifier: string;
-  name: string;
-  scopes: string[];
-}
 async function dashboard() {
-  const data: { clients: Client[]; resources: Resource[]; email: string; issuer: string } =
-    await api("/admin/clients");
+  const data = await request(api.clients.list());
   main.className = "dashboard";
-  main.innerHTML = `<div class="page-title"><div><p class="eyebrow">CONTROL PLANE</p><h1>Connected applications</h1><p class="muted">Signed in as ${escape(data.email)}</p></div><button id="logout" class="secondary">Sign out</button></div><div class="issuer"><span class="dot"></span><span>Canonical issuer</span><code>${escape(data.issuer)}</code></div><div class="columns"><section><h2>Registered clients <span class="count">${data.clients.length}</span></h2><p class="muted">Only explicitly registered applications can request access.</p><div class="clients">${data.clients.length ? data.clients.map((client) => `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><label>Client ID<code>${escape(client.client_id)}</code></label><label>Redirect URI<code>${escape(client.redirect_uris?.join(", ") ?? "")}</code></label><div class="actions">${client.token_endpoint_auth_method !== "none" ? `<button class="secondary" data-rotate="${escape(client.client_id)}">Rotate secret</button>` : ""}<button class="danger" data-delete="${escape(client.client_id)}">Delete client</button></div></article>`).join("") : `<div class="empty"><h3>No clients registered</h3><p>Add your first app with an exact redirect URI and one resource.</p></div>`}</div><h2>Resource policy</h2>${data.resources.map((r) => `<div class="resource"><strong>${escape(r.name)}</strong><code>${escape(r.identifier)}</code><span class="muted">${escape(r.scopes.join(" · "))}</span></div>`).join("")}</section><section class="card registration"><p class="eyebrow">EXPLICIT REGISTRATION</p><h2>Add an application</h2><form id="register"><label>Application name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><label>Allowed resource<select name="resource">${data.resources.map((r) => `<option value="${escape(r.identifier)}">${escape(r.name)}</option>`).join("")}</select></label><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register application +</button><p class="help">S256 PKCE and consent are required. Dynamic registration is disabled.</p></form></section></div><p id="message" role="alert"></p><section id="credentials" class="card hidden" aria-live="polite"></section>`;
+  main.innerHTML = `<div class="page-title"><div><p class="eyebrow">CONTROL PLANE</p><h1>Connected applications</h1><p class="muted">Signed in as ${escape(data.email)}</p></div><button id="logout" class="secondary">Sign out</button></div><div class="issuer"><span class="dot"></span><span>Canonical issuer</span><code>${escape(data.issuer)}</code></div><div class="columns"><section><h2>Registered clients <span class="count">${data.clients.length}</span></h2><p class="muted">Only explicitly registered applications can request access.</p><div class="clients">${data.clients.length ? data.clients.map((client) => `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><label>Client ID<code>${escape(client.client_id)}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label><div class="actions">${client.token_endpoint_auth_method !== "none" ? `<button class="secondary" data-rotate="${escape(client.client_id)}">Rotate secret</button>` : ""}<button class="danger" data-delete="${escape(client.client_id)}">Delete client</button></div></article>`).join("") : `<div class="empty"><h3>No clients registered</h3><p>Add your first app with an exact redirect URI and one resource.</p></div>`}</div><h2>Resource policy</h2>${data.resources.map((r) => `<div class="resource"><strong>${escape(r.name)}</strong><code>${escape(r.identifier)}</code><span class="muted">${escape(r.scopes.join(" · "))}</span></div>`).join("")}</section><section class="card registration"><p class="eyebrow">EXPLICIT REGISTRATION</p><h2>Add an application</h2><form id="register"><label>Application name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><label>Allowed resource<select name="resource">${data.resources.map((r) => `<option value="${escape(r.identifier)}">${escape(r.name)}</option>`).join("")}</select></label><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register application +</button><p class="help">S256 PKCE and consent are required. Dynamic registration is disabled.</p></form></section></div><p id="message" role="alert"></p><section id="credentials" class="card hidden" aria-live="polite"></section>`;
   document.querySelector("#logout")!.addEventListener("click", () => {
     void submit(async () => {
       await auth.signOut();
@@ -145,7 +150,7 @@ async function dashboard() {
     });
   });
   const form = document.querySelector<HTMLFormElement>("#register")!;
-  function credentials(value: unknown) {
+  function credentials(value: typeof ClientCredentials.Type) {
     const box = document.querySelector<HTMLElement>("#credentials")!;
     box.classList.remove("hidden");
     box.innerHTML = `<h2>Save these credentials now</h2><p>The client secret is shown only once. Store it in your application's secret manager.</p><pre></pre><button class="secondary" id="done">Saved — return to clients</button>`;
@@ -157,14 +162,23 @@ async function dashboard() {
     event.preventDefault();
     void submit(async () => {
       const fields = new FormData(form);
+      const textField = (name: string) => {
+        const value = fields.get(name);
+        if (typeof value !== "string") throw new Error(`Missing form field: ${name}`);
+        return value;
+      };
       credentials(
-        await api("/admin/clients", {
-          name: fields.get("name"),
-          redirect: fields.get("redirect"),
-          resource: fields.get("resource"),
-          native: fields.has("native"),
-          confidential: fields.has("confidential"),
-        }),
+        await request(
+          api.clients.create({
+            payload: {
+              name: textField("name"),
+              redirect: textField("redirect"),
+              resource: textField("resource"),
+              native: fields.has("native"),
+              confidential: fields.has("confidential"),
+            },
+          }),
+        ),
       );
       form.reset();
     });
@@ -183,19 +197,21 @@ async function dashboard() {
       )
         return;
       void submit(async () => {
-        const result = await api(
-          button.dataset.delete ? "/admin/clients/delete" : "/admin/clients/rotate",
-          { client_id: button.dataset.delete ?? button.dataset.rotate },
-        );
-        if (button.dataset.delete) location.reload();
-        else credentials(result);
+        if (button.dataset.delete) {
+          await request(api.clients.delete({ payload: { client_id: button.dataset.delete } }));
+          location.reload();
+        } else if (button.dataset.rotate) {
+          credentials(
+            await request(api.clients.rotate({ payload: { client_id: button.dataset.rotate } })),
+          );
+        }
       });
     });
   }
 }
 
 try {
-  const state: { required: boolean } = await api("/api/setup");
+  const state = await request(api.setup.status());
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");
     else setup();

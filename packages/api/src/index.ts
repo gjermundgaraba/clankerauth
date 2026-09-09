@@ -1,0 +1,167 @@
+import { Context, Schema } from "effect";
+import {
+  HttpApi,
+  HttpApiEndpoint,
+  HttpApiGroup,
+  HttpApiMiddleware,
+  HttpApiSchema,
+} from "effect/unstable/httpapi";
+
+export class BadRequest extends Schema.TaggedError<BadRequest>()(
+  "BadRequest",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
+  "Unauthorized",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 401 },
+) {}
+export class Forbidden extends Schema.TaggedError<Forbidden>()(
+  "Forbidden",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 403 },
+) {}
+export class NotFound extends Schema.TaggedError<NotFound>()(
+  "NotFound",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+export class Conflict extends Schema.TaggedError<Conflict>()(
+  "Conflict",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+export class TooManyRequests extends Schema.TaggedError<TooManyRequests>()(
+  "TooManyRequests",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 429 },
+) {}
+export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
+  "InternalServerError",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 500 },
+) {}
+export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
+  "ServiceUnavailable",
+  {
+    error: Schema.String,
+  },
+  { httpApiStatus: 503 },
+) {}
+
+const errors = [
+  BadRequest,
+  Unauthorized,
+  Forbidden,
+  NotFound,
+  Conflict,
+  TooManyRequests,
+  InternalServerError,
+  ServiceUnavailable,
+];
+
+export class ApiValidation extends HttpApiMiddleware.Service<ApiValidation>()(
+  "ClankerAuth/ApiValidation",
+  { error: [BadRequest, InternalServerError] },
+) {}
+
+export class CurrentOwner extends Context.Service<CurrentOwner, { readonly email: string }>()(
+  "ClankerAuth/CurrentOwner",
+) {}
+export class OwnerAuthorization extends HttpApiMiddleware.Service<
+  OwnerAuthorization,
+  { provides: CurrentOwner }
+>()("ClankerAuth/OwnerAuthorization", { error: errors }) {}
+export class SetupProtection extends HttpApiMiddleware.Service<SetupProtection>()(
+  "ClankerAuth/SetupProtection",
+  { error: [BadRequest, Forbidden] },
+) {}
+
+export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
+export const ClientInput = Schema.Struct({
+  name: Schema.String,
+  redirect: Schema.String,
+  resource: Schema.String,
+  confidential: Schema.Boolean,
+  native: Schema.Boolean,
+});
+export const ClientId = Schema.Struct({ client_id: Schema.String });
+
+export const Client = Schema.Struct({
+  client_id: Schema.String,
+  client_name: Schema.optional(Schema.String),
+  redirect_uris: Schema.Array(Schema.String),
+  token_endpoint_auth_method: Schema.optional(Schema.String),
+  scope: Schema.optional(Schema.String),
+  grant_types: Schema.optional(Schema.Array(Schema.String)),
+});
+export const ClientCredentials = Client.pipe(
+  Schema.fieldsAssign({
+    client_secret: Schema.optional(Schema.String),
+    client_secret_expires_at: Schema.optional(Schema.Number),
+  }),
+);
+export const Resource = Schema.Struct({
+  identifier: Schema.String,
+  name: Schema.String,
+  scopes: Schema.Array(Schema.String),
+});
+
+export const Api = HttpApi.make("ClankerAuth")
+  .add(
+    HttpApiGroup.make("setup").add(
+      HttpApiEndpoint.get("status", "/api/setup", {
+        success: Schema.Struct({ required: Schema.Boolean }),
+        error: errors,
+      }),
+      HttpApiEndpoint.post("create", "/api/setup", {
+        payload: SetupInput,
+        success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
+        error: errors,
+      }).middleware(SetupProtection),
+    ),
+    HttpApiGroup.make("clients")
+      .add(
+        HttpApiEndpoint.get("list", "/admin/clients", {
+          success: Schema.Struct({
+            clients: Schema.Array(Client),
+            resources: Schema.Array(Resource),
+            email: Schema.String,
+            issuer: Schema.String,
+          }),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("create", "/admin/clients", {
+          payload: ClientInput,
+          success: ClientCredentials.pipe(HttpApiSchema.status(201)),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("delete", "/admin/clients/delete", {
+          payload: ClientId,
+          success: Schema.Struct({ deleted: Schema.Boolean }),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("rotate", "/admin/clients/rotate", {
+          payload: ClientId,
+          success: ClientCredentials,
+          error: errors,
+        }),
+      )
+      .middleware(OwnerAuthorization),
+  )
+  .middleware(ApiValidation);

@@ -14,7 +14,9 @@
   },
   "devDependencies": {
     "@better-auth/oauth-provider": "catalog:",
+    "@clankerauth/api": "workspace:*",
     "better-auth": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

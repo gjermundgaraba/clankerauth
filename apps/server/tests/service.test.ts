@@ -17,6 +17,12 @@ const resourceA = "https://okf.internal/mcp";
 const resourceB = "https://reports.internal/api";
 let service: Service;
 let handle: ReturnType<typeof application>;
+let applications: ReturnType<typeof application>[];
+function createApplication() {
+  const app = application(service);
+  applications.push(app);
+  return app;
+}
 let directory: string;
 let settings: Settings;
 let cookies: Map<string, string>;
@@ -125,6 +131,7 @@ async function tokens(clientId: string, resource = resourceA, authorization?: st
 }
 
 beforeEach(async () => {
+  applications = [];
   directory = mkdtempSync(join(tmpdir(), "clankerauth-"));
   settings = validateSettings({
     baseURL: "http://localhost:3000",
@@ -139,12 +146,13 @@ beforeEach(async () => {
   });
   service = openAuth(settings);
   await initialize(service);
-  handle = application(service);
+  handle = createApplication();
   cookies = new Map();
 });
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  if (service.db.open) service.db.close();
+  await Promise.all(applications.map((app) => app.dispose()));
+  await service.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -157,7 +165,7 @@ async function restart() {
   await service.close();
   service = openAuth(settings);
   await initialize(service);
-  handle = application(service);
+  handle = createApplication();
 }
 
 describe("first-run setup", () => {
@@ -623,7 +631,7 @@ describe("OAuth boundaries and lifecycle", () => {
       });
       const first = refresh(original.refresh_token);
       await reached.promise; // First request has read the unrevoked row but has not run its CAS.
-      handle = application(service); // Even separate HTTP wrappers must share admission.
+      handle = createApplication(); // Even separate HTTP wrappers must share admission.
       const second =
         action === "replay"
           ? refresh(original.refresh_token)
@@ -953,7 +961,7 @@ describe("OAuth boundaries and lifecycle", () => {
     service.db.close();
     service = openAuth(settings);
     await initialize(service);
-    handle = application(service);
+    handle = createApplication();
     expect(await (await request("/api/auth/jwks")).json()).toEqual(jwks);
     expect((await request("/admin/clients")).status).toBe(200);
     const refresh = await request(

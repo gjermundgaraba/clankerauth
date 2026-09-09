@@ -1,18 +1,14 @@
 import { Config, Effect, Redacted, Schema } from "effect";
 
-export const Resource = Schema.Struct({
-  identifier: Schema.String,
-  name: Schema.String,
-  scopes: Schema.Array(Schema.String),
-});
-export type Resource = typeof Resource.Type;
+import { Resource } from "@clankerauth/api";
+
 export interface Settings {
   baseURL: string;
   secret: string;
   database: string;
   host: string;
   port: number;
-  resources: readonly Resource[];
+  resources: readonly (typeof Resource.Type)[];
 }
 
 export const loadSettings = Effect.gen(function* () {

@@ -3,18 +3,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 import { APIError } from "better-auth/api";
-import { createOwner, type Service } from "./auth.ts";
+import type { Service } from "./auth.ts";
+import { customApi } from "./custom-api.ts";
 
-const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
-
-const ClientInput = Schema.Struct({
-  name: Schema.String,
-  redirect: Schema.String,
-  resource: Schema.String,
-  confidential: Schema.Boolean,
-  native: Schema.Boolean,
-});
-const ClientId = Schema.Struct({ client_id: Schema.String });
 const ResourceRequest = Schema.Struct({ resource: Schema.String });
 const publicPaths = new Set([
   "/sign-in/email",
@@ -42,83 +33,15 @@ export function application(
   ),
 ) {
   const { auth, settings } = service;
+  const api = customApi(service);
   async function dispatch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/healthz" && req.method === "GET") {
       service.db.prepare("SELECT 1").get();
       return json({ status: "ok" });
     }
-    if (url.pathname === "/api/setup") {
-      if (req.method === "GET") return json({ required: !service.owner() });
-      if (req.method !== "POST") return json({ error: "Not found" }, 404);
-      if (req.headers.get("origin") !== settings.baseURL)
-        return json({ error: "Invalid origin" }, 403);
-      if (
-        req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json"
-      )
-        return json({ error: "JSON required" }, 400);
-      const input = Schema.decodeUnknownSync(SetupInput)(await req.json());
-      await createOwner(service, input);
-      return json({ created: true }, 201);
-    }
-    if (url.pathname.startsWith("/admin/")) {
-      const session = await auth.api.getSession({ headers: req.headers });
-      if (!session || session.user.id !== service.owner())
-        return json({ error: "Owner session required" }, 401);
-      if (req.method !== "GET" && req.headers.get("origin") !== settings.baseURL)
-        return json({ error: "Invalid origin" }, 403);
-      if (req.method !== "GET" && Date.now() - session.session.createdAt.getTime() > 15 * 60 * 1000)
-        return json({ error: "Sign out and sign in again before changing clients" }, 403);
-      if (url.pathname === "/admin/clients" && req.method === "GET") {
-        return json({
-          clients: await auth.api.getOAuthClients({ headers: req.headers }),
-          resources: settings.resources,
-          email: session.user.email,
-          issuer: `${settings.baseURL}/api/auth`,
-        });
-      }
-      if (url.pathname === "/admin/clients" && req.method === "POST") {
-        const input = Schema.decodeUnknownSync(ClientInput)(await req.json());
-        const resource = settings.resources.find((r) => r.identifier === input.resource);
-        if (!resource || !input.name.trim() || input.name.length > 100)
-          return json({ error: "Invalid client name or resource" }, 400);
-        const client = await auth.api.createOAuthClient({
-          headers: req.headers,
-          body: {
-            client_name: input.name.trim(),
-            redirect_uris: [input.redirect],
-            token_endpoint_auth_method: input.confidential ? "client_secret_basic" : "none",
-            application_type: input.native ? "native" : "web",
-            grant_types: ["authorization_code", "refresh_token"],
-            scope: ["openid", "profile", "email", "offline_access", ...resource.scopes].join(" "),
-          },
-        });
-        try {
-          await auth.api.adminLinkClientResource({
-            headers: req.headers,
-            params: { identifier: resource.identifier, client_id: client.client_id },
-          });
-        } catch (error) {
-          await auth.api.deleteOAuthClient({
-            headers: req.headers,
-            body: { client_id: client.client_id },
-          });
-          throw error;
-        }
-        return json(client, 201);
-      }
-      if (
-        req.method === "POST" &&
-        ["/admin/clients/delete", "/admin/clients/rotate"].includes(url.pathname)
-      ) {
-        const body = Schema.decodeUnknownSync(ClientId)(await req.json());
-        if (url.pathname.endsWith("/rotate"))
-          return json(await auth.api.rotateClientSecret({ headers: req.headers, body }));
-        await auth.api.deleteOAuthClient({ headers: req.headers, body });
-        return json({ deleted: true });
-      }
-      return json({ error: "Not found" }, 404);
-    }
+    if (url.pathname === "/api/setup" || url.pathname.startsWith("/admin/"))
+      return api.handler(req);
     if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
       const path = url.pathname.replace(/^\/api\/auth/, "");
       if (!publicPaths.has(path) && path !== "/.well-known/oauth-authorization-server/api/auth")
@@ -163,7 +86,7 @@ export function application(
       },
     });
   }
-  return async (req: Request) => {
+  const handle = async (req: Request) => {
     const path = new URL(req.url).pathname.replace(/^\/api\/auth/, "");
     const publicCors =
       [
@@ -215,4 +138,5 @@ export function application(
       response.headers.set("strict-transport-security", "max-age=31536000");
     return response;
   };
+  return Object.assign(handle, { dispose: api.dispose });
 }

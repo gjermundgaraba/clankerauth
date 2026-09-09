@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@better-auth/oauth-provider": "catalog:",
+    "@clankerauth/api": "workspace:*",
     "@clankerauth/web": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "better-auth": "catalog:",
     "better-sqlite3": "catalog:",
     "effect": "catalog:"

@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env apps/server/src/main.ts",
+    "dev": "pnpm --filter @clankerauth/api build && node --env-file-if-exists=.env apps/server/src/main.ts",
     "build": "vp run -r build",
-    "check": "vp check",
+    "check": "pnpm --filter @clankerauth/api build && vp check",
     "test": "vp run -r test",
-    "ready": "vp check && vp run -r build && vp run -r test",
+    "ready": "pnpm check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
     "test:interop": "node apps/server/scripts/mcp-interop.mjs",
     "test:package": "node apps/server/scripts/production-smoke.mjs"

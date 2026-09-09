@@ -13,7 +13,10 @@ const program = Effect.scoped(
       (s) => Effect.promise(() => s.close()),
     );
     yield* Effect.tryPromise(() => initialize(service));
-    const handler = application(service);
+    const handler = yield* Effect.acquireRelease(
+      Effect.sync(() => application(service)),
+      (app) => Effect.promise(() => app.dispose()),
+    );
     const server = createServer(async (incoming, outgoing) => {
       try {
         if (!incoming.url?.startsWith("/") || incoming.url.startsWith("//")) {

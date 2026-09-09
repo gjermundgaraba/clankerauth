@@ -1,8 +1,10 @@
 packages:
   - apps/*
+  - packages/*
 
 catalogMode: prefer
 catalog:
+  "@effect/platform-node": 4.0.0-rc.112
   "@better-auth/oauth-provider": 1.7.3
   better-auth: 1.7.3
   better-sqlite3: 12.11.1
