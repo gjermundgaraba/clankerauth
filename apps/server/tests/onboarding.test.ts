@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { afterEach, beforeEach, expect, test } from "vite-plus/test";
+import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,15 +8,11 @@ import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts"
 
 const baseURL = "http://localhost:4183";
 const resource = "https://resource.example/mcp";
-const clientId = "https://client.example/oauth/metadata.json";
 const callback = "http://127.0.0.1:4184/callback";
 const verifier = "a".repeat(43);
 let service: Service;
 let directory: string;
 let cookie: string;
-let fetches: number;
-let metadata: Record<string, unknown>;
-let metadataCacheControl: string;
 
 async function request(path: string, body?: Record<string, unknown>, authenticated = false) {
   const response = await service.auth.handler(
@@ -98,31 +94,13 @@ async function grant(id: string) {
 }
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-onboarding-"));
-  fetches = 0;
-  metadataCacheControl = "max-age=1";
-  metadata = {
-    client_id: clientId,
-    client_name: "Metadata client",
-    redirect_uris: [callback],
-    token_endpoint_auth_method: "none",
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-  };
-  service = await openAuth(
-    {
-      baseURL,
-      database: join(directory, "auth.sqlite"),
-      secret: "test-secret-with-more-than-thirty-two-characters",
-      host: "127.0.0.1",
-      port: 4183,
-    },
-    {
-      cimdTransport: async () => {
-        fetches++;
-        return Response.json(metadata, { headers: { "cache-control": metadataCacheControl } });
-      },
-    },
-  );
+  service = await openAuth({
+    baseURL,
+    database: join(directory, "auth.sqlite"),
+    secret: "test-secret-with-more-than-thirty-two-characters",
+    host: "127.0.0.1",
+    port: 4183,
+  });
   await initialize(service);
   await createOwner(service, { email: "owner@example.com", password: "test-password-long-enough" });
   await Effect.runPromise(
@@ -206,22 +184,84 @@ test("automatic clients gain new resource eligibility and deletion revokes depen
   expect(refresh.status).toBe(400);
 });
 
-test("CIMD provenance is transactional and blocking survives provider metadata deletion", async () => {
-  const response = await request(authorization(clientId), undefined, true);
-  expect(response.headers.get("location"), await response.clone().text()).toContain("/consent");
-  expect(fetches).toBe(1);
-  expect(await Effect.runPromise(service.onboarding.list())).toEqual([
-    { client_id: clientId, onboarding: "cimd", blocked: false },
-  ]);
+test("DCR blocking survives provider client deletion", async () => {
+  const { client_id: clientId } = await register();
   await Effect.runPromise(service.onboarding.block(clientId, true));
   await Effect.runPromise(
     service.sql`DELETE FROM oauthClientResource WHERE clientId = ${clientId}`,
   );
   await Effect.runPromise(service.sql`DELETE FROM oauthClient WHERE clientId = ${clientId}`);
   const blocked = await request(authorization(clientId), undefined, true);
-  expect(blocked.headers.get("location") ?? "").not.toContain("/consent");
-  expect(fetches).toBe(1);
-  expect((await Effect.runPromise(service.onboarding.list()))[0]?.blocked).toBe(true);
+  expect(blocked.status).toBe(400);
+  expect(await blocked.json()).toMatchObject({ error: "invalid_client" });
+  expect(await Effect.runPromise(service.onboarding.list())).toEqual([
+    { client_id: clientId, onboarding: "dcr", blocked: true },
+  ]);
+});
+
+test.each([false, true])(
+  "URL client IDs never fetch or onboard (session=%s)",
+  async (authenticated) => {
+    const clientId = "https://client.example/oauth/metadata.json";
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected metadata fetch"));
+    try {
+      const response = await request(authorization(clientId), undefined, authenticated);
+      expect(response.status).toBe(302);
+      const location = new URL(response.headers.get("location") ?? "", baseURL);
+      expect(location.pathname).toBe("/api/auth/error");
+      expect(location.searchParams.get("error")).toBe("invalid_client");
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await Effect.runPromise(service.sql`SELECT clientId FROM oauthClient`)).toEqual([]);
+      expect(await Effect.runPromise(service.onboarding.list())).toEqual([]);
+      expect(await Effect.runPromise(service.resources.access())).toEqual([]);
+    } finally {
+      fetch.mockRestore();
+    }
+  },
+);
+
+test("initialization preserves DCR and legacy CIMD clients, policy, and grants", async () => {
+  const current = await register();
+  const currentTokens = await grant(current.client_id);
+  const legacy = await register();
+  await grant(legacy.client_id);
+  await Effect.runPromise(
+    service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd' WHERE clientId = ${legacy.client_id}`,
+  );
+  await Effect.runPromise(
+    service.sql`UPDATE clientOnboarding SET source = 'cimd' WHERE clientId = ${legacy.client_id}`,
+  );
+  const snapshot = () =>
+    Effect.runPromise(
+      Effect.all({
+        clients: service.sql`SELECT * FROM oauthClient ORDER BY clientId`,
+        policy: service.sql`SELECT * FROM clientOnboarding ORDER BY clientId`,
+        consents: service.sql`SELECT * FROM oauthConsent ORDER BY id`,
+        refreshTokens: service.sql`SELECT * FROM oauthRefreshToken ORDER BY id`,
+      }),
+    );
+  const before = await snapshot();
+  const settings = service.settings;
+  await service.close();
+  service = await openAuth(settings);
+  await initialize(service);
+  expect(await snapshot()).toEqual(before);
+  const refresh = await request("/oauth2/token", {
+    grant_type: "refresh_token",
+    client_id: current.client_id,
+    refresh_token: currentTokens.refresh_token,
+    resource,
+  });
+  expect(refresh.status, await refresh.clone().text()).toBe(200);
+  // Legacy discovery records remain administrable, but need a new DCR registration.
+  await Effect.runPromise(service.onboarding.block(legacy.client_id, true));
+  expect(await Effect.runPromise(service.onboarding.list())).toContainEqual({
+    client_id: legacy.client_id,
+    onboarding: "cimd",
+    blocked: true,
+  });
 });
 
 test("abandoned registrations are removed but consented and blocked clients remain", async () => {
@@ -241,35 +281,6 @@ test("abandoned registrations are removed but consented and blocked clients rema
   expect(await Effect.runPromise(service.resources.hasAccess(stale.client_id, resource))).toBe(
     false,
   );
-});
-
-test("CIMD metadata change during refresh revokes the in-flight grant as well as stored consent", async () => {
-  const tokens = await grant(clientId);
-  metadata = { ...metadata, redirect_uris: [callback, "http://127.0.0.1:4184/other"] };
-  // Respect the plugin's per-client network pacing while expiring its cache.
-  await new Promise((resolve) => setTimeout(resolve, 1100));
-  const refresh = await request("/oauth2/token", {
-    grant_type: "refresh_token",
-    client_id: clientId,
-    refresh_token: tokens.refresh_token,
-    resource,
-  });
-  expect(refresh.status, await refresh.clone().text()).toBe(400);
-  expect(
-    await Effect.runPromise(service.sql`SELECT id FROM oauthConsent WHERE clientId = ${clientId}`),
-  ).toEqual([]);
-  expect(
-    await Effect.runPromise(
-      service.sql`SELECT id FROM oauthRefreshToken WHERE clientId = ${clientId}`,
-    ),
-  ).toEqual([]);
-});
-
-test("CIMD rejects malformed metadata before persisting a client", async () => {
-  metadata = { client_id: clientId, redirect_uris: [callback], token_endpoint_auth_method: "none" };
-  const response = await request(authorization(clientId), undefined, true);
-  expect(response.headers.get("location") ?? "").not.toContain("/consent");
-  expect(await Effect.runPromise(service.onboarding.list())).toEqual([]);
 });
 
 test("DCR registration capacity rejects new clients while retaining blocked identities", async () => {
@@ -316,28 +327,6 @@ test("expired pending codes do not retain abandoned registrations", async () => 
   expect(
     (await Effect.runPromise(service.onboarding.list())).map((client) => client.client_id),
   ).toEqual([pending.client_id]);
-});
-
-test("cached CIMD recreation cannot exceed capacity after abandoned-client cleanup", async () => {
-  metadataCacheControl = "max-age=300";
-  expect((await request(authorization(clientId))).status).toBe(302);
-  await Effect.runPromise(
-    service.sql`UPDATE oauthClient SET createdAt = 0 WHERE clientId = ${clientId}`,
-  );
-  expect(await Effect.runPromise(service.onboarding.admit())).toBe(true);
-  expect(await Effect.runPromise(service.onboarding.list())).toEqual([]);
-  await Effect.runPromise(
-    service.sql`WITH RECURSIVE n(value) AS (VALUES(1) UNION ALL SELECT value + 1 FROM n WHERE value < 1000) INSERT INTO clientOnboarding (clientId, source, blocked) SELECT 'blocked-' || value, 'dcr', 1 FROM n`,
-  );
-  const response = await request(authorization(clientId));
-  expect(response.status).toBeGreaterThanOrEqual(400);
-  expect(fetches).toBe(1);
-  expect((await Effect.runPromise(service.onboarding.list())).length).toBe(1000);
-  expect(
-    await Effect.runPromise(
-      service.sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
-    ),
-  ).toEqual([]);
 });
 
 test.each([false, true])(

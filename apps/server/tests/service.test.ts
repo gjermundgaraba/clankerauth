@@ -869,7 +869,7 @@ describe("OAuth boundaries and lifecycle", () => {
     expect((await refresh.json()).error).toBe("invalid_grant");
   });
 
-  test("discovery pins issuer and advertises S256 and automatic onboarding without machine grants", async () => {
+  test("discovery pins issuer and advertises S256 and DCR without CIMD or machine grants", async () => {
     for (const path of [
       "/.well-known/oauth-authorization-server/api/auth",
       "/api/auth/.well-known/oauth-authorization-server",
@@ -881,7 +881,7 @@ describe("OAuth boundaries and lifecycle", () => {
       expect(metadata.issuer).toBe(`${settings.baseURL}/api/auth`);
       expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
       expect(metadata.registration_endpoint).toBe(`${settings.baseURL}/api/auth/oauth2/register`);
-      expect(metadata.client_id_metadata_document_supported).toBe(true);
+      expect(metadata).not.toHaveProperty("client_id_metadata_document_supported");
       expect(metadata.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
     }
   });

@@ -26,20 +26,19 @@ for detailed coverage and fixture setup.
 
 The official SDK discovers the protected Resource and issuer, automatically
 registers a client through DCR, follows owner login and signed consent, exchanges
-an S256 PKCE code, and calls the real MCP server. A separate CIMD client uses an
-HTTPS metadata identifier without pre-registration and makes an authenticated
-MCP call. Tests also cover resource audiences, missing and invalid tokens,
+an S256 PKCE code, and calls the real MCP server. A client supplying a metadata
+URL also registers through DCR because the issuer does not advertise CIMD. Tests also cover resource audiences, missing and invalid tokens,
 insufficient scopes, callback issuer validation, and refresh rotation.
 
-Ordinary server tests separately cover onboarding policy, metadata rejection,
+Ordinary server tests separately cover onboarding policy, disabled CIMD discovery,
 client blocking and revocation, resource changes, and registration limits.
 Browser tests exercise the shipped consent and administration UI.
 
 ## Boundaries
 
-The harness substitutes local listeners for reserved HTTPS Resource URLs and an
-injected transport for a fixed CIMD metadata fixture. Production CIMD uses the
-provider's secure Node transport with public-address validation and DNS pinning.
+The harness substitutes local listeners for reserved HTTPS Resource URLs.
+Client registration uses the production DCR endpoint; no client metadata fetch
+transport is injected.
 This test does not certify private DNS, VPN routing, TLS trust, a named desktop
 client, live Code Storage, or deployment. It does exercise the actual resource
 server's token and scope enforcement, without the historical prototype proxy.

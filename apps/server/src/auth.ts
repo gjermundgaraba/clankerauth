@@ -7,22 +7,13 @@ import { randomUUID } from "node:crypto";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
-import { cimd } from "@better-auth/cimd";
-import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { onboardingStore } from "./onboarding.ts";
-import {
-  getOAuthProviderState,
-  oauthProvider,
-  type ClientMetadataResourceFetch,
-} from "@better-auth/oauth-provider";
+import { getOAuthProviderState, oauthProvider } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 import { protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
-export async function openAuth(
-  settings: Settings,
-  integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
-) {
+export async function openAuth(settings: Settings) {
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
   const database = await openDatabase(settings.database);
   const { sql } = database;
@@ -238,19 +229,6 @@ export async function openAuth(
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
       }),
       provider,
-      cimd({
-        fetchClientMetadataResource: integrations.cimdTransport ?? fetchClientMetadataResource,
-        metadataProfile: "mcp-2026-07-28",
-        metadataRevalidationInterval: 300,
-        maxCacheEntries: 1000,
-        metadataFetchPolicy: {
-          maximumConcurrentFetches: 8,
-          maximumConcurrentFetchesPerOrigin: 2,
-          maximumFetchesPerMinute: 60,
-          maximumFetchesPerOriginPerMinute: 15,
-        },
-        isMetadataDocumentUrlAllowed: (clientId) => Effect.runPromise(onboarding.admit(clientId)),
-      }),
     ],
   } satisfies BetterAuthOptions;
   // Defer provider initialization until migrations finish.
@@ -305,13 +283,14 @@ const sqlInitialize = (service: Service) =>
     if (!(yield* service.owner()) && (yield* service.sql`SELECT id FROM user LIMIT 1`).length)
       return yield* Effect.fail(new Error("Database contains accounts without an owner marker"));
     yield* service.sql`CREATE TABLE IF NOT EXISTS clientOnboarding (clientId TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('dcr', 'cimd')), blocked INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)))`;
-    // Enforce the bound inside canonical persistence, including cached CIMD recreation.
+    // Retain legacy CIMD provenance and policy without enabling metadata discovery.
+    // Enforce the registration bound inside canonical persistence.
     yield* service.sql`CREATE TRIGGER IF NOT EXISTS automaticClientCapacity BEFORE INSERT ON clientOnboarding
       WHEN NOT EXISTS (SELECT 1 FROM clientOnboarding WHERE clientId = NEW.clientId)
         AND (SELECT count(*) FROM clientOnboarding) >= 1000
       BEGIN SELECT RAISE(ABORT, 'Automatic client capacity reached'); END`;
     // Managed creation always has an owner. DCR is anonymous or carries the
-    // server-owned reference above; CIMD supplies its discovery provenance.
+    // server-owned reference above; legacy CIMD records keep their discovery provenance.
     // This runs in the provider's transaction, so tracking failure rolls back registration.
     yield* service.sql`CREATE TRIGGER IF NOT EXISTS automaticClientProvenance AFTER INSERT ON oauthClient
       WHEN NEW.clientDiscoveryId IS NOT NULL OR NEW.userId IS NULL OR NEW.referenceId = 'clankerauth:dcr'
@@ -323,8 +302,7 @@ const sqlInitialize = (service: Service) =>
       END`;
     yield* service.sql`CREATE TABLE IF NOT EXISTS clientMetadataRevision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL)`;
     yield* service.sql`INSERT OR IGNORE INTO clientMetadataRevision (id, revision) VALUES (1, 0)`;
-    // Security-relevant document changes revoke grants in the same transaction
-    // as metadata reconciliation; plugin notifications are only best effort.
+    // Retain revocation protection for security-relevant edits to legacy CIMD records.
     yield* service.sql`CREATE TRIGGER IF NOT EXISTS cimdMetadataRevocation AFTER UPDATE OF redirectUris, tokenEndpointAuthMethod, jwks, jwksUri, name, uri ON oauthClient
       WHEN NEW.clientDiscoveryId IS NOT NULL AND (OLD.redirectUris IS NOT NEW.redirectUris OR OLD.tokenEndpointAuthMethod IS NOT NEW.tokenEndpointAuthMethod OR OLD.jwks IS NOT NEW.jwks OR OLD.jwksUri IS NOT NEW.jwksUri OR OLD.name IS NOT NEW.name OR OLD.uri IS NOT NEW.uri)
       BEGIN
