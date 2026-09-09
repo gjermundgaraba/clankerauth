@@ -4,10 +4,22 @@ A single-instance, self-hosted identity and OAuth authorization server for priva
 
 Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth and `@better-auth/oauth-provider` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles the shared typed HTTP API, configuration/schema boundaries and process resource lifetime. SQLite via the provider-supported better-sqlite3 12 line owns all persistent auth state.
 
-## Start locally
+## Develop locally
 
 ```sh
 pnpm install --frozen-lockfile
+vp run dev
+```
+
+Open http://localhost:3000 and create the owner account on first use. No `.env` or secret generation is needed. Development generates a random secret once in `.dev/secret` and stores its database in `.dev/auth.sqlite`; accounts and sessions persist across restarts. The `.dev/` directory is ignored by Git. To reset the local identity, stop development and delete `.dev/`.
+
+The command builds the shared API once, then starts its compiler watcher, the server with automatic restarts, and the Vite website with hot reload. Vite proxies API, administration, discovery and health requests to `127.0.0.1:3001`; ports 3000 and 3001 must be available. Ctrl-C stops all three watchers. `pnpm dev` runs the same workflow.
+
+Development uses fixed localhost configuration and the sample OKF resources, with its own secret and database regardless of `.env` or exported production settings. Production startup still requires explicit configuration.
+
+## Run the production build locally
+
+```sh
 cp .env.example .env
 chmod 600 .env
 # Edit .env: set BETTER_AUTH_SECRET to output from `openssl rand -hex 32`.
@@ -16,7 +28,7 @@ pnpm ready
 pnpm start
 ```
 
-Open the configured `AUTH_BASE_URL`, create the owner account with an email and a 16–128 character password, then sign in. For local development the sample uses loopback HTTP on port 3000; any non-loopback issuer **requires HTTPS**. `pnpm build` builds both workspace apps; `pnpm start` runs the packed server. `pnpm dev` runs the server TypeScript source against the built browser app (rebuild after browser edits, restart after server edits). Both use the same canonical origin and routes. `.agents/setup` installs/builds without creating credentials or identity state; it is not active for future orbs until committed changes reach the default branch.
+Open the configured `AUTH_BASE_URL`, create the owner account with an email and an 8–128 character password, then sign in. The sample uses loopback HTTP on port 3000; any non-loopback issuer **requires HTTPS**. `pnpm build` builds both workspace apps; `pnpm start` runs the packed server. `.agents/setup` installs/builds without creating credentials or identity state; it is not active for future orbs until committed changes reach the default branch.
 
 ## Workspace
 
@@ -28,7 +40,7 @@ then integrated without replacing existing auth code or Git history. The workspa
 - `apps/server` (`@clankerauth/server`): native HTTP service, auth/configuration, first-run setup, SQLite integration tests and the optional MCP interoperability harness. `vp pack` emits `dist/main.mjs`.
 - `apps/web` (`@clankerauth/web`): browser account setup, login, consent and client administration. Vite builds `dist`; the server resolves these assets through its workspace dependency, independent of its working directory.
 
-The root owns orchestration and shared TypeScript/check configuration; package dependencies are pinned centrally in `pnpm-workspace.yaml`. `vp run -r build` builds the API contract before the browser and server, and the browser assets before the server. `pnpm dev` and `pnpm check` build the contract first; rebuild it after changing shared schemas during development. Tests exercise built browser assets, so run `pnpm build` before a standalone `pnpm test` on a fresh checkout. `pnpm ready` handles that ordering. Production packaging uses `pnpm --filter @clankerauth/server deploy --prod <directory>`; the result includes the packed server, browser assets and production dependency closure.
+The root owns orchestration and shared TypeScript/check configuration; package dependencies are pinned centrally in `pnpm-workspace.yaml`. `vp run -r build` builds the API contract before the browser and server, and the browser assets before the server. `vp run dev` and `pnpm check` build the contract first; development watches shared schemas and rebuilds them automatically. Tests exercise built browser assets, so run `pnpm build` before a standalone `pnpm test` on a fresh checkout. `pnpm ready` handles that ordering. Production packaging uses `pnpm --filter @clankerauth/server deploy --prod <directory>`; the result includes the packed server, browser assets and production dependency closure.
 
 The scaffold's optional `vite-plus/prefer-vite-plus-imports` JavaScript lint plugin is omitted because Vite+ 0.3.1 crashes before analysis when loading it in this orb. Formatting, native lint rules, type-aware lint and TypeScript checking remain enabled.
 
@@ -55,7 +67,9 @@ Only explicitly mounted endpoints are reachable: native Better Auth account sign
 
 The owner marker is the identity eligibility boundary, not merely an admin role. Existing non-owner accounts cannot log in or use old sessions for authorization, consent, continuation or password changes. Code exchange and refresh recheck the grant's user even without a browser session; UserInfo rejects ineligible users and introspection reports their JWT/refresh tokens inactive. Legacy records are retained, not silently deleted. Sign-out remains available to discard a legacy cookie. Setup creates the owner without a session; session creation requires the owner marker. Generic session JWT emission is explicitly disabled with `disableSettingJwtHeader`; `/get-session` returns no `set-auth-jwt` header. Public OAuth subject identifiers are used; pairwise subjects and machine grants are not configured.
 
-Resource configuration is authoritative on restart. Configured resources overwrite their persisted policy; removed identifiers immediately stop passing this service's issuance/refresh allowlist. Already issued JWTs still live until expiry. Resources are not permission grants: each downstream app must map `sub` to its own access policy and enforce endpoint scopes. Do not authorize by email or assume `email_verified` is true; this service has no email verification transport.
+Resource configuration is authoritative on restart. Configured resources overwrite their persisted policy; removed identifiers immediately stop passing this service's issuance/refresh allowlist. Already issued JWTs still live until expiry.
+
+Downstream apps may delegate identity eligibility to this issuer's owner-only issuance policy; they do not need a separate configured owner ID or `sub` equality check. They must still verify the access token's signature, exact issuer, token type, expiry and their own resource audience, and enforce the required endpoint scopes. Resource registration alone does not grant access: the verified token must carry the required scopes. Keep `sub` for identity and audit attribution. This contract depends on owner-only issuance; adding other eligible users or grant types requires reviewing downstream access policy. Do not authorize by email or assume `email_verified` is true; this service has no email verification transport.
 
 ## Register a client
 

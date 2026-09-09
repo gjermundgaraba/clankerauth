@@ -38,7 +38,7 @@ export function openAuth(settings: Settings) {
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
-      minPasswordLength: 16,
+      minPasswordLength: 8,
       maxPasswordLength: 128,
     },
     databaseHooks: {

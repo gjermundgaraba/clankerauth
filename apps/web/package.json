@@ -10,7 +10,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc && vp build"
+    "build": "tsc && vp build",
+    "dev": "vp dev"
   },
   "devDependencies": {
     "@better-auth/oauth-provider": "catalog:",

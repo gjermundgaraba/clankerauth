@@ -214,7 +214,7 @@ describe("first-run setup", () => {
       { email: ".owner@example.internal", password },
       { email: "owner..name@example.internal", password },
       { email: "owner@example.123", password },
-      { email, password: "x".repeat(15) },
+      { email, password: "x".repeat(7) },
       { email, password: "x".repeat(129) },
       { email: 42, password },
       { email, password: 42 },

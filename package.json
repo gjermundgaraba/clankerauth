@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @clankerauth/api build && node --env-file-if-exists=.env apps/server/src/main.ts",
+    "dev": "pnpm --filter @clankerauth/api build && vp run --no-cache --parallel -r dev",
     "build": "vp run -r build",
     "check": "pnpm --filter @clankerauth/api build && vp check",
     "test": "vp run -r test",

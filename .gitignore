@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 data/
+.dev/
 *.sqlite*
 .amp/portals/
 .amp/in/
