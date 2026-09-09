@@ -41,7 +41,14 @@ export function customApi(service: Service) {
   );
   const setup = HttpApiBuilder.group(Api, "setup", (handlers) =>
     handlers
-      .handle("status", () => Effect.sync(() => ({ required: !service.owner() })))
+      .handle("status", () =>
+        service.owner().pipe(
+          Effect.map((owner) => ({ required: !owner })),
+          Effect.mapError(
+            () => new InternalServerError({ error: "Request could not be completed" }),
+          ),
+        ),
+      )
       .handle("create", ({ payload }) => admin.setup(payload)),
   );
   const clients = HttpApiBuilder.group(Api, "clients", (handlers) =>

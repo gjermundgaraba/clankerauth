@@ -10,6 +10,7 @@ jobs:
           node-version: 26.7.0
       - run: npm install -g pnpm@12.3.4
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
       - run: pnpm ready
       - run: pnpm --filter @clankerauth/server deploy --prod /tmp/clankerauth-production
       - run: pnpm test:package /tmp/clankerauth-production

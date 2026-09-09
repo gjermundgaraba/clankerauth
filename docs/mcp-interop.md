@@ -27,8 +27,11 @@ pnpm test:interop /tmp/clankerauth-okf-interop
 
 The SDK installation modifies only the temporary clone's dependency manifests, not
 its server code. The harness lives in `apps/server/scripts/mcp-interop.mjs` and imports
-the server workspace source. Remove the temporary clone after testing. The harness closes all
-listeners and removes its temporary auth database and fake storage in `finally`.
+the server workspace source. Remove the temporary clone after testing. In `finally`,
+the harness attempts to close every client, upstream and listener, dispose the app,
+close the auth service, and remove its temporary auth database and fake storage,
+even if an earlier cleanup step fails. Cleanup errors are reported without replacing
+the original test failure.
 Startup migrates the temporary database automatically; the harness creates its sole
 owner through the first-run setup HTTP endpoint before signing in. It then creates
 its two resources through the owner API and explicitly grants each test client access;

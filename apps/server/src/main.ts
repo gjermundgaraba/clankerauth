@@ -9,7 +9,7 @@ const program = Effect.scoped(
   Effect.gen(function* () {
     const settings = yield* loadSettings;
     const service = yield* Effect.acquireRelease(
-      Effect.sync(() => openAuth(settings)),
+      Effect.tryPromise(() => openAuth(settings)),
       (s) => Effect.promise(() => s.close()),
     );
     yield* Effect.tryPromise(() => initialize(service));

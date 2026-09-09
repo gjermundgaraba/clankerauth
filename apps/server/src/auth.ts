@@ -1,4 +1,5 @@
-import Database from "better-sqlite3";
+import { Effect, Schema } from "effect";
+import { openDatabase } from "./database.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,15 +11,16 @@ import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 import { protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
-export function openAuth(settings: Settings) {
+export async function openAuth(settings: Settings) {
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
-  const db = new Database(settings.database);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 5000");
-  const owner = () =>
-    db.prepare<[], { userId: string }>("SELECT userId FROM serviceOwner WHERE id = 1").get()
-      ?.userId;
+  const database = await openDatabase(settings.database);
+  const { sql } = database;
+  const owner = Effect.fn("Auth.owner")(function* () {
+    const rows = yield* sql`SELECT userId FROM serviceOwner WHERE id = 1`;
+    if (!rows.length) return undefined;
+    return (yield* Schema.decodeUnknownEffect(Schema.Struct({ userId: Schema.String }))(rows[0]))
+      .userId;
+  });
   const provider = oauthProvider({
     loginPage: "/login",
     consentPage: "/consent",
@@ -30,22 +32,18 @@ export function openAuth(settings: Settings) {
         const state = await getOAuthProviderState();
         const query = new URLSearchParams(state?.query);
         const identifiers = query.getAll("resource");
-        if (identifiers.length !== 1 || !resources.get(identifiers[0]))
+        if (identifiers.length !== 1 || !(await Effect.runPromise(resources.get(identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Choose exactly one Resource",
           });
         const clientId = query.get("client_id");
-        if (
-          !resources
-            .access()
-            .some((link) => link.client_id === clientId && link.resource === identifiers[0])
-        )
+        if (!clientId || !(await Effect.runPromise(resources.hasAccess(clientId, identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
           });
-        const allowed = resources.scopesFor(identifiers);
+        const allowed = await Effect.runPromise(resources.scopesFor(identifiers));
         if (scopes.some((scope) => !allowed.includes(scope)))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_scope",
@@ -64,33 +62,43 @@ export function openAuth(settings: Settings) {
     refreshTokenReuseInterval: 0,
     // Supported callback runs before token writes/signing for both code
     // exchange and refresh, including legacy grants without a live session.
-    customTokenResponseFields: ({ user }) => {
-      if (!user || user.id !== owner())
+    customTokenResponseFields: async ({ user }) => {
+      if (!user || user.id !== (await Effect.runPromise(owner())))
         throw new APIError("BAD_REQUEST", {
           error: "invalid_grant",
           error_description: "Owner grant required",
         });
       return {};
     },
-    customUserInfoClaims: ({ user }) => {
-      if (user.id !== owner()) throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
+    customUserInfoClaims: async ({ user }) => {
+      if (user.id !== (await Effect.runPromise(owner())))
+        throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
       return {};
     },
-    clientPrivileges: ({ user, action }) =>
-      !!user && user.id === owner() && action !== "configure-client-credentials-scopes",
-    resourcePrivileges: ({ user }) => !!user && user.id === owner(),
+    clientPrivileges: async ({ user, action }) =>
+      !!user &&
+      user.id === (await Effect.runPromise(owner())) &&
+      action !== "configure-client-credentials-scopes",
+    resourcePrivileges: async ({ user }) =>
+      !!user && user.id === (await Effect.runPromise(owner())),
   });
-  const synchronizeScopes = () => {
-    provider.options.scopes = resources.supportedScopes();
-  };
-  const resources = resourceStore(db, (scopes) => {
+  const synchronizeScopes = () =>
+    resources.supportedScopes().pipe(
+      Effect.tap((scopes) =>
+        Effect.sync(() => {
+          provider.options.scopes = scopes;
+        }),
+      ),
+      Effect.asVoid,
+    );
+  const resources = resourceStore(sql, (scopes) => {
     provider.options.scopes = scopes;
   });
   const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
     secret: settings.secret,
-    database: db,
+    database: { db: database.kysely, type: "sqlite", transaction: true },
     trustedOrigins: [settings.baseURL],
     logger: { disabled: true },
     disabledPaths: ["/token"],
@@ -104,7 +112,7 @@ export function openAuth(settings: Settings) {
       session: {
         create: {
           before: async (session) => {
-            if (session.userId !== owner())
+            if (session.userId !== (await Effect.runPromise(owner())))
               throw new APIError("UNAUTHORIZED", { message: "Owner login required" });
           },
         },
@@ -117,7 +125,7 @@ export function openAuth(settings: Settings) {
         // Login continuation carries a newly created session before the browser
         // has received its cookie. It already passed the session-creation gate.
         const session = ctx.context.newSession ?? (await getAuthoritativeSessionFromCtx(ctx));
-        if (session && session.user.id !== owner())
+        if (session && session.user.id !== (await Effect.runPromise(owner())))
           throw new APIError("UNAUTHORIZED", { message: "Owner session required" });
       }),
       after: createAuthMiddleware(async (ctx) => {
@@ -130,7 +138,7 @@ export function openAuth(settings: Settings) {
           typeof result === "object" &&
           "active" in result &&
           result.active === true &&
-          (!("sub" in result) || result.sub !== owner())
+          (!("sub" in result) || result.sub !== (await Effect.runPromise(owner())))
         )
           return ctx.json({ active: false });
       }),
@@ -172,14 +180,14 @@ export function openAuth(settings: Settings) {
   const close = async () => {
     closing = true;
     await tail;
-    if (db.open) db.close();
+    await database.close();
   };
   return {
     get auth() {
       return (auth ??= makeAuth());
     },
     options,
-    db,
+    sql,
     owner,
     settings,
     resources,
@@ -188,23 +196,27 @@ export function openAuth(settings: Settings) {
     close,
   };
 }
-export type Service = ReturnType<typeof openAuth>;
+export type Service = Awaited<ReturnType<typeof openAuth>>;
 
 export async function initialize(service: Service) {
   const plan = await getMigrations(service.options);
   if (plan.schemaProblems.length) throw new Error("Database schema requires manual repair");
   await plan.runMigrations();
-  service.db.exec(
-    "CREATE TABLE IF NOT EXISTS serviceOwner (id INTEGER PRIMARY KEY CHECK(id = 1), userId TEXT NOT NULL UNIQUE REFERENCES user(id))",
-  );
-  if (!service.owner() && service.db.prepare("SELECT id FROM user LIMIT 1").get())
-    throw new Error("Database contains accounts without an owner marker");
-  service.synchronizeScopes();
+  await Effect.runPromise(sqlInitialize(service));
   await service.auth.$context;
 }
 
+const sqlInitialize = (service: Service) =>
+  Effect.gen(function* () {
+    yield* service.sql`CREATE TABLE IF NOT EXISTS serviceOwner (id INTEGER PRIMARY KEY CHECK(id = 1), userId TEXT NOT NULL UNIQUE REFERENCES user(id))`;
+    if (!(yield* service.owner()) && (yield* service.sql`SELECT id FROM user LIMIT 1`).length)
+      return yield* Effect.fail(new Error("Database contains accounts without an owner marker"));
+    yield* service.synchronizeScopes();
+  });
+
 export async function createOwner(service: Service, input: { email: string; password: string }) {
-  if (service.owner()) throw new APIError("CONFLICT", { message: "Setup already completed" });
+  if (await Effect.runPromise(service.owner()))
+    throw new APIError("CONFLICT", { message: "Setup already completed" });
   const email = input.email.trim().toLowerCase();
   const context = await service.auth.$context;
   // Match the pinned provider's email validator: setup must produce a usable login.
@@ -218,23 +230,18 @@ export async function createOwner(service: Service, input: { email: string; pass
   )
     throw new APIError("BAD_REQUEST", { message: "Invalid email or password" });
   const hash = await context.password.hash(input.password);
-  // Keep provider hashing outside the synchronous transaction. These writes target
-  // the pinned Better Auth schema so account creation and ownership commit together.
-  service.db
-    .transaction(() => {
-      const id = randomUUID();
-      const now = Date.now();
-      service.db
-        .prepare(
-          "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, 'Owner', ?, 0, ?, ?)",
-        )
-        .run(id, email, now, now);
-      service.db
-        .prepare(
-          "INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) VALUES (?, ?, 'credential', ?, ?, ?, ?)",
-        )
-        .run(randomUUID(), id, id, hash, now, now);
-      service.db.prepare("INSERT INTO serviceOwner (id, userId) VALUES (1, ?)").run(id);
-    })
-    .immediate();
+  // Hash outside the transaction; account creation and ownership commit together.
+  await Effect.runPromise(
+    service.sql.withTransaction(
+      Effect.gen(function* () {
+        const id = randomUUID();
+        const now = Date.now();
+        yield* service.sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+      VALUES (${id}, 'Owner', ${email}, 0, ${now}, ${now})`;
+        yield* service.sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt)
+      VALUES (${randomUUID()}, ${id}, 'credential', ${id}, ${hash}, ${now}, ${now})`;
+        yield* service.sql`INSERT INTO serviceOwner (id, userId) VALUES (1, ${id})`;
+      }),
+    ),
+  );
 }

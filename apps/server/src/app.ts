@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { APIError } from "better-auth/api";
 import type { Service } from "./auth.ts";
 import { customApi } from "./custom-api.ts";
@@ -37,7 +37,7 @@ export function application(
   async function dispatch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/healthz" && req.method === "GET") {
-      service.db.prepare("SELECT 1").get();
+      await Effect.runPromise(service.sql`SELECT 1`);
       return json({ status: "ok" });
     }
     if (url.pathname === "/api/setup" || url.pathname.startsWith("/admin/"))
@@ -54,7 +54,10 @@ export function application(
           const body = Schema.decodeUnknownOption(ResourceRequest)(await req.clone().json());
           resources = body._tag === "Some" ? [body.value.resource] : [];
         } else resources = new URLSearchParams(await req.clone().text()).getAll("resource");
-        if (resources.length !== 1 || !service.resources.get(resources[0] ?? "")) {
+        if (
+          resources.length !== 1 ||
+          !(await Effect.runPromise(service.resources.get(resources[0] ?? "")))
+        ) {
           return json(
             {
               error: "invalid_target",

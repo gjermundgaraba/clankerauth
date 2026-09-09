@@ -62,7 +62,8 @@ export function administration(service: Service) {
       try: () => auth.api.getSession({ headers }),
       catch: apiError,
     });
-    if (!session || session.user.id !== service.owner())
+    const owner = yield* service.owner().pipe(Effect.mapError(apiError));
+    if (!session || session.user.id !== owner)
       return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
     if (mutate && headers.get("origin") !== settings.baseURL)
       return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
@@ -83,13 +84,10 @@ export function administration(service: Service) {
         try: () => auth.api.getOAuthClients({ headers }),
         catch: apiError,
       });
-      const catalog = yield* Effect.try({
-        try: () => ({
-          resources: service.resources.list(),
-          clientAccess: service.resources.access(),
-        }),
-        catch: resourceError,
-      });
+      const catalog = yield* Effect.all({
+        resources: service.resources.list(),
+        clientAccess: service.resources.access(),
+      }).pipe(Effect.mapError(resourceError));
       return {
         clients: clients ?? [],
         ...catalog,
@@ -105,14 +103,11 @@ export function administration(service: Service) {
         return yield* Effect.fail(
           new BadRequest({ error: "Client names require 1–100 characters" }),
         );
-      const scopes = yield* Effect.try({
-        try: () => {
-          if (!input.resources.length)
-            throw new APIError("BAD_REQUEST", { message: "Choose unique Resources" });
-          return service.resources.scopesFor(input.resources);
-        },
-        catch: resourceError,
-      });
+      if (!input.resources.length)
+        return yield* Effect.fail(new BadRequest({ error: "Choose unique Resources" }));
+      const scopes = yield* service.resources
+        .scopesFor(input.resources)
+        .pipe(Effect.mapError(resourceError));
       const client = yield* Effect.tryPromise({
         try: () =>
           auth.api.createOAuthClient({
@@ -128,53 +123,38 @@ export function administration(service: Service) {
           }),
         catch: apiError,
       });
-      yield* Effect.try({
-        try: () => service.resources.setAccess(client.client_id, input.resources),
-        catch: resourceError,
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.gen(function* () {
-            yield* Effect.tryPromise({
-              try: () =>
-                auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
-              catch: apiError,
-            });
-            return yield* Effect.fail(error);
+      yield* service.resources.setAccess(client.client_id, input.resources).pipe(
+        Effect.mapError(resourceError),
+        Effect.tapError(() =>
+          Effect.tryPromise({
+            try: () =>
+              auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+            catch: apiError,
           }),
         ),
       );
       return client;
     }),
     access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
-      const clientAccess = yield* Effect.try({
-        try: () => service.resources.setAccess(input.client_id, input.resources),
-        catch: resourceError,
-      });
+      const clientAccess = yield* service.resources
+        .setAccess(input.client_id, input.resources)
+        .pipe(Effect.mapError(resourceError));
       return { clientAccess };
     }),
     createResource: Effect.fn("Administration.createResource")(function* (
       input: typeof Resource.Type,
     ) {
-      return yield* Effect.try({
-        try: () => service.resources.create(input),
-        catch: resourceError,
-      });
+      return yield* service.resources.create(input).pipe(Effect.mapError(resourceError));
     }),
     updateResource: Effect.fn("Administration.updateResource")(function* (
       input: typeof Resource.Type,
     ) {
-      return yield* Effect.try({
-        try: () => service.resources.update(input),
-        catch: resourceError,
-      });
+      return yield* service.resources.update(input).pipe(Effect.mapError(resourceError));
     }),
     deleteResource: Effect.fn("Administration.deleteResource")(function* (
       input: typeof ResourceId.Type,
     ) {
-      return yield* Effect.try({
-        try: () => service.resources.delete(input.identifier),
-        catch: resourceError,
-      });
+      return yield* service.resources.delete(input.identifier).pipe(Effect.mapError(resourceError));
     }),
     delete: Effect.fn("Administration.delete")(function* (
       headers: Headers,

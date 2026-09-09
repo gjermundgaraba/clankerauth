@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 // Optional integration test. See docs/mcp-interop.md. Never uses live Code Storage.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -35,6 +36,7 @@ const directory = await mkdtemp(join(tmpdir(), "clankerauth-mcp-"));
 const servers = [];
 const clients = [];
 let service;
+let app;
 let upstream;
 let forwarded = 0;
 let storageCalls = 0;
@@ -121,9 +123,10 @@ try {
     host: "127.0.0.1",
     port: Number(new URL(authURL).port),
   };
-  service = openAuth(settings);
+  service = await openAuth(settings);
   await initialize(service);
-  handler = application(service);
+  app = application(service);
+  handler = app;
   const setup = await ownerRequest("/api/setup", { email, password });
   assert.equal(setup.status, 201, await setup.clone().text());
   assert.equal(setup.headers.has("set-cookie"), false);
@@ -183,7 +186,7 @@ try {
       );
       assert.equal(
         claims.sub,
-        service.owner(),
+        await Effect.runPromise(service.owner()),
         "Only the test owner is authorized by this prototype policy",
       );
     } catch (error) {
@@ -466,12 +469,33 @@ try {
     "PROTOTYPE INTEGRATION PASSED; no shipped clanker-okf auth, real storage credentials, or preview state used",
   );
 } finally {
-  for (const client of clients) await client.close().catch(() => {});
-  if (upstream) await upstream.close();
+  const cleanupErrors = [];
+  const attempt = async (operation) => {
+    try {
+      await operation();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  };
+  for (const client of clients) await attempt(() => client.close());
+  await attempt(() => upstream?.close());
   for (const server of servers.reverse()) {
-    server.closeAllConnections();
-    await new Promise((done) => server.close(done));
+    await attempt(() => server.closeAllConnections());
+    await attempt(
+      () =>
+        new Promise((done, reject) =>
+          server.close((error) => {
+            if (error && error.code !== "ERR_SERVER_NOT_RUNNING") reject(error);
+            else done();
+          }),
+        ),
+    );
   }
-  if (service?.db.open) service.db.close();
-  await rm(directory, { recursive: true, force: true });
+  await attempt(() => app?.dispose());
+  await attempt(() => service?.close());
+  await attempt(() => rm(directory, { recursive: true, force: true }));
+  if (cleanupErrors.length) {
+    console.error(new AggregateError(cleanupErrors, "Interop harness cleanup failed"));
+    process.exitCode = 1;
+  }
 }

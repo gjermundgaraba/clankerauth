@@ -1,5 +1,4 @@
 FROM node:26.7.0-bookworm-slim AS build
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@12.3.4
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

@@ -16,15 +16,16 @@
     "@clankerauth/api": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "better-auth": "catalog:",
-    "better-sqlite3": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "kysely": "catalog:"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "catalog:",
     "@types/node": "catalog:",
     "jose": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:"
   }
 }

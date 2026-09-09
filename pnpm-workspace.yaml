@@ -7,14 +7,15 @@ catalog:
   "@effect/platform-node": 4.0.0-rc.112
   "@better-auth/oauth-provider": 1.7.3
   better-auth: 1.7.3
-  better-sqlite3: 12.11.1
   effect: 4.0.0-rc.112
-  "@types/better-sqlite3": 9.6.0
   "@types/node": 26.5.0
   jose: 6.2.12
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.3.1
   vite-plus: 0.3.1
+  playwright: 1.62.1
+  "@effect/sql-sqlite-node": 4.0.0-rc.112
+  kysely: 0.29.5
 
 overrides:
   vite@*: "catalog:"
@@ -24,7 +25,6 @@ peerDependencyRules:
   allowedVersions:
     vite: "*"
 allowBuilds:
-  better-sqlite3: true
   msgpackr-extract: false
 minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-core@0.3.1"

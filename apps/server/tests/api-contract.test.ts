@@ -30,7 +30,7 @@ describe("API integration", () => {
       host: "127.0.0.1",
       port: 3000,
     });
-    service = openAuth(settings);
+    service = await openAuth(settings);
     await initialize(service);
     handle = application(service);
     cookie = "";
@@ -135,9 +135,7 @@ describe("API integration", () => {
         }
         // Persisted values must satisfy the outgoing contract; corrupt data is a
         // server failure, not a bad request from this correctly typed caller.
-        service.db
-          .prepare("UPDATE oauthClient SET redirectUris = ? WHERE clientId = ?")
-          .run(JSON.stringify([42]), created.client_id);
+        yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
         const invalidResponse = yield* Effect.flip(api.clients.list());
         expect(invalidResponse._tag).toBe("InternalServerError");
         expect(yield* api.clients.delete({ payload: { client_id: created.client_id } })).toEqual({
@@ -166,7 +164,7 @@ describe("API integration", () => {
     const body = await response.text();
     expect(body).not.toContain(password);
     expect(JSON.parse(body)).toMatchObject({ _tag: "BadRequest" });
-    expect(service.owner()).toBeUndefined();
+    expect(await Effect.runPromise(service.owner())).toBeUndefined();
   });
 });
 

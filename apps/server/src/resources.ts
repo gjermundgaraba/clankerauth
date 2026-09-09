@@ -1,91 +1,92 @@
-import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
+import type { SqlClient } from "effect/unstable/sql/SqlClient";
 import { APIError } from "better-auth/api";
 import { ClientAccess, Resource } from "@clankerauth/api";
 
 export const protocolScopes = ["openid", "profile", "email", "offline_access"];
 export const resourceReference = (identifier: string) => `resource:${identifier}`;
-const strings = Schema.decodeUnknownSync(Schema.Array(Schema.String));
-const resourceRow = Schema.decodeUnknownSync(
-  Schema.Struct({
-    identifier: Schema.String,
-    name: Schema.String,
-    allowedScopes: Schema.String,
-  }),
+const decodeScopes = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const resourceRow = Schema.decodeUnknownEffect(
+  Schema.Struct({ identifier: Schema.String, name: Schema.String, allowedScopes: Schema.String }),
 );
-const accessRows = Schema.decodeUnknownSync(Schema.Array(ClientAccess));
-const credentialRows = Schema.decodeUnknownSync(
-  Schema.Array(
+const accessRows = Schema.decodeUnknownEffect(Schema.Array(ClientAccess));
+const credentialRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ id: Schema.String, scopes: Schema.String })),
+);
+const codeRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.String })),
+);
+const decodeCode = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
     Schema.Struct({
-      id: Schema.String,
-      scopes: Schema.String,
+      type: Schema.Literal("authorization_code"),
+      query: Schema.Struct({ client_id: Schema.String, scope: Schema.optional(Schema.String) }),
+      referenceId: Schema.String,
     }),
   ),
 );
-const codeRows = Schema.decodeUnknownSync(
-  Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      value: Schema.String,
-    }),
-  ),
-);
-const codeShape = Schema.Struct({
-  type: Schema.Literal("authorization_code"),
-  query: Schema.Struct({ client_id: Schema.String, scope: Schema.optional(Schema.String) }),
-  referenceId: Schema.String,
-});
-const decodeScopes = (value: string) => strings(JSON.parse(value));
 type ResourceValue = typeof Resource.Type;
 
-// These synchronous operations target the pinned provider schema. Callers admit
-// them through Service.exclusive, so async provider operations cannot interleave.
-export function resourceStore(db: Database.Database, changed: (scopes: string[]) => void) {
-  const decodeResource = (value: unknown): ResourceValue => {
-    const row = resourceRow(value);
+// Callers admit resource operations through Service.exclusive so provider writes
+// cannot interleave with transactions using the same SQLite database.
+export function resourceStore(sql: SqlClient, changed: (scopes: string[]) => void) {
+  const decodeResource = Effect.fn("Resources.decode")(function* (value: unknown) {
+    const row = yield* resourceRow(value);
+    const scopes = yield* decodeScopes(row.allowedScopes);
     return {
       identifier: row.identifier,
       name: row.name,
-      scopes: decodeScopes(row.allowedScopes).filter((scope) => !protocolScopes.includes(scope)),
+      scopes: scopes.filter((scope) => !protocolScopes.includes(scope)),
     };
-  };
-  const list = () =>
-    db
-      .prepare(
-        "SELECT identifier, name, allowedScopes FROM oauthResource ORDER BY createdAt, identifier",
-      )
-      .all()
-      .map(decodeResource);
-  const get = (identifier: string) => {
-    const row = db
-      .prepare("SELECT identifier, name, allowedScopes FROM oauthResource WHERE identifier = ?")
-      .get(identifier);
-    return row ? decodeResource(row) : undefined;
-  };
-  const access = () =>
-    accessRows(
-      db
-        .prepare(
-          "SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId",
-        )
-        .all(),
+  });
+  const list = Effect.fn("Resources.list")(function* () {
+    const rows =
+      yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource ORDER BY createdAt, identifier`;
+    return yield* Effect.forEach(rows, decodeResource);
+  });
+  const get = Effect.fn("Resources.get")(function* (identifier: string) {
+    const rows =
+      yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource WHERE identifier = ${identifier}`;
+    return rows[0] ? yield* decodeResource(rows[0]) : undefined;
+  });
+  const access = Effect.fn("Resources.access")(function* () {
+    return yield* accessRows(
+      yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId`,
     );
-  const validateSelection = (identifiers: readonly string[]) => {
+  });
+  const accessForClient = Effect.fn("Resources.accessForClient")(function* (clientId: string) {
+    return yield* accessRows(
+      yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE clientId = ${clientId} ORDER BY resourceId`,
+    );
+  });
+  const accessForResource = Effect.fn("Resources.accessForResource")(function* (
+    identifier: string,
+  ) {
+    return yield* accessRows(
+      yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE resourceId = ${identifier} ORDER BY clientId`,
+    );
+  });
+  const validateSelection = Effect.fn("Resources.validateSelection")(function* (
+    identifiers: readonly string[],
+  ) {
     if (new Set(identifiers).size !== identifiers.length)
-      throw new APIError("BAD_REQUEST", { message: "Choose unique Resources" });
-    return identifiers.map((id) => {
-      const resource = get(id);
-      if (!resource) throw new APIError("BAD_REQUEST", { message: "Unknown Resource" });
-      return resource;
-    });
-  };
-  const scopesFor = (identifiers: readonly string[]) => [
-    ...new Set([
-      ...protocolScopes,
-      ...validateSelection(identifiers).flatMap((resource) => resource.scopes),
-    ]),
-  ];
+      return yield* Effect.fail(
+        new APIError("BAD_REQUEST", { message: "Choose unique Resources" }),
+      );
+    return yield* Effect.forEach(identifiers, (id) =>
+      Effect.gen(function* () {
+        const resource = yield* get(id);
+        if (!resource)
+          return yield* Effect.fail(new APIError("BAD_REQUEST", { message: "Unknown Resource" }));
+        return resource;
+      }),
+    );
+  });
+  const scopesFor = Effect.fn("Resources.scopesFor")(function* (identifiers: readonly string[]) {
+    const resources = yield* validateSelection(identifiers);
+    return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
+  });
   const validate = (input: ResourceValue): ResourceValue => {
     const identifier = input.identifier.trim();
     const name = input.name.trim();
@@ -116,151 +117,157 @@ export function resourceStore(db: Database.Database, changed: (scopes: string[])
       });
     return { identifier, name, scopes };
   };
-  const syncClient = (clientId: string) => {
-    const identifiers = access()
-      .filter((link) => link.client_id === clientId)
-      .map((link) => link.resource);
-    db.prepare("UPDATE oauthClient SET scopes = ?, updatedAt = ? WHERE clientId = ?").run(
-      JSON.stringify(scopesFor(identifiers)),
-      Date.now(),
-      clientId,
-    );
-  };
-  const cleanup = (clientId: string, identifier: string, removed?: readonly string[]) => {
+  const validateInput = (input: ResourceValue) =>
+    Effect.try({
+      try: () => validate(input),
+      catch: (error) =>
+        error instanceof APIError
+          ? error
+          : new APIError("BAD_REQUEST", { message: "Invalid Resource" }),
+    });
+  const syncClient = Effect.fn("Resources.syncClient")(function* (clientId: string) {
+    const links = yield* accessForClient(clientId);
+    const scopes = yield* scopesFor(links.map((link) => link.resource));
+    yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
+  });
+  const cleanup = Effect.fn("Resources.cleanup")(function* (
+    clientId: string,
+    identifier: string,
+    removed?: readonly string[],
+  ) {
     const reference = resourceReference(identifier);
     const affected = (scopes: readonly string[]) =>
       !removed || scopes.some((scope) => removed.includes(scope));
-    const predicate = "clientId = ? AND referenceId = ?";
-    const consents = credentialRows(
-      db.prepare(`SELECT id, scopes FROM oauthConsent WHERE ${predicate}`).all(clientId, reference),
+    const consents = yield* credentialRows(
+      yield* sql`SELECT id, scopes FROM oauthConsent WHERE clientId = ${clientId} AND referenceId = ${reference}`,
     );
     for (const consent of consents) {
-      if (!removed) db.prepare("DELETE FROM oauthConsent WHERE id = ?").run(consent.id);
-      else
-        db.prepare("UPDATE oauthConsent SET scopes = ?, updatedAt = ? WHERE id = ?").run(
-          JSON.stringify(decodeScopes(consent.scopes).filter((scope) => !removed.includes(scope))),
-          Date.now(),
-          consent.id,
+      if (!removed) yield* sql`DELETE FROM oauthConsent WHERE id = ${consent.id}`;
+      else {
+        const scopes = (yield* decodeScopes(consent.scopes)).filter(
+          (scope) => !removed.includes(scope),
         );
+        yield* sql`UPDATE oauthConsent SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE id = ${consent.id}`;
+      }
     }
-    for (const row of codeRows(
-      db
-        .prepare(
-          "SELECT id, value FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.referenceId') = ? AND json_extract(value, '$.query.client_id') = ?",
-        )
-        .all(reference, clientId),
-    )) {
-      const value: unknown = JSON.parse(row.value);
-      if (!Schema.is(codeShape)(value)) throw new Error("Invalid stored authorization code");
+    const codes = yield* codeRows(
+      yield* sql`SELECT id, value FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.referenceId') = ${reference} AND json_extract(value, '$.query.client_id') = ${clientId}`,
+    );
+    for (const row of codes) {
+      const value = yield* decodeCode(row.value);
       if (affected(value.query.scope?.split(" ") ?? []))
-        db.prepare("DELETE FROM verification WHERE id = ?").run(row.id);
+        yield* sql`DELETE FROM verification WHERE id = ${row.id}`;
     }
     // Delete dependents before refresh tokens because refreshId is a foreign key.
     for (const table of ["oauthAccessToken", "oauthRefreshToken"]) {
-      const rows = credentialRows(
-        db.prepare(`SELECT id, scopes FROM ${table} WHERE ${predicate}`).all(clientId, reference),
+      const rows = yield* credentialRows(
+        yield* sql`SELECT id, scopes FROM ${sql(table)} WHERE clientId = ${clientId} AND referenceId = ${reference}`,
       );
       for (const row of rows)
-        if (affected(decodeScopes(row.scopes))) {
+        if (affected(yield* decodeScopes(row.scopes))) {
           if (table === "oauthRefreshToken")
-            db.prepare("DELETE FROM oauthAccessToken WHERE refreshId = ?").run(row.id);
-          db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(row.id);
+            yield* sql`DELETE FROM oauthAccessToken WHERE refreshId = ${row.id}`;
+          yield* sql`DELETE FROM ${sql(table)} WHERE id = ${row.id}`;
         }
     }
-  };
-  const supportedScopes = () => [
-    ...new Set([...protocolScopes, ...list().flatMap((resource) => resource.scopes)]),
-  ];
-  const commit = <A>(operation: () => A): A => {
-    const committed = db
-      .transaction(() => {
-        const result = operation();
-        const scopes = supportedScopes();
-        return { result, scopes };
-      })
-      .immediate();
-    changed(committed.scopes);
-    return committed.result;
-  };
+  });
+  const supportedScopes = Effect.fn("Resources.supportedScopes")(function* () {
+    const resources = yield* list();
+    return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
+  });
+  const commit = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const committed = yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const result = yield* operation;
+          const scopes = yield* supportedScopes();
+          return { result, scopes };
+        }),
+      );
+      changed(committed.scopes);
+      return committed.result;
+    });
   return {
     list,
     get,
     access,
+    hasAccess: Effect.fn("Resources.hasAccess")(function* (clientId: string, identifier: string) {
+      const rows =
+        yield* sql`SELECT 1 FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier} LIMIT 1`;
+      return rows.length > 0;
+    }),
     scopesFor,
     supportedScopes,
-    create(input: ResourceValue) {
-      const resource = validate(input);
-      return commit(() => {
-        if (get(resource.identifier))
-          throw new APIError("CONFLICT", { message: "Resource already exists" });
-        const now = Date.now();
-        db.prepare(
-          "INSERT INTO oauthResource (id, identifier, name, allowedScopes, accessTokenTtl, createdAt, updatedAt) VALUES (?, ?, ?, ?, 300, ?, ?)",
-        ).run(
-          randomUUID(),
-          resource.identifier,
-          resource.name,
-          JSON.stringify([...protocolScopes, ...resource.scopes]),
-          now,
-          now,
-        );
-        return resource;
-      });
-    },
-    update(input: ResourceValue) {
-      const resource = validate(input);
-      return commit(() => {
-        const previous = get(resource.identifier);
-        if (!previous) throw new APIError("NOT_FOUND", { message: "Resource not found" });
-        db.prepare(
-          "UPDATE oauthResource SET name = ?, allowedScopes = ?, updatedAt = ?, policyVersion = COALESCE(policyVersion, 1) + 1 WHERE identifier = ?",
-        ).run(
-          resource.name,
-          JSON.stringify([...protocolScopes, ...resource.scopes]),
-          Date.now(),
-          resource.identifier,
-        );
-        const removed = previous.scopes.filter((scope) => !resource.scopes.includes(scope));
-        for (const link of access().filter((link) => link.resource === resource.identifier)) {
-          syncClient(link.client_id);
-          if (removed.length) cleanup(link.client_id, resource.identifier, removed);
-        }
-        return resource;
-      });
-    },
-    delete(identifier: string) {
-      return commit(() => {
-        if (!get(identifier)) throw new APIError("NOT_FOUND", { message: "Resource not found" });
-        if (access().some((link) => link.resource === identifier))
-          throw new APIError("CONFLICT", {
-            message: "Remove Client access before deleting this Resource",
-          });
-        db.prepare("DELETE FROM oauthResource WHERE identifier = ?").run(identifier);
-        return { deleted: true };
-      });
-    },
-    setAccess(clientId: string, identifiers: readonly string[]) {
-      return commit(() => {
-        if (!db.prepare("SELECT id FROM oauthClient WHERE clientId = ?").get(clientId))
-          throw new APIError("NOT_FOUND", { message: "Client not found" });
-        validateSelection(identifiers);
-        const previous = access()
-          .filter((link) => link.client_id === clientId)
-          .map((link) => link.resource);
-        for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
-          cleanup(clientId, identifier);
-          db.prepare("DELETE FROM oauthClientResource WHERE clientId = ? AND resourceId = ?").run(
-            clientId,
-            identifier,
-          );
-        }
-        for (const identifier of identifiers.filter((id) => !previous.includes(id)))
-          db.prepare(
-            "INSERT INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES (?, ?, ?, ?)",
-          ).run(randomUUID(), clientId, identifier, Date.now());
-        syncClient(clientId);
-        return access().filter((link) => link.client_id === clientId);
-      });
-    },
+    create: Effect.fn("Resources.create")(function* (input: ResourceValue) {
+      const resource = yield* validateInput(input);
+      return yield* commit(
+        Effect.gen(function* () {
+          if (yield* get(resource.identifier))
+            return yield* Effect.fail(
+              new APIError("CONFLICT", { message: "Resource already exists" }),
+            );
+          const now = Date.now();
+          yield* sql`INSERT INTO oauthResource (id, identifier, name, allowedScopes, accessTokenTtl, createdAt, updatedAt) VALUES (${randomUUID()}, ${resource.identifier}, ${resource.name}, ${JSON.stringify([...protocolScopes, ...resource.scopes])}, 300, ${now}, ${now})`;
+          return resource;
+        }),
+      );
+    }),
+    update: Effect.fn("Resources.update")(function* (input: ResourceValue) {
+      const resource = yield* validateInput(input);
+      return yield* commit(
+        Effect.gen(function* () {
+          const previous = yield* get(resource.identifier);
+          if (!previous)
+            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Resource not found" }));
+          yield* sql`UPDATE oauthResource SET name = ${resource.name}, allowedScopes = ${JSON.stringify([...protocolScopes, ...resource.scopes])}, updatedAt = ${Date.now()}, policyVersion = COALESCE(policyVersion, 1) + 1 WHERE identifier = ${resource.identifier}`;
+          const removed = previous.scopes.filter((scope) => !resource.scopes.includes(scope));
+          for (const link of yield* accessForResource(resource.identifier)) {
+            yield* syncClient(link.client_id);
+            if (removed.length) yield* cleanup(link.client_id, resource.identifier, removed);
+          }
+          return resource;
+        }),
+      );
+    }),
+    delete: Effect.fn("Resources.delete")(function* (identifier: string) {
+      return yield* commit(
+        Effect.gen(function* () {
+          if (!(yield* get(identifier)))
+            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Resource not found" }));
+          const links =
+            yield* sql`SELECT 1 FROM oauthClientResource WHERE resourceId = ${identifier} LIMIT 1`;
+          if (links.length)
+            return yield* Effect.fail(
+              new APIError("CONFLICT", {
+                message: "Remove Client access before deleting this Resource",
+              }),
+            );
+          yield* sql`DELETE FROM oauthResource WHERE identifier = ${identifier}`;
+          return { deleted: true };
+        }),
+      );
+    }),
+    setAccess: Effect.fn("Resources.setAccess")(function* (
+      clientId: string,
+      identifiers: readonly string[],
+    ) {
+      return yield* commit(
+        Effect.gen(function* () {
+          const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
+          if (!clients.length)
+            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+          yield* validateSelection(identifiers);
+          const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
+          for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
+            yield* cleanup(clientId, identifier);
+            yield* sql`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
+          }
+          for (const identifier of identifiers.filter((id) => !previous.includes(id)))
+            yield* sql`INSERT INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES (${randomUUID()}, ${clientId}, ${identifier}, ${Date.now()})`;
+          yield* syncClient(clientId);
+          return yield* accessForClient(clientId);
+        }),
+      );
+    }),
   };
 }

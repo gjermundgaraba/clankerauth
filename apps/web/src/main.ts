@@ -85,13 +85,8 @@ function setup() {
             },
           })
           .pipe(
-            Effect.matchEffect({
-              onFailure: (error) =>
-                error._tag === "Conflict"
-                  ? Effect.sync(() => location.replace("/login"))
-                  : Effect.fail(error),
-              onSuccess: () => Effect.sync(() => location.replace("/login?setup=complete")),
-            }),
+            Effect.tap(() => Effect.sync(() => location.replace("/login?setup=complete"))),
+            Effect.catchTag("Conflict", () => Effect.sync(() => location.replace("/login"))),
           ),
       );
     });
@@ -192,6 +187,25 @@ function credentials(value: typeof ClientCredentials.Type) {
   document.querySelector("#credentials")!.scrollIntoView({ behavior: "smooth" });
 }
 
+// The write has already succeeded. A failed read must never invite replaying it.
+async function refreshDashboard() {
+  try {
+    await dashboard();
+  } catch {
+    // Access-removal confirmations must not use the old listing after a write.
+    document.querySelector<HTMLFieldSetElement>("#dashboard-mutations")!.disabled = true;
+    message("Saved, but the dashboard could not refresh.");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "secondary";
+    retry.textContent = "Retry refresh";
+    retry.addEventListener("click", () => {
+      void submit(refreshDashboard);
+    });
+    document.querySelector("#message")!.append(" ", retry);
+  }
+}
+
 async function dashboard() {
   const data = await request(api.clients.list());
   const allowed = (clientId: string) =>
@@ -213,6 +227,7 @@ async function dashboard() {
     <div class="issuer"><span class="dot"></span><span>Canonical issuer</span><code>${escape(data.issuer)}</code></div>
     <p id="message" role="alert" tabindex="-1"></p>
     <section id="credentials" class="card hidden" aria-live="polite"></section>
+    <fieldset id="dashboard-mutations" aria-label="Clients and Resources">
     <div class="columns dashboard-section"><section><h2>Resources <span class="count">${data.resources.length}</span></h2><p class="muted">Protected APIs and MCP servers, and their available scopes.</p>
     ${
       data.resources.length
@@ -253,7 +268,7 @@ async function dashboard() {
             .join("")
         : '<div class="empty"><h3>No Clients registered</h3><p>Register a Client with an exact redirect URI and one or more Resources.</p></div>'
     }
-    </div></section><section class="card registration"><p class="eyebrow">EXPLICIT REGISTRATION</p><h2>Register client</h2>${data.resources.length ? "" : '<p class="help">Add your first Resource before registering a Client.</p>'}<form id="register"><fieldset ${data.resources.length ? "" : "disabled"}><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (select at least one)</legend>${choices([])}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Dynamic registration is disabled. Client access follows each Resource’s current and future scopes.</p></form></section></div>`;
+    </div></section><section class="card registration"><p class="eyebrow">EXPLICIT REGISTRATION</p><h2>Register client</h2>${data.resources.length ? "" : '<p class="help">Add your first Resource before registering a Client.</p>'}<form id="register"><fieldset ${data.resources.length ? "" : "disabled"}><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (select at least one)</legend>${choices([])}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Dynamic registration is disabled. Client access follows each Resource’s current and future scopes.</p></form></section></div></fieldset>`;
   renderCredentials();
   document.querySelector("#logout")!.addEventListener("click", () => {
     void submit(async () => {
@@ -280,11 +295,8 @@ async function dashboard() {
         }),
       );
       form.reset();
-      try {
-        await dashboard();
-      } finally {
-        credentials(result);
-      }
+      credentials(result);
+      await refreshDashboard();
     });
   });
   const resourceForm = document.querySelector<HTMLFormElement>("#resource-create")!;
@@ -297,7 +309,8 @@ async function dashboard() {
           payload: { identifier: textField(fields, "identifier"), ...resourceFields(fields) },
         }),
       );
-      await dashboard();
+      resourceForm.reset();
+      await refreshDashboard();
     });
   });
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]")) {
@@ -312,7 +325,7 @@ async function dashboard() {
             },
           }),
         );
-        await dashboard();
+        await refreshDashboard();
       });
     });
   }
@@ -332,7 +345,7 @@ async function dashboard() {
         return;
       void submit(async () => {
         await request(api.clients.access({ payload: { client_id, resources } }));
-        await dashboard();
+        await refreshDashboard();
       });
     });
   }
@@ -356,12 +369,12 @@ async function dashboard() {
           await request(
             api.resources.delete({ payload: { identifier: button.dataset.resourceDelete } }),
           );
-          await dashboard();
+          await refreshDashboard();
         } else if (button.dataset.delete) {
           await request(api.clients.delete({ payload: { client_id: button.dataset.delete } }));
           pendingCredentials.delete(button.dataset.delete);
           renderCredentials();
-          await dashboard();
+          await refreshDashboard();
         } else if (button.dataset.rotate) {
           credentials(
             await request(api.clients.rotate({ payload: { client_id: button.dataset.rotate } })),

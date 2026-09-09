@@ -2,7 +2,7 @@
 
 A single-instance, self-hosted identity and OAuth authorization server for private-network apps. Local password login, first-run web account creation, explicit client registration, signed consent, S256 PKCE, and audience-bound access tokens. No external identity provider, open signup, dynamic registration, organizations, or API keys.
 
-Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth and `@better-auth/oauth-provider` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles the shared typed HTTP API, configuration/schema boundaries and process resource lifetime. SQLite via the provider-supported better-sqlite3 12 line owns all persistent auth state.
+Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth and `@better-auth/oauth-provider` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles the shared typed HTTP API, configuration/schema boundaries, database transactions and process resource lifetime. `@effect/sql-sqlite-node` **4.0.0-rc.112** uses Node’s built-in SQLite for all persistent auth state; Better Auth shares that connection through a Kysely bridge.
 
 ## Develop locally
 
@@ -24,6 +24,7 @@ cp .env.example .env
 chmod 600 .env
 # Edit .env: set BETTER_AUTH_SECRET to output from `openssl rand -hex 32`.
 # Choose the canonical URL before issuing any tokens.
+pnpm --filter @clankerauth/web exec playwright install chromium
 pnpm ready
 pnpm start
 ```
@@ -184,6 +185,14 @@ Open the configured HTTPS origin and create the owner account, then sign in and 
 **Password recovery:** there is intentionally no forgotten-password flow, recovery endpoint or administration command. Keep the owner password in a password manager. Losing both the database and its secret requires restoring a matched backup or provisioning a new instance and re-enrolling all clients.
 
 ## Verification and limits
+
+Install the browser used by the dashboard regression fixture once after dependency installation:
+
+```sh
+pnpm --filter @clankerauth/web exec playwright install chromium
+```
+
+The web workspace's `test` command runs Chromium against built assets with intercepted API responses; it never uses a real account or database. It covers committed mutations followed by failed dashboard reads, read-only refresh retries, form recovery and one-time credentials. Run it after building with `pnpm --filter @clankerauth/web test`. CI installs Chromium and its system dependencies before `pnpm ready`.
 
 `pnpm ready` runs Vite+ formatting/type-aware lint/TypeScript checks, both production workspace builds, and real SQLite integration tests. Tests cover dashboard resource persistence and validation, multiple-resource client access, resource-specific consent, targeted access removal, automatic migrations, first-run setup, built workspace asset serving, owner login/logout, signup closure, legacy non-owner session/grant denial, CSRF, discovery, signed consent and login continuation, PKCE/redirect failures, audience isolation, JWT expiry, persisted keys/sessions, controlled concurrent refresh/revocation/deletion, cross-client revocation isolation, signing-failure draining, disconnected-client shutdown and atomic account creation. Chromium verification covers login/admin/consent against the service; delayed-response browser fixtures additionally check duplicate dashboard mutations and success/error control recovery without touching real registrations.
 

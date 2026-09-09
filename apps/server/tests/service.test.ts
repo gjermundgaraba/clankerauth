@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { setImmediate } from "node:timers/promises";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -22,6 +23,20 @@ function createApplication() {
   const app = application(service);
   applications.push(app);
   return app;
+}
+async function stopCurrentGeneration() {
+  const results = await Promise.allSettled(
+    applications.splice(0).map(async (app) => app.dispose()),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  try {
+    await service.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length) throw new AggregateError(failures, "Failed to stop service generation");
 }
 let directory: string;
 let settings: Settings;
@@ -167,16 +182,18 @@ beforeEach(async () => {
     host: "127.0.0.1",
     port: 3000,
   });
-  service = openAuth(settings);
+  service = await openAuth(settings);
   await initialize(service);
   handle = createApplication();
   cookies = new Map();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(applications.map((app) => app.dispose()));
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  try {
+    await stopCurrentGeneration();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 async function setupOwner() {
@@ -185,8 +202,8 @@ async function setupOwner() {
 }
 
 async function restart() {
-  await service.close();
-  service = openAuth(settings);
+  await stopCurrentGeneration();
+  service = await openAuth(settings);
   await initialize(service);
   handle = createApplication();
 }
@@ -210,19 +227,23 @@ describe("first-run setup", () => {
     expect(created.status, await created.clone().text()).toBe(201);
     expect(await created.json()).toEqual({ created: true });
     expect(created.headers.getSetCookie()).toEqual([]);
-    expect(service.db.prepare("SELECT count(*) AS n FROM session").get()).toEqual({ n: 0 });
-    expect(service.db.prepare("SELECT name, email, emailVerified FROM user").get()).toEqual({
+    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM session`))[0]).toEqual({
+      n: 0,
+    });
+    expect(
+      (await Effect.runPromise(service.sql`SELECT name, email, emailVerified FROM user`))[0],
+    ).toEqual({
       name: "Owner",
       email,
       emailVerified: 0,
     });
-    const owner = service.owner();
+    const owner = await Effect.runPromise(service.owner());
     expect(owner).toBeTypeOf("string");
     expect(await (await request("/api/setup")).json()).toEqual({ required: false });
     expect((await request("/admin/clients")).status).toBe(401);
     expect((await login()).status).toBe(200);
     await restart();
-    expect(service.owner()).toBe(owner);
+    expect(await Effect.runPromise(service.owner())).toBe(owner);
     expect(await (await request("/api/setup")).json()).toEqual({ required: false });
     expect((await request("/admin/clients")).status).toBe(200);
     expect((await request("/api/setup", { email, password })).status).toBe(409);
@@ -237,6 +258,7 @@ describe("first-run setup", () => {
       { email: ".owner@example.internal", password },
       { email: "owner..name@example.internal", password },
       { email: "owner@example.123", password },
+      { email: `${"a".repeat(238)}@example.internal`, password },
       { email, password: "x".repeat(7) },
       { email, password: "x".repeat(129) },
       { email: 42, password },
@@ -278,9 +300,27 @@ describe("first-run setup", () => {
       expect(response.status).toBe(400);
       expect(await response.text()).not.toContain(password);
     }
-    expect(service.db.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 0 });
-    expect(service.owner()).toBeUndefined();
+    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM user`))[0]).toEqual({
+      n: 0,
+    });
+    expect(await Effect.runPromise(service.owner())).toBeUndefined();
     await setupOwner();
+  });
+
+  test.each([
+    "  Owner+Tag@Example.Internal  ",
+    "owner'name@example.internal",
+    `${"a".repeat(237)}@example.internal`,
+  ])("setup email %s remains usable for provider login", async (input) => {
+    const response = await request("/api/setup", { email: input, password });
+    expect(response.status).toBe(201);
+    const normalized = input.trim().toLowerCase();
+    expect((await Effect.runPromise(service.sql`SELECT email FROM user`))[0]).toEqual({
+      email: normalized,
+    });
+    expect((await request("/api/auth/sign-in/email", { email: normalized, password })).status).toBe(
+      200,
+    );
   });
 
   test("simultaneous submissions create exactly one owner", async () => {
@@ -290,37 +330,43 @@ describe("first-run setup", () => {
     ]);
     expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([201, 409]);
     for (const table of ["user", "account", "serviceOwner"])
-      expect(service.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 1 });
-    expect(service.db.prepare("SELECT count(*) AS n FROM session").get()).toEqual({ n: 0 });
+      expect(
+        (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${service.sql(table)}`))[0],
+      ).toEqual({ n: 1 });
+    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM session`))[0]).toEqual({
+      n: 0,
+    });
   });
 
   test("a failed owner-marker insert rolls back all account writes and permits retry", async () => {
-    service.db.exec(`CREATE TRIGGER fail_setup BEFORE INSERT ON serviceOwner
-      BEGIN SELECT RAISE(ABORT, 'Injected owner-marker failure'); END`);
+    await Effect.runPromise(
+      service.sql`CREATE TRIGGER fail_setup BEFORE INSERT ON serviceOwner
+      BEGIN SELECT RAISE(ABORT, 'Injected owner-marker failure'); END`,
+    );
     const failed = await request("/api/setup", { email, password });
     expect(failed.status).toBe(500);
     const error = await failed.text();
     expect(error).not.toContain(password);
     expect(error).not.toContain("Injected owner-marker failure");
     for (const table of ["user", "account", "serviceOwner", "session"])
-      expect(service.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+      expect(
+        (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${service.sql(table)}`))[0],
+      ).toEqual({ n: 0 });
     expect(await (await request("/api/setup")).json()).toEqual({ required: true });
-    service.db.exec("DROP TRIGGER fail_setup");
+    await Effect.runPromise(service.sql`DROP TRIGGER fail_setup`);
     await setupOwner();
     expect((await login()).status).toBe(200);
   });
 
   test("startup rejects an existing account without an owner marker", async () => {
-    service.db
-      .prepare(
-        "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)",
-      )
-      .run("orphan", "Orphan", email, Date.now(), Date.now());
-    await service.close();
-    service = openAuth(settings);
+    await Effect.runPromise(
+      service.sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (${"orphan"}, ${"Orphan"}, ${email}, 0, ${Date.now()}, ${Date.now()})`,
+    );
+    await stopCurrentGeneration();
+    service = await openAuth(settings);
     await expect(initialize(service)).rejects.toThrow();
-    expect(service.db.prepare("SELECT id FROM user").all()).toEqual([{ id: "orphan" }]);
-    expect(service.owner()).toBeUndefined();
+    expect(await Effect.runPromise(service.sql`SELECT id FROM user`)).toEqual([{ id: "orphan" }]);
+    expect(await Effect.runPromise(service.owner())).toBeUndefined();
   });
 });
 
@@ -334,7 +380,7 @@ describe("owner boundary", () => {
       work = service.exclusive(async () => {
         admitted.resolve();
         await release.promise;
-        return service.db.prepare("SELECT 1 AS value").get();
+        return (await Effect.runPromise(service.sql`SELECT 1 AS value`))[0];
       });
       void work.then(() => outgoing.end());
     });
@@ -351,13 +397,13 @@ describe("owner boundary", () => {
     try {
       await expect(service.exclusive(async () => 0)).rejects.toThrow("Service stopping");
       await setImmediate();
-      expect(service.db.open).toBe(true);
+      expect(await Effect.runPromise(service.sql`SELECT 1 AS value`)).toEqual([{ value: 1 }]);
     } finally {
       release.resolve();
       await closing;
     }
     expect(await work).toEqual({ value: 1 });
-    expect(service.db.open).toBe(false);
+    await expect(Effect.runPromise(service.sql`SELECT 1 AS value`)).rejects.toThrow();
     expect((await request("/healthz")).status).toBe(503);
   });
 
@@ -426,7 +472,7 @@ describe("owner boundary", () => {
     expect(signedIn.headers.getSetCookie().join(";")).toContain("HttpOnly");
     const session = await request("/api/auth/get-session");
     expect(session.status).toBe(200);
-    expect((await session.json()).user.id).toBe(service.owner());
+    expect((await session.json()).user.id).toBe(await Effect.runPromise(service.owner()));
     expect(session.headers.has("set-auth-jwt")).toBe(false);
     expect((await request("/admin/clients")).status).toBe(200);
     expect((await request("/admin/clients", {}, { origin: "https://evil.example" })).status).toBe(
@@ -447,20 +493,17 @@ describe("owner boundary", () => {
 
   test("existing non-owner credentials, sessions, codes and grants cannot convey authority", async () => {
     await login();
-    const ownerId = service.owner()!;
+    const ownerId = await Effect.runPromise(service.owner());
+    if (ownerId === undefined) throw new Error("Missing test owner");
     const app = await client(resourceA, true);
-    service.db
-      .prepare(
-        "INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)",
-      )
-      .run("other", "Other", "other@example.internal", Date.now(), Date.now());
-    service.db
-      .prepare(
-        "INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) SELECT 'other-account', 'other', providerId, 'other', password, createdAt, updatedAt FROM account WHERE userId = ? AND providerId = 'credential'",
-      )
-      .run(ownerId);
+    await Effect.runPromise(
+      service.sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (${"other"}, ${"Other"}, ${"other@example.internal"}, 0, ${Date.now()}, ${Date.now()})`,
+    );
+    await Effect.runPromise(
+      service.sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt) SELECT 'other-account', 'other', providerId, 'other', password, createdAt, updatedAt FROM account WHERE userId = ${ownerId} AND providerId = 'credential'`,
+    );
     // Seed genuinely issued legacy state, then make that identity ineligible.
-    service.db.prepare("UPDATE serviceOwner SET userId = 'other'").run();
+    await Effect.runPromise(service.sql`UPDATE serviceOwner SET userId = 'other'`);
     cookies.clear();
     expect(
       (await request("/api/auth/sign-in/email", { email: "other@example.internal", password }))
@@ -492,8 +535,10 @@ describe("owner boundary", () => {
         })
       ).status,
     ).toBe(200);
-    service.db.prepare("UPDATE serviceOwner SET userId = ?").run(ownerId);
-    const before = service.db.prepare("SELECT count(*) AS n FROM oauthRefreshToken").get();
+    await Effect.runPromise(service.sql`UPDATE serviceOwner SET userId = ${ownerId}`);
+    const before = (
+      await Effect.runPromise(service.sql`SELECT count(*) AS n FROM oauthRefreshToken`)
+    )[0];
     expect(
       (
         await request(
@@ -578,7 +623,9 @@ describe("owner boundary", () => {
       expect(introspection.status).toBe(200);
       expect(await introspection.json()).toEqual({ active: false });
     }
-    expect(service.db.prepare("SELECT count(*) AS n FROM oauthRefreshToken").get()).toEqual(before);
+    expect(
+      (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM oauthRefreshToken`))[0],
+    ).toEqual(before);
     // A denied legacy cookie must not block sign-out and subsequent owner login.
     expect((await request("/api/auth/sign-out", {})).status).toBe(200);
     const sessionless = await request(
@@ -682,9 +729,11 @@ describe("OAuth boundaries and lifecycle", () => {
       const winner = await responses[0]!.json();
       expect((await refresh(winner.refresh_token)).status).toBe(400);
       expect(
-        service.db
-          .prepare("SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = ?")
-          .get(app.client_id),
+        (
+          await Effect.runPromise(
+            service.sql`SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = ${app.client_id}`,
+          )
+        )[0],
       ).toEqual({ n: 0 });
       const otherRefresh = await request(
         "/api/auth/oauth2/token",
@@ -752,9 +801,11 @@ describe("OAuth boundaries and lifecycle", () => {
     expect(escaped).toBe(false);
     expect(responses.map((response) => response.status)).toEqual([500, 400]);
     expect(
-      service.db
-        .prepare("SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = ?")
-        .get(app.client_id),
+      (
+        await Effect.runPromise(
+          service.sql`SELECT count(*) AS n FROM oauthRefreshToken WHERE clientId = ${app.client_id}`,
+        )
+      )[0],
     ).toEqual({ n: 0 });
     signing.mockRestore();
     expect((await tokens(app.client_id)).access_token).toBeTypeOf("string");
@@ -951,7 +1002,7 @@ describe("OAuth boundaries and lifecycle", () => {
             requiredScopes: [scope],
           },
         );
-      expect((await verify("okf:read")).sub).toBe(service.owner());
+      expect((await verify("okf:read")).sub).toBe(await Effect.runPromise(service.owner()));
       await expect(verify("okf:write")).rejects.toThrow();
       await expect(verify("okf:read", resourceB)).rejects.toThrow();
     } finally {
@@ -985,10 +1036,7 @@ describe("OAuth boundaries and lifecycle", () => {
       jwtVerify(tokenA.access_token, keys, { currentDate: new Date(Date.now() + 301000) }),
     ).rejects.toThrow();
     await expect(jwtVerify(tokenB.access_token, keys, { audience: resourceA })).rejects.toThrow();
-    service.db.close();
-    service = openAuth(settings);
-    await initialize(service);
-    handle = createApplication();
+    await restart();
     expect(await (await request("/api/auth/jwks")).json()).toEqual(jwks);
     expect((await request("/admin/clients")).status).toBe(200);
     const refresh = await request(
@@ -1025,11 +1073,9 @@ describe("OAuth boundaries and lifecycle", () => {
     const rotated = await refresh(a.client_id, originalA.refresh_token, resourceA);
     expect(rotated.status).toBe(200);
     const replacementA = await rotated.json();
-    const before = service.db
-      .prepare(
-        "SELECT clientId, count(*) AS n FROM oauthRefreshToken GROUP BY clientId ORDER BY clientId",
-      )
-      .all();
+    const before = await Effect.runPromise(
+      service.sql`SELECT clientId, count(*) AS n FROM oauthRefreshToken GROUP BY clientId ORDER BY clientId`,
+    );
     const attack = await request(
       "/api/auth/oauth2/revoke",
       {
@@ -1041,11 +1087,9 @@ describe("OAuth boundaries and lifecycle", () => {
     );
     // A mismatched client is a no-op, before any family invalidation occurs.
     expect(
-      service.db
-        .prepare(
-          "SELECT clientId, count(*) AS n FROM oauthRefreshToken GROUP BY clientId ORDER BY clientId",
-        )
-        .all(),
+      await Effect.runPromise(
+        service.sql`SELECT clientId, count(*) AS n FROM oauthRefreshToken GROUP BY clientId ORDER BY clientId`,
+      ),
     ).toEqual(before);
     expect(attack.status).toBe(200);
     expect((await refresh(b.client_id, originalB.refresh_token, resourceB)).status).toBe(200);
@@ -1167,9 +1211,11 @@ describe("dashboard resources and client access", () => {
     ).toBe(403);
     expect((await listing()).resources).toEqual([]);
     const context = await service.auth.$context;
+    const ownerId = await Effect.runPromise(service.owner());
+    if (ownerId === undefined) throw new Error("Missing test owner");
     await context.adapter.update({
       model: "session",
-      where: [{ field: "userId", value: service.owner()! }],
+      where: [{ field: "userId", value: ownerId }],
       update: { createdAt: new Date(Date.now() - 16 * 60_000) },
     });
     expect((await request("/admin/resources", valid)).status).toBe(403);
@@ -1198,6 +1244,30 @@ describe("dashboard resources and client access", () => {
     expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(200);
   });
 
+  test("filtered access preserves ordering and isolates clients sharing a resource", async () => {
+    const first = await client();
+    const second = await client();
+    const linked = await access(first.client_id, [resourceB, resourceA]);
+    expect(linked.status).toBe(200);
+    expect((await linked.json()).clientAccess).toEqual([
+      { client_id: first.client_id, resource: resourceA },
+      { client_id: first.client_id, resource: resourceB },
+    ]);
+    expect(await Effect.runPromise(service.resources.hasAccess(first.client_id, resourceB))).toBe(
+      true,
+    );
+    expect(await Effect.runPromise(service.resources.hasAccess(second.client_id, resourceB))).toBe(
+      false,
+    );
+    expect(await Effect.runPromise(service.resources.hasAccess("missing", resourceA))).toBe(false);
+    expect((await access(first.client_id, [])).status).toBe(200);
+    expect((await listing()).clientAccess).toEqual([
+      { client_id: second.client_id, resource: resourceA },
+    ]);
+    expect((await request("/admin/resources/delete", { identifier: resourceA })).status).toBe(409);
+    expect((await request("/admin/resources/delete", { identifier: resourceB })).status).toBe(200);
+  });
+
   test("the same scope label has independent consent on each resource", async () => {
     const app = await client();
     expect((await updateResource(resourceB, ["okf:read", "okf:write"])).status).toBe(200);
@@ -1217,11 +1287,9 @@ describe("dashboard resources and client access", () => {
         })
       ).status,
     ).toBe(200);
-    const consents = service.db
-      .prepare(
-        "SELECT referenceId, resources FROM oauthConsent WHERE clientId = ? ORDER BY referenceId",
-      )
-      .all(app.client_id);
+    const consents = await Effect.runPromise(
+      service.sql`SELECT referenceId, resources FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
+    );
     expect(consents).toEqual(
       [
         { referenceId: `resource:${resourceA}`, resources: JSON.stringify([resourceA]) },
@@ -1313,8 +1381,8 @@ describe("dashboard resources and client access", () => {
     const metadataBefore = await (
       await request("/.well-known/oauth-authorization-server/api/auth")
     ).json();
-    service.db.exec(
-      "CREATE TRIGGER reject_scope_update BEFORE UPDATE OF scopes ON oauthClient BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END",
+    await Effect.runPromise(
+      service.sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF scopes ON oauthClient BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
     );
     try {
       expect((await updateResource(resourceA, ["okf:read", "new:scope"])).status).toBe(500);
@@ -1324,7 +1392,7 @@ describe("dashboard resources and client access", () => {
       ).json();
       expect(metadataAfter.scopes_supported).toEqual(metadataBefore.scopes_supported);
     } finally {
-      service.db.exec("DROP TRIGGER reject_scope_update");
+      await Effect.runPromise(service.sql`DROP TRIGGER reject_scope_update`);
     }
     expect((await tokens(app.client_id)).access_token).toBeTypeOf("string");
   });
