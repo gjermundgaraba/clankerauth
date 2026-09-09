@@ -109,7 +109,7 @@ try {
     await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)
   ).json();
   assert.equal(metadata.issuer, `${baseURL}/api/auth`);
-  assert.equal(metadata.client_id_metadata_document_supported, true);
+  assert.equal(Object.hasOwn(metadata, "client_id_metadata_document_supported"), false);
   assert.equal(metadata.registration_endpoint, `${baseURL}/api/auth/oauth2/register`);
   const registration = await fetch(metadata.registration_endpoint, {
     method: "POST",
@@ -151,7 +151,7 @@ try {
   });
   assert.equal(repeatedSetup.status, 409);
   console.log(
-    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, CIMD discovery, DCR and persisted block policy, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
+    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, DCR-only discovery and persisted block policy, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
   );
 } finally {
   await stop();
