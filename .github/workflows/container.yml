@@ -1,0 +1,29 @@
+name: Publish server image
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-server-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Build and push amd64 image
+        run: |
+          docker build --platform linux/amd64 --tag "${IMAGE}:${GITHUB_SHA}" .
+          docker push "${IMAGE}:${GITHUB_SHA}"
