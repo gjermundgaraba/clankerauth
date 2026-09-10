@@ -107,6 +107,9 @@ settings:
 
 catalogs:
   default:
+    '@better-auth/cimd':
+      specifier: 1.7.3
+      version: 1.7.3
     '@better-auth/core':
       specifier: 1.7.3
       version: 1.7.3
@@ -172,6 +175,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@better-auth/cimd':
+        specifier: 'catalog:'
+        version: 1.7.3(@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/oauth-provider@1.7.3(patch_hash=5478efe3d615d33350dfa1fc2df6e2ee77019216d1a1ee5da04fd493d56e4d42)(@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.3(vitest@4.1.11))(better-call@1.4.0(zod@4.5.4)))(better-auth@1.7.3(vitest@4.1.11))(better-call@1.4.0(zod@4.5.4))
       '@better-auth/core':
         specifier: 'catalog:'
         version: 1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3)
@@ -266,6 +272,14 @@ packages:
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
+
+  '@better-auth/cimd@1.7.3':
+    resolution: {integrity: sha512-+NM6GUS/hU+syWRHuyN0UM360/+RBHC7mUFI/loGns+M2kwCR2AQNQLM3Kzp4NVp1v2POtUKrMjOZTLXKbXrjQ==}
+    peerDependencies:
+      '@better-auth/core': ^1.7.3
+      '@better-auth/oauth-provider': ^1.7.3
+      better-auth: ^1.7.3
+      better-call: 1.4.0
 
   '@better-auth/core@1.7.3':
     resolution: {integrity: sha512-JdP7lOkyE83jgjn7RilJj1XvZ7n2JjRsErKJuaXchjyuNo6cf1iVd3GtbhAtiUyJJkWdk8yL+LaUBKT80H0zLA==}
@@ -1676,6 +1690,13 @@ snapshots:
   '@babel/helper-validator-identifier@7.29.7': {}
 
   '@babel/runtime@7.29.7': {}
+
+  '@better-auth/cimd@1.7.3(@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/oauth-provider@1.7.3(patch_hash=5478efe3d615d33350dfa1fc2df6e2ee77019216d1a1ee5da04fd493d56e4d42)(@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.3(vitest@4.1.11))(better-call@1.4.0(zod@4.5.4)))(better-auth@1.7.3(vitest@4.1.11))(better-call@1.4.0(zod@4.5.4))':
+    dependencies:
+      '@better-auth/core': 1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3)
+      '@better-auth/oauth-provider': 1.7.3(patch_hash=5478efe3d615d33350dfa1fc2df6e2ee77019216d1a1ee5da04fd493d56e4d42)(@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.7.3(vitest@4.1.11))(better-call@1.4.0(zod@4.5.4))
+      better-auth: 1.7.3(vitest@4.1.11)
+      better-call: 1.4.0(zod@4.5.4)
 
   '@better-auth/core@1.7.3(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-call@1.4.0(zod@4.5.4))(jose@6.2.12)(kysely@0.29.5)(nanostores@1.5.3)':
     dependencies:

@@ -12,6 +12,7 @@
     "dev": "cd ../.. && node --watch --import ./scripts/dev-env.mjs apps/server/src/main.ts"
   },
   "dependencies": {
+    "@better-auth/cimd": "catalog:",
     "@better-auth/core": "catalog:",
     "@better-auth/oauth-provider": "catalog:",
     "@clankerauth/api": "workspace:*",

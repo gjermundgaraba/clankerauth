@@ -10,6 +10,11 @@ assert.ok(
   process.argv[2] && process.argv[3],
   "Usage: pnpm test:interop <clanker-okf checkout> <MCP SDK fixture directory>",
 );
+assert.equal(
+  typeof globalThis.Temporal,
+  "object",
+  "clanker-okf requires a Temporal-enabled Node runtime; run this script with that Node binary",
+);
 const okf = resolve(process.argv[2]);
 const sdk = resolve(process.argv[3]);
 const auth = fileURLToPath(new URL("../../..", import.meta.url));
@@ -18,8 +23,8 @@ const child = spawn(
   [
     "--import",
     join(sdk, "node_modules/tsx/dist/loader.mjs"),
-    join(okf, "packages/cli/tests/oauth-interop.mjs"),
-    auth,
+    join(auth, "apps/server/scripts/oauth-interop.mjs"),
+    okf,
     sdk,
   ],
   { cwd: okf, stdio: "inherit" },
