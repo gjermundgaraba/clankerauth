@@ -117,9 +117,6 @@ describe("API integration", () => {
         };
         expect(yield* api.resources.update({ payload: updatedResource })).toEqual(updatedResource);
         expect(
-          (yield* Effect.flip(api.resources.delete({ payload: { identifier: resource } })))._tag,
-        ).toBe("Conflict");
-        expect(
           yield* api.clients.access({ payload: { client_id: created.client_id, resources: [] } }),
         ).toEqual({ clientAccess: [] });
         expect(
@@ -140,6 +137,8 @@ describe("API integration", () => {
           yield* api.clients.block({ payload: { client_id: created.client_id, blocked: true } }),
         ).toEqual({ blocked: true });
         expect((yield* api.clients.list()).clients[0]?.blocked).toBe(true);
+        // Blocking issuance must not block the owner's provider-backed resource maintenance.
+        expect(yield* api.resources.update({ payload: updatedResource })).toEqual(updatedResource);
         expect(
           yield* api.clients.block({ payload: { client_id: created.client_id, blocked: false } }),
         ).toEqual({ blocked: false });
@@ -268,6 +267,59 @@ describe("API integration", () => {
       ).toBe("Unauthorized");
       expect((yield* Effect.flip(api.clients.revoke({ payload: { client_id } })))._tag).toBe(
         "Unauthorized",
+      );
+    }).pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, appFetch),
+      Effect.runPromise,
+    );
+  });
+
+  test("client administration returns 404 for missing clients and 500 for failed writes", async () => {
+    await Effect.gen(function* () {
+      const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
+      yield* api.setup.create({ payload: { email, password } });
+      const login = yield* Effect.promise(() =>
+        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }),
+      );
+      expect(login.status).toBe(200);
+      cookie = login.headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; ");
+      const missing = { client_id: "missing-client" };
+      expect((yield* Effect.flip(api.clients.revoke({ payload: missing })))._tag).toBe("NotFound");
+      for (const blocked of [true, false]) {
+        expect(
+          (yield* Effect.flip(api.clients.block({ payload: { ...missing, blocked } })))._tag,
+        ).toBe("NotFound");
+      }
+      const client = yield* api.clients.create({
+        payload: {
+          name: "Failure test",
+          redirect: "http://127.0.0.1:9876/callback",
+          resources: [],
+          native: true,
+          confidential: false,
+        },
+      });
+      const client_id = client.client_id;
+      yield* service.sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
+      yield* service.sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
+      expect((yield* Effect.flip(api.clients.revoke({ payload: { client_id } })))._tag).toBe(
+        "InternalServerError",
+      );
+      expect(
+        (yield* Effect.flip(api.clients.block({ payload: { client_id, blocked: true } })))._tag,
+      ).toBe("InternalServerError");
+      // Failed revocation also rolls back the disabled flag written by block.
+      expect((yield* api.clients.list()).clients[0]?.blocked).toBe(false);
+      expect(yield* service.sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`).toEqual(
+        [{ id: "failure-consent" }],
       );
     }).pipe(
       Effect.provide(FetchHttpClient.layer),

@@ -2,7 +2,7 @@ import { fetchClientMetadataResource as secureFetch } from "@better-auth/cimd/no
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 
 // The secure Node transport pins validated DNS answers, but its initial DNS
-// lookup cannot be aborted. Release the service's execution lane on cancellation
+// lookup cannot be aborted. Reject the calling request promptly on cancellation
 // while retaining capacity for every underlying operation until it settles.
 export function createAbortAwareTransport(
   transport: ClientMetadataResourceFetch,

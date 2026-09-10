@@ -14,10 +14,10 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.3.1
   vite-plus: 0.3.1
   playwright: 1.62.1
-  "@effect/sql-sqlite-node": 4.0.0-rc.112
   kysely: 0.29.5
   "@better-auth/cimd": 1.7.3
   "@better-auth/core": 1.7.3
+  "@better-auth/kysely-adapter": 1.7.3
 
 overrides:
   vite@*: "catalog:"

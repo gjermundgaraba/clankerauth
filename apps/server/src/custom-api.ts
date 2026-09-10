@@ -69,13 +69,21 @@ export function customApi(service: Service) {
       .handle("rotate", ({ request, payload }) =>
         admin.rotate(new Headers(request.headers), payload),
       )
-      .handle("access", ({ payload }) => admin.access(payload)),
+      .handle("access", ({ payload, request }) =>
+        admin.access(new Headers(request.headers), payload),
+      ),
   );
   const resources = HttpApiBuilder.group(Api, "resources", (handlers) =>
     handlers
-      .handle("create", ({ payload }) => admin.createResource(payload))
-      .handle("update", ({ payload }) => admin.updateResource(payload))
-      .handle("delete", ({ payload }) => admin.deleteResource(payload)),
+      .handle("create", ({ payload, request }) =>
+        admin.createResource(new Headers(request.headers), payload),
+      )
+      .handle("update", ({ payload, request }) =>
+        admin.updateResource(new Headers(request.headers), payload),
+      )
+      .handle("delete", ({ payload, request }) =>
+        admin.deleteResource(new Headers(request.headers), payload),
+      ),
   );
   const validation = HttpApiMiddleware.layerSchemaErrorTransform(ApiValidation, (error) =>
     Effect.fail(

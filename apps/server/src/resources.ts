@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { normalizeError, type Sql } from "./database.ts";
 import { APIError } from "better-auth/api";
+import type { Auth } from "better-auth";
+import type { oauthProvider } from "@better-auth/oauth-provider";
 import { ClientAccess, Resource } from "@clankerauth/api";
 
 export const protocolScopes = ["openid", "profile", "email", "offline_access"];
@@ -11,27 +12,37 @@ const resourceRow = Schema.decodeUnknownEffect(
   Schema.Struct({ identifier: Schema.String, name: Schema.String, allowedScopes: Schema.String }),
 );
 const accessRows = Schema.decodeUnknownEffect(Schema.Array(ClientAccess));
-const credentialRows = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ id: Schema.String, scopes: Schema.String })),
-);
-const codeRows = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ id: Schema.String, value: Schema.String })),
-);
-const decodeCode = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      type: Schema.Literal("authorization_code"),
-      query: Schema.Struct({ client_id: Schema.String, scope: Schema.optional(Schema.String) }),
-      referenceId: Schema.String,
-    }),
-  ),
-);
 type ResourceValue = typeof Resource.Type;
 
-// Callers admit resource operations through Service.exclusive so provider writes
-// cannot interleave with transactions using the same SQLite database.
+type ResourceAuth = {
+  api: Pick<
+    Auth<{ plugins: [ReturnType<typeof oauthProvider>] }>["api"],
+    | "adminCreateOAuthResource"
+    | "adminUpdateOAuthResource"
+    | "adminDeleteOAuthResource"
+    | "adminLinkClientResource"
+    | "adminUnlinkClientResource"
+    | "updateOAuthClient"
+  >;
+};
+const providerCall = <A>(operation: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: operation,
+    catch: normalizeError,
+  });
+const resourceParams = (identifier: string) => ({
+  identifier: encodeURIComponent(identifier),
+});
+const linkParams = (clientId: string, identifier: string) => ({
+  ...resourceParams(identifier),
+  client_id: encodeURIComponent(clientId),
+});
+
+// Provider APIs own their writes and transaction boundaries.
+// Do not hold a separate transaction while calling them on the shared connection.
 export function resourceStore(
-  sql: SqlClient,
+  sql: Sql,
+  getAuth: () => ResourceAuth,
   changed: (scopes: string[], identifiers: string[]) => void,
 ) {
   const decodeResource = Effect.fn("Resources.decode")(function* (value: unknown) {
@@ -101,19 +112,22 @@ export function resourceStore(
       throw new APIError("BAD_REQUEST", { message: "Invalid Resource identifier" });
     }
     if (
-      uri.protocol !== "https:" ||
+      !["http:", "https:"].includes(uri.protocol) ||
       identifier.includes("#") ||
       identifier.includes("?") ||
       uri.username ||
       uri.password
     )
       throw new APIError("BAD_REQUEST", {
-        message: "Resource identifiers must be HTTPS URLs without credentials, query or fragment",
+        message:
+          "Resource identifiers must be HTTP or HTTPS URLs without credentials, query or fragment",
       });
     if (
       !name ||
       !scopes.length ||
-      scopes.some((scope) => !/^[a-z][a-z0-9:-]+$/.test(scope) || protocolScopes.includes(scope))
+      scopes.some(
+        (scope) => !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope) || protocolScopes.includes(scope),
+      )
     )
       throw new APIError("BAD_REQUEST", {
         message: "Resources require a name and nonempty custom scopes",
@@ -128,50 +142,25 @@ export function resourceStore(
           ? error
           : new APIError("BAD_REQUEST", { message: "Invalid Resource" }),
     });
-  const syncClient = Effect.fn("Resources.syncClient")(function* (clientId: string) {
+  const syncClient = Effect.fn("Resources.syncClient")(function* (
+    clientId: string,
+    headers: Headers,
+  ) {
     const links = yield* accessForClient(clientId);
     const scopes = yield* scopesFor(links.map((link) => link.resource));
-    yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
-  });
-  const cleanup = Effect.fn("Resources.cleanup")(function* (
-    clientId: string,
-    identifier: string,
-    removed?: readonly string[],
-  ) {
-    const reference = resourceReference(identifier);
-    const affected = (scopes: readonly string[]) =>
-      !removed || scopes.some((scope) => removed.includes(scope));
-    const consents = yield* credentialRows(
-      yield* sql`SELECT id, scopes FROM oauthConsent WHERE clientId = ${clientId} AND referenceId = ${reference}`,
-    );
-    for (const consent of consents) {
-      if (!removed) yield* sql`DELETE FROM oauthConsent WHERE id = ${consent.id}`;
-      else {
-        const scopes = (yield* decodeScopes(consent.scopes)).filter(
-          (scope) => !removed.includes(scope),
-        );
-        yield* sql`UPDATE oauthConsent SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE id = ${consent.id}`;
-      }
-    }
-    const codes = yield* codeRows(
-      yield* sql`SELECT id, value FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.referenceId') = ${reference} AND json_extract(value, '$.query.client_id') = ${clientId}`,
-    );
-    for (const row of codes) {
-      const value = yield* decodeCode(row.value);
-      if (affected(value.query.scope?.split(" ") ?? []))
-        yield* sql`DELETE FROM verification WHERE id = ${row.id}`;
-    }
-    // Delete dependents before refresh tokens because refreshId is a foreign key.
-    for (const table of ["oauthAccessToken", "oauthRefreshToken"]) {
-      const rows = yield* credentialRows(
-        yield* sql`SELECT id, scopes FROM ${sql(table)} WHERE clientId = ${clientId} AND referenceId = ${reference}`,
+    const unownedClient =
+      yield* sql`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} AND userId IS NULL`;
+    if (unownedClient.length) {
+      // Provider update APIs require ownership even for admins. Unowned clients
+      // need direct persistence of their scope union.
+      yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
+    } else {
+      yield* providerCall(() =>
+        getAuth().api.updateOAuthClient({
+          headers,
+          body: { client_id: clientId, update: { scope: scopes.join(" ") } },
+        }),
       );
-      for (const row of rows)
-        if (affected(yield* decodeScopes(row.scopes))) {
-          if (table === "oauthRefreshToken")
-            yield* sql`DELETE FROM oauthAccessToken WHERE refreshId = ${row.id}`;
-          yield* sql`DELETE FROM ${sql(table)} WHERE id = ${row.id}`;
-        }
     }
   });
   const publish = (catalog: ResourceValue[]) =>
@@ -179,17 +168,9 @@ export function resourceStore(
       [...new Set([...protocolScopes, ...catalog.flatMap((resource) => resource.scopes)])],
       catalog.map((resource) => resource.identifier),
     );
-  const commit = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* () {
-      const committed = yield* sql.withTransaction(
-        Effect.gen(function* () {
-          const result = yield* operation;
-          return { result, catalog: yield* list() };
-        }),
-      );
-      publish(committed.catalog);
-      return committed.result;
-    });
+  const synchronize = Effect.fn("Resources.synchronize")(function* () {
+    publish(yield* list());
+  });
   return {
     list,
     get,
@@ -200,98 +181,101 @@ export function resourceStore(
       return rows.length > 0;
     }),
     scopesFor,
-    synchronize: Effect.fn("Resources.synchronize")(function* () {
-      publish(yield* list());
-    }),
-    create: Effect.fn("Resources.create")(function* (input: ResourceValue) {
+    synchronize,
+    create: Effect.fn("Resources.create")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
-      return yield* commit(
-        Effect.gen(function* () {
-          if (yield* get(resource.identifier))
-            return yield* Effect.fail(
-              new APIError("CONFLICT", { message: "Resource already exists" }),
-            );
-          const now = Date.now();
-          yield* sql`INSERT INTO oauthResource (id, identifier, name, allowedScopes, accessTokenTtl, createdAt, updatedAt) VALUES (${randomUUID()}, ${resource.identifier}, ${resource.name}, ${JSON.stringify([...protocolScopes, ...resource.scopes])}, 300, ${now}, ${now})`;
-          for (const client of yield* Schema.decodeUnknownEffect(
-            Schema.Array(Schema.Struct({ clientId: Schema.String })),
-          )(
-            yield* sql`SELECT clientId FROM clientOnboarding WHERE clientId IN (SELECT clientId FROM oauthClient)`,
-          )) {
-            yield* sql`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES (${randomUUID()}, ${client.clientId}, ${resource.identifier}, ${now})`;
-            yield* syncClient(client.clientId);
-          }
-          return resource;
+      if (yield* get(resource.identifier))
+        return yield* Effect.fail(new APIError("CONFLICT", { message: "Resource already exists" }));
+      yield* providerCall(() =>
+        getAuth().api.adminCreateOAuthResource({
+          headers,
+          body: {
+            identifier: resource.identifier,
+            name: resource.name,
+            allowedScopes: [...protocolScopes, ...resource.scopes],
+            accessTokenTtl: 300,
+          },
         }),
       );
+      // Publish before updating client scopes: the provider validates that union
+      // against its currently supported scopes. Keep defaults current after writes.
+      yield* synchronize();
+      const clients = yield* Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ clientId: Schema.String })),
+      )(
+        yield* sql`SELECT clientId FROM clientOnboarding WHERE clientId IN (SELECT clientId FROM oauthClient)`,
+      );
+      for (const client of clients) {
+        yield* providerCall(() =>
+          getAuth().api.adminLinkClientResource({
+            headers,
+            params: linkParams(client.clientId, resource.identifier),
+          }),
+        );
+        yield* syncClient(client.clientId, headers);
+      }
+      return resource;
     }),
-    update: Effect.fn("Resources.update")(function* (input: ResourceValue) {
+    update: Effect.fn("Resources.update")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
-      return yield* commit(
-        Effect.gen(function* () {
-          const previous = yield* get(resource.identifier);
-          if (!previous)
-            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Resource not found" }));
-          yield* sql`UPDATE oauthResource SET name = ${resource.name}, allowedScopes = ${JSON.stringify([...protocolScopes, ...resource.scopes])}, updatedAt = ${Date.now()}, policyVersion = COALESCE(policyVersion, 1) + 1 WHERE identifier = ${resource.identifier}`;
-          const removed = previous.scopes.filter((scope) => !resource.scopes.includes(scope));
-          for (const link of yield* accessForResource(resource.identifier)) {
-            yield* syncClient(link.client_id);
-            if (removed.length) yield* cleanup(link.client_id, resource.identifier, removed);
-          }
-          return resource;
+      yield* providerCall(() =>
+        getAuth().api.adminUpdateOAuthResource({
+          headers,
+          params: resourceParams(resource.identifier),
+          body: { name: resource.name, allowedScopes: [...protocolScopes, ...resource.scopes] },
         }),
       );
+      yield* synchronize();
+      for (const link of yield* accessForResource(resource.identifier))
+        yield* syncClient(link.client_id, headers);
+      return resource;
     }),
-    delete: Effect.fn("Resources.delete")(function* (identifier: string) {
-      return yield* commit(
-        Effect.gen(function* () {
-          if (!(yield* get(identifier)))
-            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Resource not found" }));
-          const links =
-            yield* sql`SELECT 1 FROM oauthClientResource WHERE resourceId = ${identifier} AND clientId NOT IN (SELECT clientId FROM clientOnboarding) LIMIT 1`;
-          if (links.length)
-            return yield* Effect.fail(
-              new APIError("CONFLICT", {
-                message: "Remove Client access before deleting this Resource",
-              }),
-            );
-          for (const link of yield* accessForResource(identifier)) {
-            yield* cleanup(link.client_id, identifier);
-            yield* sql`DELETE FROM oauthClientResource WHERE clientId = ${link.client_id} AND resourceId = ${identifier}`;
-            yield* syncClient(link.client_id);
-          }
-          yield* sql`DELETE FROM oauthResource WHERE identifier = ${identifier}`;
-          return { deleted: true };
+    delete: Effect.fn("Resources.delete")(function* (identifier: string, headers: Headers) {
+      const links = yield* accessForResource(identifier);
+      yield* providerCall(() =>
+        getAuth().api.adminDeleteOAuthResource({
+          headers,
+          params: resourceParams(identifier),
         }),
       );
+      // The provider removes the resource and foreign keys remove its links.
+      // Existing grants retain provider semantics; current resource policy controls eligibility.
+      yield* synchronize();
+      for (const link of links) yield* syncClient(link.client_id, headers);
+      return { deleted: true };
     }),
     setAccess: Effect.fn("Resources.setAccess")(function* (
       clientId: string,
       identifiers: readonly string[],
+      headers: Headers,
     ) {
-      return yield* commit(
-        Effect.gen(function* () {
-          const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
-          if (!clients.length)
-            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
-          if ((yield* sql`SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`).length)
-            return yield* Effect.fail(
-              new APIError("BAD_REQUEST", {
-                message: "Automatically onboarded Clients use owner consent for Resource access",
-              }),
-            );
-          yield* validateSelection(identifiers);
-          const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
-          for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
-            yield* cleanup(clientId, identifier);
-            yield* sql`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
-          }
-          for (const identifier of identifiers.filter((id) => !previous.includes(id)))
-            yield* sql`INSERT INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES (${randomUUID()}, ${clientId}, ${identifier}, ${Date.now()})`;
-          yield* syncClient(clientId);
-          return yield* accessForClient(clientId);
-        }),
-      );
+      const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
+      if (!clients.length)
+        return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+      if ((yield* sql`SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`).length)
+        return yield* Effect.fail(
+          new APIError("BAD_REQUEST", {
+            message: "Automatically onboarded Clients use owner consent for Resource access",
+          }),
+        );
+      yield* validateSelection(identifiers);
+      const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
+      for (const identifier of previous.filter((id) => !identifiers.includes(id)))
+        yield* providerCall(() =>
+          getAuth().api.adminUnlinkClientResource({
+            headers,
+            params: linkParams(clientId, identifier),
+          }),
+        );
+      for (const identifier of identifiers.filter((id) => !previous.includes(id)))
+        yield* providerCall(() =>
+          getAuth().api.adminLinkClientResource({
+            headers,
+            params: linkParams(clientId, identifier),
+          }),
+        );
+      yield* syncClient(clientId, headers);
+      return yield* accessForClient(clientId);
     }),
   };
 }

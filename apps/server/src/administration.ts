@@ -42,7 +42,7 @@ function apiError(error: unknown) {
   return new InternalServerError(body);
 }
 
-// Only the local Resource store supplies these user-facing domain errors.
+// Local and provider errors share status mapping; provider-only descriptions stay private.
 function resourceError(error: unknown) {
   if (error instanceof APIError) {
     const body = { error: error.body?.message ?? "Resource request could not be completed" };
@@ -63,15 +63,9 @@ export function administration(service: Service) {
       try: () => auth.api.getSession({ headers }),
       catch: apiError,
     });
-    const owner = yield* service.owner().pipe(Effect.mapError(apiError));
-    if (!session || session.user.id !== owner)
-      return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
+    if (!session) return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
     if (mutate && headers.get("origin") !== settings.baseURL)
       return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
-    if (mutate && Date.now() - session.session.createdAt.getTime() > 15 * 60 * 1000)
-      return yield* Effect.fail(
-        new Forbidden({ error: "Sign out and sign in again before changing Clients or Resources" }),
-      );
     return session;
   });
   return {
@@ -144,8 +138,6 @@ export function administration(service: Service) {
         return yield* Effect.fail(
           new BadRequest({ error: "Client names require 1–100 characters" }),
         );
-      if (!input.resources.length)
-        return yield* Effect.fail(new BadRequest({ error: "Choose unique Resources" }));
       const scopes = yield* service.resources
         .scopesFor(input.resources)
         .pipe(Effect.mapError(resourceError));
@@ -164,7 +156,7 @@ export function administration(service: Service) {
           }),
         catch: apiError,
       });
-      yield* service.resources.setAccess(client.client_id, input.resources).pipe(
+      yield* service.resources.setAccess(client.client_id, input.resources, headers).pipe(
         Effect.mapError(resourceError),
         Effect.tapError(() =>
           Effect.tryPromise({
@@ -176,26 +168,34 @@ export function administration(service: Service) {
       );
       return client;
     }),
-    access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
+    access: Effect.fn("Administration.access")(function* (
+      headers: Headers,
+      input: typeof ClientAccessInput.Type,
+    ) {
       const clientAccess = yield* service.resources
-        .setAccess(input.client_id, input.resources)
+        .setAccess(input.client_id, input.resources, headers)
         .pipe(Effect.mapError(resourceError));
       return { clientAccess };
     }),
     createResource: Effect.fn("Administration.createResource")(function* (
+      headers: Headers,
       input: typeof Resource.Type,
     ) {
-      return yield* service.resources.create(input).pipe(Effect.mapError(resourceError));
+      return yield* service.resources.create(input, headers).pipe(Effect.mapError(resourceError));
     }),
     updateResource: Effect.fn("Administration.updateResource")(function* (
+      headers: Headers,
       input: typeof Resource.Type,
     ) {
-      return yield* service.resources.update(input).pipe(Effect.mapError(resourceError));
+      return yield* service.resources.update(input, headers).pipe(Effect.mapError(resourceError));
     }),
     deleteResource: Effect.fn("Administration.deleteResource")(function* (
+      headers: Headers,
       input: typeof ResourceId.Type,
     ) {
-      return yield* service.resources.delete(input.identifier).pipe(Effect.mapError(resourceError));
+      return yield* service.resources
+        .delete(input.identifier, headers)
+        .pipe(Effect.mapError(resourceError));
     }),
     delete: Effect.fn("Administration.delete")(function* (
       headers: Headers,

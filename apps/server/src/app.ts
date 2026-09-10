@@ -108,7 +108,7 @@ export function application(
       response =
         publicCors && req.method === "OPTIONS"
           ? new Response(null, { status: 204 })
-          : await service.exclusive(() => dispatch(req));
+          : await service.run(() => dispatch(req));
     } catch (error) {
       const status =
         error instanceof APIError

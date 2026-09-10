@@ -28,8 +28,8 @@ index e5829d8e200dbb7fe3f451b62d085b0f29856b05..862dedc13a7404ba9a8ef9058dce0793
  		resourcePolicyClaims: grantIssuance.resourceCustomClaims
  	}) : void 0;
 -	const [accessToken, refreshToken] = await Promise.all([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
-+	// Do not let a signing failure finish the request while refresh writes are
-+	// still running outside the single-instance service's request lock.
++	// Do not report a signing failure while refresh writes are still running;
++	// shutdown must be able to drain every write admitted by the request.
 +	const tokenResults = await Promise.allSettled([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
  		iat,
  		exp,

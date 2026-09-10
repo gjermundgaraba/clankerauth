@@ -22,6 +22,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const calls = [];
+  const registrations = [];
   const resource = {
     name: "Fixture API",
     identifier: "https://fixture.invalid/api",
@@ -88,6 +89,7 @@ try {
           response = resourceResponse();
           break;
         case "POST /admin/clients":
+          registrations.push(request.postDataJSON());
           response = ok({ ...created, client_secret: "fixture-first-secret" }, 201);
           break;
         case "POST /admin/clients/rotate":
@@ -154,7 +156,19 @@ try {
 
   await page.goto(origin);
   await resourceForm.waitFor();
-  assert.equal(await page.locator("#register button").isEnabled(), false);
+  // Registration works before the resource catalog exists and sends an empty selection.
+  const emptyRegister = page.locator("#register");
+  assert.equal(await emptyRegister.getByRole("button").isEnabled(), true);
+  assert.equal(await emptyRegister.locator('[name="resources"]').count(), 0);
+  await emptyRegister.locator('[name="name"]').fill(created.client_name);
+  await emptyRegister.locator('[name="redirect"]').fill(created.redirect_uris[0]);
+  await emptyRegister.locator('[name="confidential"]').check();
+  await emptyRegister.getByRole("button").click();
+  await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
+  await waitForIdle();
+  assert.equal(count("POST /admin/clients"), 1);
+  assert.deepEqual(registrations[0].resources, []);
+  await page.locator("#credentials button").click();
 
   // A completed write clears the form before the list settles. Even synthetic
   // duplicate submissions must be ignored throughout the pending refresh.
@@ -197,7 +211,7 @@ try {
   await waitForIdle();
   assert.equal(await retry.count(), 0);
   assert.equal(await page.locator("#message").textContent(), "");
-  assert.equal(await page.locator("[data-resource-delete]").isEnabled(), false);
+  assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
   assert.equal(
     await page.locator("#dashboard-mutations").evaluate((fieldset) => fieldset.disabled),
     false,
@@ -245,7 +259,8 @@ try {
   await register.dispatchEvent("submit");
   releaseClientList.resolve();
   await waitForSaved();
-  assert.equal(count("POST /admin/clients"), 1);
+  assert.equal(count("POST /admin/clients"), 2);
+  assert.deepEqual(registrations[1].resources, [resource.identifier]);
   assert.match(await page.locator("#credentials").textContent(), /fixture-first-secret/);
 
   data = { ...data, clients: [existing, created] };
@@ -259,8 +274,8 @@ try {
     false,
   );
   assert.equal(await register.getByRole("button").isEnabled(), true);
-  assert.equal(await page.locator("[data-resource-delete]").isEnabled(), false);
-  assert.equal(count("POST /admin/clients"), 1);
+  assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
+  assert.equal(count("POST /admin/clients"), 2);
 
   const listsBeforeRotation = count("GET /admin/clients");
   await page.locator('[data-rotate="created-client"]').click();

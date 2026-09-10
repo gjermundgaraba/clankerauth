@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import { APIError } from "better-auth/api";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { Kysely } from "kysely";
+import { transaction, makeSql, type DatabaseSchema, type Sql } from "./database.ts";
 
 const rows = Schema.decodeUnknownEffect(
   Schema.Array(
@@ -13,22 +14,23 @@ const rows = Schema.decodeUnknownEffect(
 );
 
 // Kept independently from provider metadata so rediscovery cannot erase policy.
-export function onboardingStore(sql: SqlClient) {
+export function onboardingStore(database: Kysely<DatabaseSchema>) {
+  const sql = makeSql(database);
   const list = Effect.fn("Onboarding.list")(function* () {
     return (yield* rows(
       yield* sql`SELECT clientId AS client_id, source AS onboarding, blocked FROM clientOnboarding`,
     )).map((row) => ({ ...row, blocked: row.blocked !== 0 }));
   });
-  const revoke = Effect.fn("Onboarding.revoke")(function* (clientId: string) {
+  const revoke = Effect.fn("Onboarding.revoke")(function* (clientId: string, query: Sql = sql) {
     if (
-      !(yield* sql`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} UNION SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`)
+      !(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} UNION SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`)
         .length
     )
       return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
-    yield* sql`DELETE FROM oauthConsent WHERE clientId = ${clientId}`;
-    yield* sql`DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = ${clientId}`;
-    yield* sql`DELETE FROM oauthAccessToken WHERE clientId = ${clientId}`;
-    yield* sql`DELETE FROM oauthRefreshToken WHERE clientId = ${clientId}`;
+    yield* query`DELETE FROM oauthConsent WHERE clientId = ${clientId}`;
+    yield* query`DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = ${clientId}`;
+    yield* query`DELETE FROM oauthAccessToken WHERE clientId = ${clientId}`;
+    yield* query`DELETE FROM oauthRefreshToken WHERE clientId = ${clientId}`;
     return { revoked: true };
   });
   const cleanup = Effect.fn("Onboarding.cleanup")(function* () {
@@ -53,18 +55,8 @@ export function onboardingStore(sql: SqlClient) {
   return {
     list,
     cleanup,
-    revoke: (clientId: string) => sql.withTransaction(revoke(clientId)),
-    admit: Effect.fn("Onboarding.admit")(function* (clientId?: string) {
-      if (clientId) {
-        const policy =
-          yield* sql`SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId} AND blocked = 1`;
-        if (policy.length) return false;
-        if (
-          (yield* sql`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} UNION SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`)
-            .length
-        )
-          return true;
-      }
+    revoke: (clientId: string) => transaction(database, (sql) => revoke(clientId, sql)),
+    admit: Effect.fn("Onboarding.admit")(function* () {
       yield* cleanup();
       const count = yield* sql`SELECT 1 FROM clientOnboarding LIMIT 1000`;
       return count.length < 1000;
@@ -76,7 +68,7 @@ export function onboardingStore(sql: SqlClient) {
       );
     }),
     block: Effect.fn("Onboarding.block")(function* (clientId: string, blocked: boolean) {
-      return yield* sql.withTransaction(
+      return yield* transaction(database, (sql) =>
         Effect.gen(function* () {
           if (
             !(yield* sql`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} UNION SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`)
@@ -86,7 +78,7 @@ export function onboardingStore(sql: SqlClient) {
           yield* sql`UPDATE clientOnboarding SET blocked = ${blocked ? 1 : 0} WHERE clientId = ${clientId}`;
           // Managed clients use provider disabled; discovery additionally has a durable tombstone.
           yield* sql`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
-          if (blocked) yield* revoke(clientId);
+          if (blocked) yield* revoke(clientId, sql);
           return { blocked };
         }),
       );

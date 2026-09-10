@@ -1,11 +1,11 @@
 import { Effect, Schema } from "effect";
 import { getCurrentAuthEndpointContext } from "@better-auth/core/context";
-import { openDatabase } from "./database.ts";
+import { transaction, openDatabase } from "./database.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
@@ -26,7 +26,7 @@ export async function openAuth(
   mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
   const database = await openDatabase(settings.database);
   const { sql } = database;
-  const onboarding = onboardingStore(sql);
+  const onboarding = onboardingStore(database.kysely);
   const metadataRevision = () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -83,14 +83,7 @@ export async function openAuth(
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
     codeExpiresIn: 120,
     refreshTokenReuseInterval: 0,
-    // Supported callback runs before token writes/signing for both code
-    // exchange and refresh, including legacy grants without a live session.
-    customTokenResponseFields: async ({ user }) => {
-      if (!user || user.id !== (await Effect.runPromise(owner())))
-        throw new APIError("BAD_REQUEST", {
-          error: "invalid_grant",
-          error_description: "Owner grant required",
-        });
+    customTokenResponseFields: async () => {
       const context = getCurrentAuthEndpointContext().context;
       if (
         "clientMetadataRevision" in context &&
@@ -102,26 +95,23 @@ export async function openAuth(
         });
       return {};
     },
-    customUserInfoClaims: async ({ user }) => {
-      if (user.id !== (await Effect.runPromise(owner())))
-        throw new APIError("UNAUTHORIZED", { error: "invalid_token" });
-      return {};
-    },
     // Session-backed DCR needs a source marker distinct from owner-managed clients.
     // Anonymous DCR is already unowned; both are tracked by the creation trigger.
     clientReference: () =>
       getCurrentAuthEndpointContext().path === "/oauth2/register" ? "clankerauth:dcr" : undefined,
+    // Setup creates the only account; any authenticated user is the owner.
     clientPrivileges: async ({ user, action }) =>
-      !!user &&
-      user.id === (await Effect.runPromise(owner())) &&
-      action !== "configure-client-credentials-scopes",
-    resourcePrivileges: async ({ user }) =>
-      !!user && user.id === (await Effect.runPromise(owner())),
+      !!user && action !== "configure-client-credentials-scopes",
+    resourcePrivileges: async ({ user }) => !!user,
   });
-  const resources = resourceStore(sql, (scopes, identifiers) => {
-    provider.options.scopes = scopes;
-    provider.options.clientRegistrationDefaultResources = identifiers;
-  });
+  const resources = resourceStore(
+    sql,
+    () => serviceAuth(),
+    (scopes, identifiers) => {
+      provider.options.scopes = scopes;
+      provider.options.clientRegistrationDefaultResources = identifiers;
+    },
+  );
   const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
@@ -135,16 +125,6 @@ export async function openAuth(
       disableSignUp: true,
       minPasswordLength: 8,
       maxPasswordLength: 128,
-    },
-    databaseHooks: {
-      session: {
-        create: {
-          before: async (session) => {
-            if (session.userId !== (await Effect.runPromise(owner())))
-              throw new APIError("UNAUTHORIZED", { message: "Owner login required" });
-          },
-        },
-      },
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
@@ -167,7 +147,13 @@ export async function openAuth(
               : typeof ctx.body?.oauth_query === "string"
                 ? new URLSearchParams(ctx.body.oauth_query).get("client_id")
                 : basicClientId;
-        if (clientId && (await Effect.runPromise(onboarding.isBlocked(clientId))))
+        if (
+          clientId &&
+          ["/oauth2/authorize", "/oauth2/token", "/oauth2/consent", "/oauth2/continue"].includes(
+            ctx.path,
+          ) &&
+          (await Effect.runPromise(onboarding.isBlocked(clientId)))
+        )
           throw new APIError("BAD_REQUEST", {
             error: "invalid_client",
             error_description: "Client is blocked",
@@ -197,30 +183,9 @@ export async function openAuth(
           )
             ctx.body.application_type = "native";
         }
-        // A legacy cookie may be discarded or replaced, but may not authorize work.
-        if (ctx.path === "/sign-out" || ctx.path === "/sign-in/email") return;
-        // Login continuation carries a newly created session before the browser
-        // has received its cookie. It already passed the session-creation gate.
-        const session = ctx.context.newSession ?? (await getAuthoritativeSessionFromCtx(ctx));
-        if (session && session.user.id !== (await Effect.runPromise(owner())))
-          throw new APIError("UNAUTHORIZED", { message: "Owner session required" });
-      }),
-      after: createAuthMiddleware(async (ctx) => {
-        // JWT and refresh introspection bypass issuance callbacks. This service
-        // uses public subjects only (no pairwiseSecret or machine grants).
-        if (ctx.path !== "/oauth2/introspect") return;
-        const result = ctx.context.returned;
-        if (
-          result &&
-          typeof result === "object" &&
-          "active" in result &&
-          result.active === true &&
-          (!("sub" in result) || result.sub !== (await Effect.runPromise(owner())))
-        )
-          return ctx.json({ active: false });
       }),
     },
-    session: { expiresIn: 60 * 60 * 12, freshAge: 60 * 15 },
+    session: { expiresIn: 60 * 60 * 12, freshAge: 0 },
     advanced: { ipAddress: { ipAddressHeaders: ["x-clankerauth-peer"] } },
     rateLimit: {
       enabled: true,
@@ -239,7 +204,11 @@ export async function openAuth(
       }),
       provider,
       cimd({
-        fetchClientMetadataResource: integrations.cimdTransport ?? fetchClientMetadataResource,
+        fetchClientMetadataResource: async (input, init) => {
+          // Reclaim abandoned registrations during discovery without an admission gate.
+          await Effect.runPromise(onboarding.cleanup());
+          return (integrations.cimdTransport ?? fetchClientMetadataResource)(input, init);
+        },
         metadataProfile: "mcp-2026-07-28",
         metadataRevalidationInterval: 300,
         maxCacheEntries: 1000,
@@ -249,43 +218,44 @@ export async function openAuth(
           maximumFetchesPerMinute: 60,
           maximumFetchesPerOriginPerMinute: 15,
         },
-        isMetadataDocumentUrlAllowed: (clientId) => Effect.runPromise(onboarding.admit(clientId)),
       }),
     ],
   } satisfies BetterAuthOptions;
   // Defer provider initialization until migrations finish.
   const makeAuth = () => betterAuth(options);
   let auth: ReturnType<typeof makeAuth> | undefined;
-  // All online operations enter here, including admin operations that call auth.api.
-  // Kept on the service so multiple HTTP application wrappers share admission.
-  let tail = Promise.resolve();
+  const serviceAuth = () => (auth ??= makeAuth());
+  // Track work for shutdown without serializing independent requests.
+  const active = new Set<Promise<unknown>>();
   let closing = false;
-  const exclusive = <T>(operation: () => Promise<T>) => {
+  const run = <T>(operation: () => Promise<T>) => {
     if (closing)
       return Promise.reject(new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" }));
-    const result = tail.then(operation);
-    tail = result.then(
-      () => {},
-      () => {},
+    const result = Promise.resolve().then(operation);
+    active.add(result);
+    void result.then(
+      () => active.delete(result),
+      () => active.delete(result),
     );
     return result;
   };
   const close = async () => {
     closing = true;
-    await tail;
+    await Promise.allSettled(active);
     await database.close();
   };
   return {
     get auth() {
-      return (auth ??= makeAuth());
+      return serviceAuth();
     },
     options,
     sql,
+    database: database.kysely,
     owner,
     settings,
     resources,
     onboarding,
-    exclusive,
+    run,
     close,
   };
 }
@@ -355,15 +325,19 @@ export async function createOwner(service: Service, input: { email: string; pass
   const hash = await context.password.hash(input.password);
   // Hash outside the transaction; account creation and ownership commit together.
   await Effect.runPromise(
-    service.sql.withTransaction(
+    transaction(service.database, (sql) =>
       Effect.gen(function* () {
+        if ((yield* sql`SELECT 1 FROM serviceOwner WHERE id = 1`).length)
+          return yield* Effect.fail(
+            new APIError("CONFLICT", { message: "Setup already completed" }),
+          );
         const id = randomUUID();
         const now = Date.now();
-        yield* service.sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+        yield* sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
       VALUES (${id}, 'Owner', ${email}, 0, ${now}, ${now})`;
-        yield* service.sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt)
+        yield* sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt)
       VALUES (${randomUUID()}, ${id}, 'credential', ${id}, ${hash}, ${now}, ${now})`;
-        yield* service.sql`INSERT INTO serviceOwner (id, userId) VALUES (1, ${id})`;
+        yield* sql`INSERT INTO serviceOwner (id, userId) VALUES (1, ${id})`;
       }),
     ),
   );

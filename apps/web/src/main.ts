@@ -248,13 +248,13 @@ async function dashboard() {
               );
               return `<article class="resource"><h3>${escape(resource.name)}</h3><code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span>
       <p class="help dependencies">Managed Clients eligible to request access: ${dependencies.length ? dependencies.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
-      <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">${scopeHelp} Clients with access follow these scopes. Added scopes require approval; removing scopes revokes affected renewal credentials. Issued access tokens may remain valid for up to five minutes.</p><button>Save resource</button></form></details>
-      <button class="danger" data-resource-delete="${escape(resource.identifier)}" ${dependencies.length ? "disabled" : ""}>Delete resource</button>${dependencies.length ? '<p class="help dependencies">Remove Client access using Manage access below before deleting this Resource.</p>' : ""}</article>`;
+      <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">${scopeHelp} Clients with access follow these scopes. Added scopes require approval. Removed scopes cannot be requested under the current policy; stored consent and credentials remain. Issued access tokens may remain valid for up to five minutes.</p><button>Save resource</button></form></details>
+      <button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button></article>`;
             })
             .join("")
         : '<div class="empty"><h3>Add your first Resource</h3><p>Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.</p></div>'
     }
-    </section><section class="card registration"><h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="OKF MCP"></label><label>HTTPS identifier<input name="identifier" type="url" required placeholder="https://okf.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be edited later.</p><label>Scopes<input name="scopes" required placeholder="okf:read okf:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form></section></div>
+    </section><section class="card registration"><h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="OKF MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://okf.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be edited later.</p><label>Scopes<input name="scopes" required placeholder="okf:read okf:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form></section></div>
     <div class="columns dashboard-section"><section><h2>Clients <span class="count">${data.clients.length}</span></h2><p class="muted">Connect a compatible MCP client using your MCP server URL, then sign in and approve access. Registration alone grants no access.</p><div class="clients">
     ${
       data.clients.length
@@ -274,13 +274,13 @@ async function dashboard() {
             )
             .join("") || '<p class="help">No Resource access configured.</p>'
     }
-    ${!client.onboarding || client.onboarding === "managed" ? `<details><summary>Manage access</summary><form data-client-access="${escape(client.client_id)}"><fieldset><legend>Allowed Resources</legend>${choices(allowed(client.client_id)) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Allows requesting all current and future scopes on selected Resources. Consent is required separately for each Resource. Removing access revokes consent and renewal credentials; issued access tokens may remain valid for up to five minutes.</p><button>Save access</button></form></details>` : ""}
+    ${!client.onboarding || client.onboarding === "managed" ? `<details><summary>Manage access</summary><form data-client-access="${escape(client.client_id)}"><fieldset><legend>Allowed Resources</legend>${choices(allowed(client.client_id)) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Allows requesting all current and future scopes on selected Resources. Consent is required separately for each Resource. Removing access prevents new authorization and refresh for that Resource while unlinked. Stored consent and credentials remain and may work again if access is restored. Use Revoke authorization to clear them. Issued access tokens may remain valid for up to five minutes.</p><button>Save access</button></form></details>` : ""}
     <div class="actions"><button class="secondary" data-revoke="${escape(client.client_id)}">Revoke authorization</button><button class="secondary" data-block="${escape(client.client_id)}" data-blocked="${client.blocked ? "true" : "false"}">${client.blocked ? "Unblock client" : "Block client"}</button>${client.token_endpoint_auth_method !== "none" && (!client.onboarding || client.onboarding === "managed") ? `<button class="secondary" data-rotate="${escape(client.client_id)}">Rotate secret</button>` : ""}${!client.onboarding || client.onboarding === "managed" ? `<button class="danger" data-delete="${escape(client.client_id)}">Delete client</button>` : ""}</div>${client.onboarding && client.onboarding !== "managed" ? '<p class="help">Revocation requires fresh consent. Blocking also prevents new authorization for this client ID and survives metadata rediscovery. Issued access tokens may remain valid for up to five minutes.</p>' : ""}</article>`,
             )
             .join("")
         : '<div class="empty"><h3>No Clients registered</h3><p>Connect your MCP client to a configured server to onboard automatically, or register a managed Client here.</p></div>'
     }
-    </div></section><section class="card registration"><p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2>${data.resources.length ? "" : '<p class="help">Add your first Resource before registering a Client.</p>'}<form id="register"><fieldset ${data.resources.length ? "" : "disabled"}><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (select at least one)</legend>${choices([])}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Compatible MCP clients can use automatic registration. Managed Client access follows each selected Resource’s current and future scopes.</p></form></section></div></fieldset>`;
+    </div></section><section class="card registration"><p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (optional)</legend>${choices([]) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are required. Compatible MCP clients can use automatic registration. Managed Client access follows each selected Resource’s current and future scopes.</p></form></section></div></fieldset>`;
   renderCredentials();
   document.querySelector("#logout")!.addEventListener("click", () => {
     void submit(async () => {
@@ -294,7 +294,6 @@ async function dashboard() {
     void submit(async () => {
       const fields = new FormData(form);
       const resources = selectedResources(form);
-      if (!resources.length) throw new Error("Select at least one Resource.");
       const result = await request(
         api.clients.create({
           payload: {
@@ -351,7 +350,7 @@ async function dashboard() {
       if (
         removed.length &&
         !confirm(
-          `Remove access to ${removed.join(", ")}? Consent and renewal credentials will be revoked. Issued access tokens may remain valid for up to five minutes. Re-adding access requires fresh authorization.`,
+          `Remove access to ${removed.join(", ")}? New authorization and refresh will be denied while unlinked. Stored consent and credentials remain and may work again if access is restored. Use Revoke authorization to clear them. Issued access tokens may remain valid for up to five minutes.`,
         )
       )
         return;
@@ -387,7 +386,7 @@ async function dashboard() {
       if (
         !confirm(
           button.dataset.resourceDelete
-            ? `Delete Resource ${button.dataset.resourceDelete}? Issued access tokens may remain valid for up to five minutes.`
+            ? `Delete Resource ${button.dataset.resourceDelete}? Client access links will be removed. Stored consent and credentials are retained. Issued access tokens may remain valid for up to five minutes.`
             : button.dataset.delete
               ? "Delete this Client, its access, consent, and renewal credentials? Issued access tokens may remain valid for up to five minutes."
               : "Rotate the secret immediately? The old secret will stop working.",

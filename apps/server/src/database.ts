@@ -1,105 +1,52 @@
-import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient";
-import { Effect, Exit, Scope } from "effect";
-import * as Reactivity from "effect/unstable/reactivity/Reactivity";
-import {
-  CompiledQuery,
-  Kysely,
-  SqliteAdapter,
-  SqliteIntrospector,
-  SqliteQueryCompiler,
-  type DatabaseConnection,
-  type Driver,
-  type QueryResult,
-} from "kysely";
+import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-dialect";
+import { Effect } from "effect";
+import { Kysely, sql as query } from "kysely";
+import { DatabaseSync } from "node:sqlite";
 
-/** Owns one SQLite connection; Effect SQL and Better Auth share its reservation lock. */
-export async function openDatabase(filename: string) {
-  const scope = Scope.makeUnsafe();
-  try {
-    const sql = await Effect.runPromise(
-      SqliteClient.make({ filename }).pipe(Effect.provide(Reactivity.layer), Scope.provide(scope)),
-    );
-    const reservations = new Map<DatabaseConnection, Scope.Closeable>();
-    const driver: Driver = {
-      async init() {},
-      async acquireConnection() {
-        const reservation = Scope.makeUnsafe();
-        try {
-          const connection = await Effect.runPromise(sql.reserve.pipe(Scope.provide(reservation)));
-          const wrapped: DatabaseConnection = {
-            async executeQuery<R>(query: CompiledQuery): Promise<QueryResult<R>> {
-              const result = await Effect.runPromise(
-                connection.executeRaw(query.sql, query.parameters),
-              );
-              // The node SQLite driver returns rows for readers, and metadata for writes.
-              if (Array.isArray(result)) return { rows: result };
-              if (
-                typeof result === "object" &&
-                result !== null &&
-                "changes" in result &&
-                "lastInsertRowid" in result &&
-                (typeof result.changes === "number" || typeof result.changes === "bigint") &&
-                (typeof result.lastInsertRowid === "number" ||
-                  typeof result.lastInsertRowid === "bigint")
-              ) {
-                return {
-                  rows: [],
-                  numAffectedRows: BigInt(result.changes),
-                  insertId: BigInt(result.lastInsertRowid),
-                };
-              }
-              throw new Error("Unexpected SQLite query result");
-            },
-            streamQuery() {
-              throw new Error("SQLite query streaming is not supported");
-            },
-          };
-          reservations.set(wrapped, reservation);
-          return wrapped;
-        } catch (error) {
-          await Effect.runPromise(Scope.close(reservation, Exit.void));
-          throw error;
-        }
-      },
-      async beginTransaction(connection) {
-        await connection.executeQuery(CompiledQuery.raw("BEGIN IMMEDIATE"));
-      },
-      async commitTransaction(connection) {
-        await connection.executeQuery(CompiledQuery.raw("COMMIT"));
-      },
-      async rollbackTransaction(connection) {
-        await connection.executeQuery(CompiledQuery.raw("ROLLBACK"));
-      },
-      async releaseConnection(connection) {
-        const reservation = reservations.get(connection);
-        if (reservation) {
-          reservations.delete(connection);
-          await Effect.runPromise(Scope.close(reservation, Exit.void));
-        }
-      },
-      async destroy() {},
-    };
-    const kysely = new Kysely<Record<string, Record<string, unknown>>>({
-      dialect: {
-        createDriver: () => driver,
-        createAdapter: () => new SqliteAdapter(),
-        createQueryCompiler: () => new SqliteQueryCompiler(),
-        createIntrospector: (db) => new SqliteIntrospector(db),
-      },
+export const normalizeError = (error: unknown): Error =>
+  error instanceof Error ? error : new Error(String(error));
+
+export type DatabaseSchema = Record<string, Record<string, unknown>>;
+
+/** Run Effect queries through the same Kysely connection or transaction as Better Auth. */
+export function makeSql(database: Kysely<DatabaseSchema>) {
+  return <Row = Record<string, unknown>>(
+    strings: TemplateStringsArray,
+    ...parameters: readonly unknown[]
+  ): Effect.Effect<readonly Row[], Error> =>
+    Effect.tryPromise({
+      try: async () => (await query<Row>(strings, ...parameters).execute(database)).rows,
+      catch: normalizeError,
     });
-    return {
-      sql,
-      kysely,
-      async close() {
-        try {
-          await kysely.destroy();
-        } finally {
-          await Effect.runPromise(Scope.close(scope, Exit.void));
-        }
-      },
-    };
+}
+
+export type Sql = ReturnType<typeof makeSql>;
+
+/** Keep local writes atomic while preserving domain errors across the Promise boundary. */
+export function transaction<A>(
+  database: Kysely<DatabaseSchema>,
+  operation: (sql: Sql) => Effect.Effect<A, Error>,
+): Effect.Effect<A, Error> {
+  return Effect.tryPromise({
+    try: () => database.transaction().execute((trx) => Effect.runPromise(operation(makeSql(trx)))),
+    catch: normalizeError,
+  });
+}
+
+export async function openDatabase(filename: string) {
+  const database = new DatabaseSync(filename);
+  try {
+    database.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+    );
+    const kysely = new Kysely<DatabaseSchema>({
+      dialect: new NodeSqliteDialect({ database }),
+    });
+    // Initialize the dialect so Kysely owns connection cleanup even before the first caller query.
+    await query`SELECT 1`.execute(kysely);
+    return { kysely, sql: makeSql(kysely), close: () => kysely.destroy() };
   } catch (error) {
-    await Effect.runPromise(Scope.close(scope, Exit.void));
+    database.close();
     throw error;
   }
 }

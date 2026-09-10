@@ -14,11 +14,11 @@
   "dependencies": {
     "@better-auth/cimd": "catalog:",
     "@better-auth/core": "catalog:",
+    "@better-auth/kysely-adapter": "catalog:",
     "@better-auth/oauth-provider": "catalog:",
     "@clankerauth/api": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:",
     "better-auth": "catalog:",
     "effect": "catalog:",
     "kysely": "catalog:"

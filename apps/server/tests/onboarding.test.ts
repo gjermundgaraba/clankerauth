@@ -126,13 +126,6 @@ beforeEach(async () => {
   );
   await initialize(service);
   await createOwner(service, { email: "owner@example.com", password: "test-password-long-enough" });
-  await Effect.runPromise(
-    service.resources.create({
-      identifier: resource,
-      name: "Test resource",
-      scopes: ["resource:read"],
-    }),
-  );
   const login = await request("/sign-in/email", {
     email: "owner@example.com",
     password: "test-password-long-enough",
@@ -142,6 +135,16 @@ beforeEach(async () => {
     .getSetCookie()
     .map((value) => value.split(";")[0])
     .join("; ");
+  await Effect.runPromise(
+    service.resources.create(
+      {
+        identifier: resource,
+        name: "Test resource",
+        scopes: ["resource:read"],
+      },
+      new Headers({ cookie, origin: baseURL }),
+    ),
+  );
 });
 afterEach(async () => {
   await service.close();
@@ -193,13 +196,18 @@ test.each(["dcr", "cimd"])(
     if (source === "cimd") await request(authorization(clientId));
     const second = "https://second.example/mcp";
     await Effect.runPromise(
-      service.resources.create({ identifier: second, name: "Second", scopes: ["second:read"] }),
+      service.resources.create(
+        { identifier: second, name: "Second", scopes: ["second:read"] },
+        new Headers({ cookie, origin: baseURL }),
+      ),
     );
     expect(await Effect.runPromise(service.resources.hasAccess(client.client_id, second))).toBe(
       true,
     );
     const tokens = await grant(client.client_id);
-    await Effect.runPromise(service.resources.delete(resource));
+    await Effect.runPromise(
+      service.resources.delete(resource, new Headers({ cookie, origin: baseURL })),
+    );
     expect(await Effect.runPromise(service.resources.hasAccess(client.client_id, resource))).toBe(
       false,
     );
@@ -379,6 +387,22 @@ test("expired pending codes do not retain abandoned registrations", async () => 
   expect(
     (await Effect.runPromise(service.onboarding.list())).map((client) => client.client_id),
   ).toEqual([pending.client_id]);
+});
+
+test("CIMD discovery reclaims abandoned clients at capacity without DCR activity", async () => {
+  await Effect.runPromise(
+    service.sql`WITH RECURSIVE n(value) AS (VALUES(1) UNION ALL SELECT value + 1 FROM n WHERE value < 1000)
+      INSERT INTO oauthClient (id, clientId, clientDiscoveryId, redirectUris, createdAt, updatedAt)
+      SELECT 'stale-' || value, 'https://stale.example/' || value, 'cimd', '[]', 0, 0 FROM n`,
+  );
+  expect((await Effect.runPromise(service.onboarding.list())).length).toBe(1000);
+  expect((await request(authorization(clientId))).status).toBe(302);
+  expect(await Effect.runPromise(service.onboarding.list())).toEqual([
+    { client_id: clientId, onboarding: "cimd", blocked: false },
+  ]);
+  expect(await Effect.runPromise(service.sql`SELECT clientId FROM oauthClient`)).toEqual([
+    { clientId },
+  ]);
 });
 
 test("cached CIMD recreation cannot exceed capacity after abandoned-client cleanup", async () => {
