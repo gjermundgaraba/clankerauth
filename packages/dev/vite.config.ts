@@ -1,7 +1,6 @@
 import { defineConfig } from "vite-plus";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   pack: {
@@ -12,7 +11,6 @@ export default defineConfig({
     dts: false,
     minify: true,
     deps: { alwaysBundle: [/./], onlyBundle: false },
-    alias: { "@opentelemetry/api": fileURLToPath(import.meta.resolve("@opentelemetry/api")) },
     plugins: [
       {
         name: "bundled-dependency-notices",

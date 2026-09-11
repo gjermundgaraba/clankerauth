@@ -185,9 +185,9 @@ function renderCredentials() {
     pre.textContent = JSON.stringify(value, null, 2);
     button.before(pre);
   }
-  for (const [name, key] of pendingKeys) {
+  for (const value of pendingKeys.values()) {
     const pre = document.createElement("pre");
-    pre.textContent = `${name}\n${key}`;
+    pre.textContent = value;
     button.before(pre);
   }
   button.addEventListener("click", () => {

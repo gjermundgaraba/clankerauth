@@ -364,6 +364,10 @@ try {
   await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
   await page.locator("#credentials").filter({ hasText: "ca_fixture-once-only" }).waitFor();
   await waitForIdle();
+  assert.equal(
+    await page.locator("#credentials pre").textContent(),
+    "Automation key\nca_fixture-once-only",
+  );
   await page.getByRole("button", { name: "Disable key", exact: true }).click();
   await page.getByRole("button", { name: "Enable key", exact: true }).waitFor();
   await waitForIdle();

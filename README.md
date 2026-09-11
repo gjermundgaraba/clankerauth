@@ -1,6 +1,6 @@
 # Clanker Auth
 
-A single-instance, self-hosted identity and OAuth authorization server for private-network apps. Local password login, first-run web account creation, automatic and managed client registration, signed consent, S256 PKCE, and audience-bound access tokens. No external identity provider, open signup, organizations, or API keys.
+A single-instance, self-hosted identity and OAuth authorization server for private-network apps. Local password login, first-run web account creation, automatic and managed client registration, signed consent, S256 PKCE, audience-bound access tokens, and scoped API keys. No external identity provider, open signup, or organizations.
 
 Stack: Node ≥26 (native TypeScript execution), pnpm 12.3.4, Vite+ 0.3.1, TypeScript 7, Effect **4.0.0-rc.112**, Better Auth, `@better-auth/oauth-provider` and `@better-auth/cimd` **1.7.3**. The provider handles OAuth, password hashing, session cookies, signing keys, consent, refresh rotation, and revocation. Effect handles the shared typed HTTP API, configuration/schema boundaries, query effects and process resource lifetime. Node’s built-in `DatabaseSync` stores persistent auth state through the supported `NodeSqliteDialect` from `@better-auth/kysely-adapter` **1.7.3**. Better Auth and the small Effect query helper share one Kysely instance, with native Kysely transactions for atomic application operations.
 
@@ -67,7 +67,7 @@ vp run pack:dev
 vp run test:dev-package
 ```
 
-This produces `dist/clankerauth-dev-0.1.0.tgz`. Copy it into the consuming app
+This produces `dist/clankerauth-dev-0.1.1.tgz`. Copy it into the consuming app
 (e.g. `vendor/`) and install it as a file devDependency. For subsequent updates, bump
 `packages/dev/package.json` first and use the new versioned filename to avoid package
 manager caches reusing a previous tarball.

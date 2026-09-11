@@ -1,8 +1,8 @@
-import { createServer } from "node:http";
 import { Effect } from "effect";
 import { application } from "./app.ts";
 import { initialize, openAuth } from "./auth.ts";
 import { loadSettings } from "./config.ts";
+import { createNodeServer, nodeListener } from "./node-http.ts";
 
 process.umask(0o077);
 const program = Effect.scoped(
@@ -17,54 +17,7 @@ const program = Effect.scoped(
       Effect.sync(() => application(service)),
       (app) => Effect.promise(() => app.dispose()),
     );
-    const server = createServer(async (incoming, outgoing) => {
-      try {
-        if (!incoming.url?.startsWith("/") || incoming.url.startsWith("//")) {
-          outgoing.writeHead(400).end();
-          return;
-        }
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(incoming.headers)) {
-          if (
-            value &&
-            !["forwarded", "x-forwarded-host", "x-forwarded-proto", "x-clankerauth-peer"].includes(
-              key,
-            )
-          )
-            headers.set(key, Array.isArray(value) ? value.join(", ") : value);
-        }
-        // Rate limits use the direct socket peer. The proxy must enforce per-user/IP limits too.
-        headers.set("x-clankerauth-peer", incoming.socket.remoteAddress ?? "unknown");
-        const chunks: Buffer[] = [];
-        let size = 0;
-        for await (const chunk of incoming) {
-          size += chunk.length;
-          if (size > 65536) {
-            outgoing.writeHead(413).end();
-            return;
-          }
-          chunks.push(chunk);
-        }
-        const req = new Request(`${settings.baseURL}${incoming.url}`, {
-          method: incoming.method,
-          headers,
-          body:
-            incoming.method === "GET" || incoming.method === "HEAD"
-              ? undefined
-              : Buffer.concat(chunks),
-        });
-        const response = await handler(req);
-        outgoing.writeHead(response.status, {
-          ...Object.fromEntries(response.headers),
-          "set-cookie": response.headers.getSetCookie(),
-        });
-        outgoing.end(Buffer.from(await response.arrayBuffer()));
-      } catch {
-        outgoing.writeHead(500).end("Request failed");
-      }
-    });
-    server.requestTimeout = 15000;
-    server.headersTimeout = 10000;
+    const server = createNodeServer(nodeListener(handler, settings.baseURL));
     yield* Effect.acquireRelease(
       Effect.tryPromise(
         () =>

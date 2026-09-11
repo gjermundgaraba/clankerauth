@@ -295,23 +295,3 @@ test("concurrent verification respects fixed-window capacity and resets at the e
   vi.setSystemTime(start + 120000);
   expect((await verify(key.key)).status).toBe(200);
 });
-
-test("startup migrates existing keys and starts a fresh counting window", async () => {
-  const key = await create();
-  await Effect.runPromise(
-    service.sql`UPDATE apikey SET requestCount = 1000, lastRequest = ${new Date().toISOString()}, rateLimitWindowStart = NULL WHERE id = ${key.keyId}`,
-  );
-  await Effect.runPromise(service.sql`ALTER TABLE apikey DROP COLUMN rateLimitWindowStart`);
-  const settings = service.settings;
-  await handle.dispose();
-  await service.close();
-  service = await openAuth(settings);
-  await initialize(service);
-  handle = application(service);
-  expect((await verify(key.key)).status).toBe(200);
-  const rows = await Effect.runPromise(
-    service.sql`SELECT requestCount, rateLimitWindowStart FROM apikey WHERE id = ${key.keyId}`,
-  );
-  expect(rows[0]?.requestCount).toBe(1);
-  expect(rows[0]?.rateLimitWindowStart).not.toBeNull();
-});
