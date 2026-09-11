@@ -1,0 +1,31 @@
+{
+  "name": "@clankerauth/dev",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable local Clankerauth issuer for application development",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "vp pack && node scripts/assets.mjs",
+    "test": "node --test tests/lifecycle.test.mjs",
+    "test:package": "node scripts/package-smoke.mjs"
+  },
+  "devDependencies": {
+    "@clankerauth/api": "workspace:*",
+    "@clankerauth/server": "workspace:*",
+    "@clankerauth/web": "workspace:*",
+    "@opentelemetry/api": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}

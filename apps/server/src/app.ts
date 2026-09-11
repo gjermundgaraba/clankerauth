@@ -41,7 +41,11 @@ export function application(
       await Effect.runPromise(service.sql`SELECT 1`);
       return json({ status: "ok" });
     }
-    if (url.pathname === "/api/setup" || url.pathname.startsWith("/admin/"))
+    if (
+      url.pathname === "/api/setup" ||
+      url.pathname === "/api/api-keys/verify" ||
+      url.pathname.startsWith("/admin/")
+    )
       return api.handler(req);
     if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
       const path = url.pathname.replace(/^\/api\/auth/, "");

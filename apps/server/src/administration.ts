@@ -19,7 +19,7 @@ import {
 } from "@clankerauth/api";
 import { createOwner, type Service } from "./auth.ts";
 
-function apiError(error: unknown) {
+export function apiError(error: unknown) {
   const body = { error: "Request could not be completed" };
   if (error instanceof APIError) {
     switch (error.statusCode) {

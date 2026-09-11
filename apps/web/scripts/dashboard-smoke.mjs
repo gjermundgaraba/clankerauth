@@ -47,6 +47,7 @@ try {
     status: 503,
     json: { _tag: "ServiceUnavailable", error: "Fixture request failed" },
   };
+  let machineKeys = [];
   let listResponse = async () => ok(data);
   let resourceResponse = () => ok(resource, 201);
   await page.route("**/*", async (route) => {
@@ -81,6 +82,35 @@ try {
               emailVerified: true,
             },
           });
+          break;
+        case "GET /admin/api-keys":
+          response = ok({ keys: machineKeys });
+          break;
+        case "POST /admin/api-keys": {
+          const payload = request.postDataJSON();
+          assert.deepEqual(payload.permissions, { [resource.identifier]: ["fixture:read"] });
+          assert.equal(payload.expiresAt, null);
+          const key = {
+            keyId: "fixture-key",
+            ...payload,
+            enabled: true,
+            createdAt: "2026-09-10T12:00:00.000Z",
+          };
+          machineKeys.push(key);
+          response = ok({ ...key, key: "ca_fixture-once-only" }, 201);
+          break;
+        }
+        case "POST /admin/api-keys/update": {
+          const payload = request.postDataJSON();
+          machineKeys = machineKeys.map((key) =>
+            key.keyId === payload.keyId ? { ...key, ...payload } : key,
+          );
+          response = ok(machineKeys.find((key) => key.keyId === payload.keyId));
+          break;
+        }
+        case "POST /admin/api-keys/delete":
+          machineKeys = [];
+          response = ok({ deleted: true });
           break;
         case "GET /admin/clients":
           response = await listResponse();
@@ -197,7 +227,7 @@ try {
   const beforeRetry = calls.length;
   await retry.click();
   await waitForSaved();
-  assert.deepEqual(calls.slice(beforeRetry), ["GET /admin/clients"]);
+  assert.deepEqual(calls.slice(beforeRetry), ["GET /admin/clients", "GET /admin/api-keys"]);
 
   data = {
     ...data,
@@ -327,6 +357,62 @@ try {
   assert.match(await page.locator(".client").textContent(), /Dynamic registration/);
   assert.equal(await page.locator("[data-client-access], [data-delete], [data-rotate]").count(), 0);
 
+  // API keys preserve explicit scope selection and show plaintext only until acknowledged.
+  const keyForm = page.locator("#key-create");
+  await keyForm.locator('[name="name"]').fill("Automation key");
+  await keyForm.locator('[name="key-scope"]').check();
+  await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
+  await page.locator("#credentials").filter({ hasText: "ca_fixture-once-only" }).waitFor();
+  await waitForIdle();
+  await page.getByRole("button", { name: "Disable key", exact: true }).click();
+  await page.getByRole("button", { name: "Enable key", exact: true }).waitFor();
+  await waitForIdle();
+  await page.getByRole("button", { name: "Enable key", exact: true }).click();
+  await page.getByRole("button", { name: "Disable key", exact: true }).waitFor();
+  await waitForIdle();
+  const keyEdit = page.locator('[data-key-edit="fixture-key"]');
+  await keyEdit.locator("..").getByText("Edit key", { exact: true }).click();
+  await keyEdit.locator('[name="name"]').fill("Renamed automation");
+  await keyEdit.getByRole("button", { name: "Save key", exact: true }).click();
+  await page.getByRole("heading", { name: "Renamed automation", exact: true }).waitFor();
+  await waitForIdle();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page
+      .getByRole("heading", { name: "Renamed automation", exact: true })
+      .scrollIntoViewIfNeeded();
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      true,
+    );
+    if (process.env.DASHBOARD_SCREENSHOTS)
+      await page.screenshot({ path: `${process.env.DASHBOARD_SCREENSHOTS}/keys-${width}.png` });
+  }
+  // Undismissed credentials must disappear even when the post-delete read fails.
+  assert.equal(await page.locator("#credentials").isVisible(), true);
+  listResponse = async () => failed;
+  await page.getByRole("button", { name: "Delete key", exact: true }).click();
+  await page.getByRole("button", { name: "Retry refresh", exact: true }).waitFor();
+  assert.equal(machineKeys.length, 0);
+  assert.equal(await page.locator("#credentials").isVisible(), false);
+  assert.equal(await page.getByText("ca_fixture-once-only", { exact: false }).count(), 0);
+  listResponse = async () => ok(data);
+  await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+  await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
+  await waitForIdle();
+  await keyForm.locator('[name="name"]').fill("Dismiss credentials");
+  await keyForm.locator('[name="key-scope"]').check();
+  await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
+  await page.locator("#credentials").filter({ hasText: "ca_fixture-once-only" }).waitFor();
+  await waitForIdle();
+  await page.locator("#credentials button").click();
+  assert.equal(await page.getByText("ca_fixture-once-only", { exact: false }).count(), 0);
+  await page.getByRole("button", { name: "Delete key", exact: true }).click();
+  await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
+  assert.equal(count("POST /admin/api-keys"), 2);
+  assert.equal(count("POST /admin/api-keys/update"), 3);
+  assert.equal(count("POST /admin/api-keys/delete"), 2);
+
   // Consent renders the actual identifier/callback and escapes client-supplied display names.
   const callback = "http://127.0.0.1:43129/callback";
   await page.goto(
@@ -339,6 +425,24 @@ try {
   assert.ok(consent.includes(callback));
   assert.ok(consent.includes("<em>Client name</em>"));
   assert.equal(await page.locator(".consent em").count(), 0);
+  // Observe navigation attempts, including a second attempt that cancels the first.
+  // The auth client already follows its successful consent response.
+  const protocol = await page.context().newCDPSession(page);
+  await protocol.send("Page.enable");
+  const navigations = [];
+  protocol.on("Page.frameRequestedNavigation", (event) => {
+    if (event.url === callback) navigations.push(event);
+  });
+  await page.route(`${origin}/api/auth/oauth2/consent`, (route) =>
+    route.fulfill(ok({ redirect: true, url: callback })),
+  );
+  await page.route(callback, (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Application callback</h1>" }),
+  );
+  await page.getByRole("button", { name: "Allow access", exact: false }).click();
+  await page.getByRole("heading", { name: "Application callback" }).waitFor();
+  assert.equal(navigations.length, 1, "consent must navigate to the callback exactly once");
+  await protocol.detach();
   assert.deepEqual(errors, []);
   console.log("Dashboard browser regressions passed.");
 } finally {

@@ -80,9 +80,10 @@ export class ApiValidation extends HttpApiMiddleware.Service<ApiValidation>()(
   { error: [BadRequest, InternalServerError] },
 ) {}
 
-export class CurrentOwner extends Context.Service<CurrentOwner, { readonly email: string }>()(
-  "ClankerAuth/CurrentOwner",
-) {}
+export class CurrentOwner extends Context.Service<
+  CurrentOwner,
+  { readonly userId: string; readonly email: string }
+>()("ClankerAuth/CurrentOwner") {}
 export class OwnerAuthorization extends HttpApiMiddleware.Service<
   OwnerAuthorization,
   { provides: CurrentOwner }
@@ -139,8 +140,69 @@ export const ClientAccessInput = Schema.Struct({
 });
 export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(ClientAccess) });
 
+export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
+export const ApiKeyInput = Schema.Struct({
+  name: Schema.String,
+  permissions: KeyPermissions,
+  expiresAt: Schema.NullOr(Schema.String),
+});
+export const ApiKeyId = Schema.Struct({ keyId: Schema.String });
+export const ApiKeyUpdate = Schema.Struct({
+  keyId: Schema.String,
+  name: Schema.optional(Schema.String),
+  permissions: Schema.optional(KeyPermissions),
+  enabled: Schema.optional(Schema.Boolean),
+});
+export const MachineKey = Schema.Struct({
+  keyId: Schema.String,
+  name: Schema.String,
+  enabled: Schema.Boolean,
+  permissions: KeyPermissions,
+  expiresAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+});
+
 export const Api = HttpApi.make("ClankerAuth")
   .add(
+    HttpApiGroup.make("apiKeys")
+      .add(
+        HttpApiEndpoint.get("list", "/admin/api-keys", {
+          success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("create", "/admin/api-keys", {
+          payload: ApiKeyInput,
+          success: MachineKey.pipe(
+            Schema.fieldsAssign({ key: Schema.String }),
+            HttpApiSchema.status(201),
+          ),
+          error: errors,
+        }),
+        HttpApiEndpoint.post("update", "/admin/api-keys/update", {
+          payload: ApiKeyUpdate,
+          success: MachineKey,
+          error: errors,
+        }),
+        HttpApiEndpoint.post("delete", "/admin/api-keys/delete", {
+          payload: ApiKeyId,
+          success: Schema.Struct({ deleted: Schema.Boolean }),
+          error: errors,
+        }),
+      )
+      .middleware(OwnerAuthorization),
+    HttpApiGroup.make("keyVerification").add(
+      HttpApiEndpoint.post("verify", "/api/api-keys/verify", {
+        payload: Schema.Struct({ resource: Schema.String }),
+        success: Schema.Struct({
+          keyId: Schema.String,
+          ownerId: Schema.String,
+          resource: Schema.String,
+          scopes: Schema.Array(Schema.String),
+          expiresAt: Schema.NullOr(Schema.String),
+        }),
+        error: errors,
+      }),
+    ),
     HttpApiGroup.make("setup").add(
       HttpApiEndpoint.get("status", "/api/setup", {
         success: Schema.Struct({ required: Schema.Boolean }),

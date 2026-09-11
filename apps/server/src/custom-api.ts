@@ -12,11 +12,13 @@ import {
   OwnerAuthorization,
   SetupProtection,
 } from "@clankerauth/api";
+import { machineKeys } from "./machine-keys.ts";
 import { administration } from "./administration.ts";
 import type { Service } from "./auth.ts";
 
 export function customApi(service: Service) {
   const admin = administration(service);
+  const keys = machineKeys(service);
   const ownerAuthorization = Layer.succeed(OwnerAuthorization, (httpEffect) =>
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -24,7 +26,10 @@ export function customApi(service: Service) {
         new Headers(request.headers),
         request.method !== "GET",
       );
-      return yield* Effect.provideService(httpEffect, CurrentOwner, { email: session.user.email });
+      return yield* Effect.provideService(httpEffect, CurrentOwner, {
+        userId: session.user.id,
+        email: session.user.email,
+      });
     }),
   );
   const setupProtection = Layer.succeed(SetupProtection, (httpEffect) =>
@@ -85,6 +90,20 @@ export function customApi(service: Service) {
         admin.deleteResource(new Headers(request.headers), payload),
       ),
   );
+  const apiKeys = HttpApiBuilder.group(Api, "apiKeys", (handlers) =>
+    handlers
+      .handle("list", ({ request }) => keys.list(new Headers(request.headers)))
+      .handle("create", ({ payload }) => keys.create(payload))
+      .handle("update", ({ payload }) => keys.update(payload))
+      .handle("delete", ({ request, payload }) =>
+        keys.delete(new Headers(request.headers), payload.keyId),
+      ),
+  );
+  const verification = HttpApiBuilder.group(Api, "keyVerification", (handlers) =>
+    handlers.handle("verify", ({ request, payload }) =>
+      keys.verify(new Headers(request.headers), payload.resource),
+    ),
+  );
   const validation = HttpApiMiddleware.layerSchemaErrorTransform(ApiValidation, (error) =>
     Effect.fail(
       error.kind === "Body" || error.kind === "ResponseHeaders"
@@ -93,7 +112,7 @@ export function customApi(service: Service) {
     ),
   );
   const routes = HttpApiBuilder.layer(Api).pipe(
-    Layer.provide([setup, clients, resources]),
+    Layer.provide([setup, clients, resources, apiKeys, verification]),
     Layer.provide([ownerAuthorization, setupProtection, validation]),
     Layer.provide(NodeHttpServer.layerHttpServices),
   );

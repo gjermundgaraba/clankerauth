@@ -39,3 +39,11 @@ The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.3.pa
 These fixes preserve provider cryptography and token formats; they do not serialize requests or add transaction rollback. Failed issuance may consume a code or leave a completed grant. Preserve the cross-client revocation and injected-signing-failure regressions and re-evaluate both fixes when upgrading.
 
 Graceful shutdown closes admission and tracks all admitted application work, including disconnected requests, until completion before closing SQLite. Late admission receives 503.
+
+## API-key listing patch
+
+The [API-key provider patch](../patches/@better-auth__api-key@1.7.3.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials. Recheck this behavior before removing the patch on a provider upgrade.
+
+## API-key rate-limit window
+
+The API-key provider patch stores `rateLimitWindowStart` separately from `lastRequest`. The counter resets at the end of a fixed one-minute window, including the exact boundary; successful requests update activity without moving the window. Guarded database updates preserve the per-key maximum under concurrent verification, and the stored window survives restart. Better Auth's startup migrator adds the nullable column; existing keys with no window start begin a fresh window on their next verification. Tests cover sustained traffic, concurrent bursts, the boundary, restart, and existing keys. The pinned provider otherwise counts until a full inactivity interval has elapsed.

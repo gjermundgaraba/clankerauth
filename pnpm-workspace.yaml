@@ -6,6 +6,7 @@ catalogMode: prefer
 catalog:
   "@effect/platform-node": 4.0.0-rc.112
   "@better-auth/oauth-provider": 1.7.3
+  "@better-auth/api-key": 1.7.3
   better-auth: 1.7.3
   effect: 4.0.0-rc.112
   "@types/node": 26.5.0
@@ -18,6 +19,7 @@ catalog:
   "@better-auth/cimd": 1.7.3
   "@better-auth/core": 1.7.3
   "@better-auth/kysely-adapter": 1.7.3
+  "@opentelemetry/api": 1.9.0
 
 overrides:
   vite@*: "catalog:"
@@ -40,4 +42,5 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.1"
   - vite-plus@0.3.1
 patchedDependencies:
+  "@better-auth/api-key@1.7.3": patches/@better-auth__api-key@1.7.3.patch
   "@better-auth/oauth-provider@1.7.3": patches/@better-auth__oauth-provider@1.7.3.patch

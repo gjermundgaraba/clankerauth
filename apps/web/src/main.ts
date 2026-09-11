@@ -145,7 +145,7 @@ async function consent() {
       const result = await auth.oauth2.consent({ accept });
       if (result.error)
         throw new Error("Authorization could not be completed. Restart from your application.");
-      if (result.data?.redirect && result.data.url) location.assign(result.data.url);
+      // Better Auth follows the redirect; a second navigation can cancel the callback.
     });
   });
 }
@@ -171,20 +171,27 @@ function resourceFields(fields: FormData) {
 
 // Keep one-time credentials in this page's memory until the owner acknowledges them.
 // A later rotation replaces the now-invalid secret for the same Client.
+const pendingKeys = new Map<string, string>();
 const pendingCredentials = new Map<string, typeof ClientCredentials.Type>();
 function renderCredentials() {
   const box = document.querySelector<HTMLElement>("#credentials")!;
-  box.classList.toggle("hidden", pendingCredentials.size === 0);
+  box.classList.toggle("hidden", pendingCredentials.size === 0 && pendingKeys.size === 0);
   box.replaceChildren();
-  if (!pendingCredentials.size) return;
-  box.innerHTML = `<h2>Save these credentials now</h2><p>Store the Client IDs and, if present, their secrets securely. A client secret is shown only once.</p><button class="secondary">Saved — return to clients</button>`;
+  if (!pendingCredentials.size && !pendingKeys.size) return;
+  box.innerHTML = `<h2>Save these credentials now</h2><p>Store these credentials securely. API keys and client secrets are shown only once.</p><button class="secondary">Saved — dismiss credentials</button>`;
   const button = box.querySelector("button")!;
   for (const value of pendingCredentials.values()) {
     const pre = document.createElement("pre");
     pre.textContent = JSON.stringify(value, null, 2);
     button.before(pre);
   }
+  for (const [name, key] of pendingKeys) {
+    const pre = document.createElement("pre");
+    pre.textContent = `${name}\n${key}`;
+    button.before(pre);
+  }
   button.addEventListener("click", () => {
+    pendingKeys.clear();
     pendingCredentials.clear();
     renderCredentials();
   });
@@ -215,7 +222,10 @@ async function refreshDashboard() {
 }
 
 async function dashboard() {
-  const data = await request(api.clients.list());
+  const [data, keyData] = await Promise.all([
+    request(api.clients.list()),
+    request(api.apiKeys.list()),
+  ]);
   const allowed = (clientId: string) =>
     data.clientAccess
       .filter((access) => access.client_id === clientId)
@@ -227,6 +237,22 @@ async function dashboard() {
           `<label class="checkbox resource-choice"><input type="checkbox" name="resources" value="${escape(resource.identifier)}" ${selected.includes(resource.identifier) ? "checked" : ""}><span>${escape(resource.name)}<code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span></span></label>`,
       )
       .join("");
+  const keyChoices = (grants: Record<string, readonly string[]>) =>
+    data.resources
+      .map(
+        (resource) =>
+          `<fieldset><legend>${escape(resource.name)}</legend><code>${escape(resource.identifier)}</code>${resource.scopes.map((scope) => `<label class="checkbox"><input type="checkbox" name="key-scope" data-resource="${escape(resource.identifier)}" value="${escape(scope)}" ${grants[resource.identifier]?.includes(scope) ? "checked" : ""}><code>${escape(scope)}</code></label>`).join("")}</fieldset>`,
+      )
+      .join("") || '<p class="help">Add a Resource to grant access.</p>';
+  const keyGrants = (form: HTMLFormElement) => {
+    const grants: Record<string, string[]> = {};
+    for (const checkbox of form.querySelectorAll<HTMLInputElement>(
+      'input[name="key-scope"]:checked',
+    )) {
+      (grants[checkbox.dataset.resource!] ??= []).push(checkbox.value);
+    }
+    return grants;
+  };
   const scopeHelp =
     "Separate custom scopes with spaces. Standard identity scopes (openid, profile, email, offline_access) are managed separately.";
   main.className = "dashboard";
@@ -255,6 +281,26 @@ async function dashboard() {
         : '<div class="empty"><h3>Add your first Resource</h3><p>Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.</p></div>'
     }
     </section><section class="card registration"><h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="OKF MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://okf.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be edited later.</p><label>Scopes<input name="scopes" required placeholder="okf:read okf:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form></section></div>
+    <div class="columns dashboard-section"><section><h2>API keys <span class="count">${keyData.keys.length}</span></h2><p class="muted">Direct access for CLIs and automation. Each key receives only the scopes you select.</p>
+    ${
+      keyData.keys
+        .map(
+          (key) =>
+            `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(new Date(key.expiresAt).toLocaleString())}` : "Valid until revoked"}</p>${Object.entries(
+              key.permissions,
+            )
+              .map(
+                ([resource, scopes]) =>
+                  `<code>${escape(resource)}</code><p class="help">${escape(scopes.join(" · "))}</p>`,
+              )
+              .join(
+                "",
+              )}<details><summary>Edit key</summary><form data-key-edit="${escape(key.keyId)}"><label>Name<input name="name" required maxlength="100" value="${escape(key.name)}"></label>${keyChoices(key.permissions)}<p class="help">Saving replaces this key’s grants with the selected current scopes. Unavailable grants are removed.</p><button>Save key</button></form></details><div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`,
+        )
+        .join("") ||
+      '<div class="empty"><h3>No API keys</h3><p>Create a key for a CLI or automation that needs direct access.</p></div>'
+    }
+    <p class="help">Resource policy changes can temporarily deny existing grants. Restoring policy can restore access. Disable or delete a key to revoke it; create a new key to replace one.</p></section><section class="card registration"><h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Clankerfiles CLI"></label>${keyChoices({})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Leave blank for a key valid until revoked. Expiry must be within one year. Save the key when it appears; it cannot be shown again.</p><button ${data.resources.length ? "" : "disabled"}>Create API key</button></form></section></div>
     <div class="columns dashboard-section"><section><h2>Clients <span class="count">${data.clients.length}</span></h2><p class="muted">Connect a compatible MCP client using your MCP server URL, then sign in and approve access. Registration alone grants no access.</p><div class="clients">
     ${
       data.clients.length
@@ -310,6 +356,67 @@ async function dashboard() {
       await refreshDashboard();
     });
   });
+  const keyForm = document.querySelector<HTMLFormElement>("#key-create")!;
+  keyForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submit(async () => {
+      const fields = new FormData(keyForm);
+      const expiry = textField(fields, "expiry");
+      const result = await request(
+        api.apiKeys.create({
+          payload: {
+            name: textField(fields, "name"),
+            permissions: keyGrants(keyForm),
+            expiresAt: expiry ? new Date(expiry).toISOString() : null,
+          },
+        }),
+      );
+      pendingKeys.set(result.keyId, `${result.name}\n${result.key}`);
+      keyForm.reset();
+      renderCredentials();
+      document.querySelector("#credentials")!.scrollIntoView({ behavior: "smooth" });
+      await refreshDashboard();
+    });
+  });
+  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-edit]"))
+    edit.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submit(async () => {
+        await request(
+          api.apiKeys.update({
+            payload: {
+              keyId: edit.dataset.keyEdit!,
+              name: textField(new FormData(edit), "name"),
+              permissions: keyGrants(edit),
+            },
+          }),
+        );
+        await refreshDashboard();
+      });
+    });
+  for (const button of main.querySelectorAll<HTMLButtonElement>(
+    "[data-key-toggle], [data-key-delete]",
+  ))
+    button.addEventListener("click", () => {
+      if (submitting) return;
+      const keyId = button.dataset.keyToggle ?? button.dataset.keyDelete!;
+      if (
+        button.dataset.keyDelete &&
+        !confirm("Permanently delete this API key? Subsequent verification will reject it.")
+      )
+        return;
+      void submit(async () => {
+        if (button.dataset.keyDelete) {
+          await request(api.apiKeys.delete({ payload: { keyId } }));
+          pendingKeys.delete(keyId);
+          renderCredentials();
+        } else
+          await request(
+            api.apiKeys.update({ payload: { keyId, enabled: button.dataset.enabled !== "true" } }),
+          );
+        await refreshDashboard();
+      });
+    });
   const resourceForm = document.querySelector<HTMLFormElement>("#resource-create")!;
   resourceForm.addEventListener("submit", (event) => {
     event.preventDefault();

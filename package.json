@@ -11,7 +11,9 @@
     "ready": "pnpm check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
     "test:interop": "node apps/server/scripts/mcp-interop.mjs",
-    "test:package": "node apps/server/scripts/production-smoke.mjs"
+    "test:package": "node apps/server/scripts/production-smoke.mjs",
+    "pack:dev": "vp run build && node scripts/pack-dev.mjs",
+    "test:dev-package": "node packages/dev/scripts/package-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",

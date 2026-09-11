@@ -38,6 +38,7 @@ The Vite+ monorepo conventions were generated in a safe scratch directory with
 then integrated without replacing existing auth code or Git history. The workspace uses pnpm catalogs and Vite+ recursive task orchestration, following clanker-okf's conventions. No unused scaffold example packages are retained.
 
 - `packages/api` (`@clankerauth/api`): shared Effect schemas and `HttpApi` contract for setup, resource and client administration, compiled to JavaScript and declarations. The server implements it with `HttpApiBuilder`; the browser derives its client with `HttpApiClient`. Better Auth retains its own client and handler for authentication/OAuth.
+- `packages/dev` (`@clankerauth/dev`): privately packed disposable issuer dependency with bundled production code, provider patches, and browser assets. `vp run pack:dev` produces a self-contained tarball for local downstream installation.
 - `apps/server` (`@clankerauth/server`): native HTTP service, auth/configuration, first-run setup, SQLite integration tests and the optional MCP interoperability harness. `vp pack` emits `dist/main.mjs`.
 - `apps/web` (`@clankerauth/web`): browser account setup, login, consent, resources and client access. Vite builds `dist`; the server resolves these assets through its workspace dependency, independent of its working directory.
 
@@ -51,6 +52,75 @@ First-run HTTP routes:
 
 - `GET /api/setup`: returns `{required: boolean}` without account details.
 - `POST /api/setup`: JSON `{email, password}` with the exact configured `Origin`; returns `201 {created: true}` without a session cookie. Invalid input returns 400, invalid origin returns 403, and completed setup returns 409.
+
+## Disposable issuers for downstream development
+
+Apps that need a fresh identity service for each development run can use the
+`@clankerauth/dev` development dependency. Its tarball includes the real issuer,
+patched provider dependencies, API contract, and dashboard assets. Consumers need
+Node 26 or newer; no sibling checkout or runtime npm dependencies are required.
+The package is private and has not been published. Build and verify a local tarball:
+
+```sh
+vp install
+vp run pack:dev
+vp run test:dev-package
+```
+
+This produces `dist/clankerauth-dev-0.1.0.tgz`. Copy it into the consuming app
+(e.g. `vendor/`) and install it as a file devDependency. For subsequent updates, bump
+`packages/dev/package.json` first and use the new versioned filename to avoid package
+manager caches reusing a previous tarball.
+
+```js
+import { startDisposableIssuer } from "@clankerauth/dev";
+
+const identity = await startDisposableIssuer({
+  resources: [
+    {
+      identifier: "http://127.0.0.1:7400/api",
+      name: "Example development API",
+      scopes: ["example:read", "example:write"],
+    },
+  ],
+  client: {
+    name: "Example development console",
+    redirect: "http://localhost:5173/auth/callback",
+    resources: ["http://127.0.0.1:7400/api"],
+  },
+});
+try {
+  // Pass identity.issuer, identity.clientId, and identity.clientSecret to the app.
+  // Show identity.url and identity.owner.{email,password} for browser sign-in.
+  // Start the app and await its complete shutdown here.
+} finally {
+  await identity.close();
+}
+```
+
+Each call binds only `127.0.0.1` on an OS-assigned port, generates a new encryption
+secret and owner password, and uses a private temporary directory exposed as
+`identity.directory`. Setup, sign-in, resource registration, and confidential native
+client registration go through the real HTTP APIs. Browser login, consent, OAuth,
+and API-key management retain normal production behavior. No persisted `.dev/`
+state, configured environment credentials, or existing issuer is used.
+
+The caller owns process signals and child processes: stop the consuming app, then
+await the idempotent `close()` to drain issuer requests, close SQLite, and remove
+the temporary directory. Provisioning failures also clean up. Ordinary shutdown
+removes all accounts, sessions, clients, keys, and consent; the next run starts
+fresh. Forced termination such as `SIGKILL` cannot run cleanup and may leave a
+temporary directory in the system temp location. The helper installs no signal
+handlers and prints no credentials itself. It is a development dependency,
+not part of the deployable production server package.
+
+Run the isolated HTTP/lifecycle checks after building with
+`vp run @clankerauth/dev#test`; the root test task includes them. The standalone
+`test:dev-package` check installs the tarball with npm into an isolated temporary
+project and runs those same checks without workspace resolution. Coverage includes
+complete listings beyond 100 API keys and sustained traffic across verification
+windows, protecting the bundled provider patches. Dependency license notices are
+collected in the tarball’s `dist/THIRD_PARTY_NOTICES.txt`.
 
 ## Configuration and trust boundaries
 
@@ -169,6 +239,16 @@ WWW-Authenticate: Bearer resource_metadata="https://okf.internal/.well-known/oau
 Return 401 for missing/invalid tokens, 403 with `insufficient_scope` and required scopes for insufficient access. Do not put `offline_access` in protected-resource scope requirements. Do not pass tokens through to unrelated services. `@better-auth/mcp` provides supported resource-server helpers such as `createMcpProtectedRequestHandler`; it is not installed here because this service does not host an MCP resource.
 
 The service supports CIMD, DCR and managed pre-registration. CIMD metadata is fetched server-side using the provider's secure Node transport with public-address validation and DNS pinning; private-address metadata hosts are not accepted. Publish the metadata document on a public HTTPS endpoint and ensure the issuer's DNS view resolves its hostname only to public addresses. The metadata endpoint must return the document directly without authentication or redirects. Split DNS that resolves the metadata hostname to a private address will fail validation; DCR remains available to clients without public metadata. DCR is unauthenticated so compatible clients can onboard automatically. Registration is limited to 10 requests per minute per direct peer and 1,000 automatic client records. On new onboarding attempts, unblocked clients older than seven days with no stored consent, refresh grants, or pending authorization codes are removed; blocked identifiers are retained. Treat registration as untrusted metadata and apply registration abuse limits at the reverse proxy. The official MCP client SDK interoperability harness exercises real clanker-okf actions with isolated fake storage; see [reproduction and results](docs/mcp-interop.md). Named desktop MCP products still require validation in the target environment.
+
+## API keys for CLIs and automation
+
+Create a key in the dashboard’s **API keys** section after registering its Resources. Select each scope explicitly, name the key, and optionally choose an expiry within one year. Keys otherwise remain valid until revoked. Copy the `ca_` credential when it appears; only its hash is stored and the plaintext cannot be retrieved again. To replace a key, create another, update the consuming application, and disable or delete the previous key.
+
+The owner can list, create, edit, enable/disable and delete keys through the dashboard or typed `/admin/api-keys` API. Writes require a valid browser session and exact same-origin protection. API keys cannot establish sessions or administer clankerauth. Raw Better Auth key-management endpoints are inaccessible.
+
+A resource server verifies a key by calling `POST /api/api-keys/verify` on the configured clankerauth origin, sending `Authorization: Bearer ca_…` and JSON `{ "resource": "https://example.internal/api" }`. The success response contains `{ keyId, ownerId, resource, scopes, expiresAt }`, with expiry encoded as an ISO timestamp or `null`. No separate verifier credential is required. Verification returns 401 for invalid/disabled/expired/deleted keys, 403 for no currently allowed scopes on that resource, and 429 after 1,000 verifications per key in a fixed one-minute window starting with its first verification. Activity does not extend the window; the next verification at or after its end starts a new window. Resource servers should verify each request without caching positive authorization so disabling/deleting takes effect on the next verification. Already admitted requests may finish.
+
+Key permissions retain the scopes explicitly selected at creation or editing. Current resource policy filters them at verification: removing a Resource or scope denies access while unavailable, and restoring it can restore prior grants. Adding a new scope never adds it to existing keys. Editing grants explicitly replaces the selection; disabling/deleting revokes the key.
 
 ## Deployment, migrations and backups
 

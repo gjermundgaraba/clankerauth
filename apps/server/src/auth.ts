@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
+import { apiKey } from "@better-auth/api-key";
 import { jwt } from "better-auth/plugins";
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
@@ -198,6 +199,13 @@ export async function openAuth(
       },
     },
     plugins: [
+      apiKey({
+        defaultPrefix: "ca_",
+        maximumNameLength: 100,
+        enableSessionForAPIKeys: false,
+        keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
+        rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 1000 },
+      }),
       jwt({
         disableSettingJwtHeader: true,
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
