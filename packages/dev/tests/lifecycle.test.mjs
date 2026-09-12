@@ -155,3 +155,93 @@ await test("bundled provider preserves complete key listings and fixed verificat
     await issuer.close();
   }
 });
+
+await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests", async () => {
+  const requests = [];
+  const metadataRequests = [];
+  const clientId = "https://fixture.example/oauth/client.json";
+  const redirect = "http://127.0.0.1:8765/callback";
+  const issuer = await startDisposableIssuer({
+    ...options,
+    onRequest(request) {
+      assert.deepEqual(Object.keys(request).sort(), ["method", "url"]);
+      assert.ok(request.url instanceof URL);
+      requests.push({ method: request.method, url: request.url.href });
+    },
+    cimdTransport(input, init) {
+      metadataRequests.push(new Request(input, init));
+      return Response.json({
+        client_id: clientId,
+        client_name: "Fixture metadata client",
+        redirect_uris: [redirect],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      });
+    },
+  });
+  try {
+    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/setup`));
+    requests.length = 0;
+    const discoveryURL = `${issuer.issuer}/.well-known/openid-configuration`;
+    const discoveryResponse = await fetch(discoveryURL);
+    assert.equal(discoveryResponse.status, 200);
+    const discovery = await discoveryResponse.json();
+    const keys = await fetch(discovery.jwks_uri);
+    assert.equal(keys.status, 200);
+    assert.ok(Array.isArray((await keys.json()).keys));
+    const registration = await fetch(discovery.registration_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "Dynamic fixture client",
+        redirect_uris: [redirect],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      }),
+    });
+    assert.equal(registration.status, 201);
+    const registered = await registration.json();
+    const tokens = await fetch(discovery.token_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: registered.client_id,
+        code: "invalid-test-code",
+        code_verifier: "a".repeat(43),
+        redirect_uri: redirect,
+      }),
+    });
+    assert.equal(tokens.status, 400);
+    await tokens.body.cancel();
+    assert.deepEqual(requests, [
+      { method: "GET", url: discoveryURL },
+      { method: "GET", url: discovery.jwks_uri },
+      { method: "POST", url: discovery.registration_endpoint },
+      { method: "POST", url: discovery.token_endpoint },
+    ]);
+    const authorizationURL = new URL(discovery.authorization_endpoint);
+    authorizationURL.search = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirect,
+      response_type: "code",
+      scope: "openid example:read",
+      resource: resource.identifier,
+      code_challenge: "a".repeat(43),
+      code_challenge_method: "S256",
+      state: "fixture-state",
+    }).toString();
+    const authorization = await fetch(authorizationURL, { redirect: "manual" });
+    assert.equal(authorization.status, 200);
+    const authorizationResult = await authorization.json();
+    assert.match(authorizationResult.url, /\/login/);
+    assert.equal(metadataRequests.length, 1);
+    assert.equal(metadataRequests[0].url, clientId);
+    assert.equal(metadataRequests[0].method, "GET");
+    assert.deepEqual(requests.at(-1), { method: "GET", url: authorizationURL.href });
+  } finally {
+    await issuer.close();
+  }
+});

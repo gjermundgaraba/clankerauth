@@ -14,6 +14,8 @@ import type { DisposableIssuer, DisposableIssuerOptions } from "./types.d.ts";
 export async function startDisposableIssuer({
   resources,
   client,
+  cimdTransport,
+  onRequest,
 }: DisposableIssuerOptions): Promise<DisposableIssuer> {
   const staticRoot = fileURLToPath(new URL("./web/", import.meta.url));
   await access(join(staticRoot, "index.html")).catch(() => {
@@ -31,7 +33,18 @@ export async function startDisposableIssuer({
     outgoing.writeHead(503).end();
   };
   const server = createNodeServer((incoming, outgoing) => {
-    const request = serve(incoming, outgoing);
+    const request = (async () => {
+      try {
+        onRequest?.({
+          method: incoming.method ?? "GET",
+          url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
+        });
+        await serve(incoming, outgoing);
+      } catch {
+        if (outgoing.headersSent) outgoing.destroy();
+        else outgoing.writeHead(500).end("Request failed");
+      }
+    })();
     active.add(request);
     void request.finally(() => active.delete(request));
   });
@@ -69,13 +82,16 @@ export async function startDisposableIssuer({
     });
     const { port } = server.address() as AddressInfo;
     const url = `http://127.0.0.1:${port}`;
-    service = await openAuth({
-      baseURL: url,
-      secret: randomBytes(32).toString("hex"),
-      database: join(directory, "issuer.sqlite"),
-      host: "127.0.0.1",
-      port,
-    });
+    service = await openAuth(
+      {
+        baseURL: url,
+        secret: randomBytes(32).toString("hex"),
+        database: join(directory, "issuer.sqlite"),
+        host: "127.0.0.1",
+        port,
+      },
+      { cimdTransport },
+    );
     await initialize(service);
     handler = application(service, staticRoot);
     serve = nodeListener(handler, url);

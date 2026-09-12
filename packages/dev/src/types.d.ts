@@ -1,6 +1,10 @@
 export interface DisposableIssuerOptions {
   resources: Array<{ identifier: string; name: string; scopes: string[] }>;
   client: { name: string; redirect: string; resources: string[] };
+  /** Test hook replacing outbound CIMD metadata retrieval. Defaults to the secure transport. */
+  cimdTransport?: (input: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
+  /** Test hook observing incoming HTTP requests, including provisioning. No headers or bodies. */
+  onRequest?: (request: { method: string; url: URL }) => void;
 }
 
 export interface DisposableIssuer {

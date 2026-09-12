@@ -37,6 +37,8 @@ await issuer.close();
 
 Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client through the real endpoints, and returns. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them.
 
+Two optional test hooks: `cimdTransport` replaces the outbound fetch of CIMD client metadata so a test can serve fixture documents, and `onRequest` observes the method and URL of every incoming request.
+
 Two optional test hooks help exercise integrations:
 
 - `cimdTransport(input, init)` replaces outbound Client ID Metadata Document retrieval and returns a `Response` or `Promise<Response>`. Its arguments match `fetch`. Use it to serve fixture metadata for HTTPS client IDs without an external server. When omitted, the issuer uses its secure metadata transport.
