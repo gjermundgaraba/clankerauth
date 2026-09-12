@@ -1,28 +1,31 @@
 import { randomBytes } from "node:crypto";
 import { access, mkdtemp, rm } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { application } from "../../../apps/server/src/app.ts";
-import { initialize, openAuth } from "../../../apps/server/src/auth.ts";
+import { initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
 import { createNodeServer, nodeListener } from "../../../apps/server/src/node-http.ts";
+import type { DisposableIssuer, DisposableIssuerOptions } from "./types.d.ts";
 
-/**
- * Start a real, isolated issuer for one development run. The caller owns signals and must await close() on shutdown.
- * @param {{resources: Array<{identifier: string, name: string, scopes: string[]}>, client: {name: string, redirect: string, resources: string[]}}} options
- */
-export async function startDisposableIssuer({ resources, client }) {
+/** Start a fresh issuer on a random loopback port. The caller owns signals and must await close(). */
+export async function startDisposableIssuer({
+  resources,
+  client,
+}: DisposableIssuerOptions): Promise<DisposableIssuer> {
   const staticRoot = fileURLToPath(new URL("./web/", import.meta.url));
   await access(join(staticRoot, "index.html")).catch(() => {
     throw new Error("The @clankerauth/dev installation is missing its bundled dashboard assets");
   });
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-disposable-"));
-  let service;
-  let handler;
-  let closing;
-  const active = new Set();
-  // Listen first to discover the issuer's port; reject requests until initialization completes.
-  let serve = async (_incoming, outgoing) => {
+  let service: Service | undefined;
+  let handler: ReturnType<typeof application> | undefined;
+  let closing: Promise<void> | undefined;
+  const active = new Set<Promise<void>>();
+  // Listen first to discover the port; reject requests until initialization completes.
+  let serve = async (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();
   };
   const server = createNodeServer((incoming, outgoing) => {
@@ -33,9 +36,11 @@ export async function startDisposableIssuer({ resources, client }) {
   const close = () =>
     (closing ??= (async () => {
       try {
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
           server.close((error) =>
-            error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve(),
+            error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING"
+              ? reject(error)
+              : resolve(),
           );
           server.closeIdleConnections();
         });
@@ -53,14 +58,14 @@ export async function startDisposableIssuer({ resources, client }) {
       }
     })());
   try {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => {
         server.off("error", reject);
         resolve();
       });
     });
-    const port = server.address().port;
+    const { port } = server.address() as AddressInfo;
     const url = `http://127.0.0.1:${port}`;
     service = await openAuth({
       baseURL: url,
@@ -76,8 +81,8 @@ export async function startDisposableIssuer({ resources, client }) {
       email: "owner@example.internal",
       password: randomBytes(24).toString("base64url"),
     };
-    const cookies = new Map();
-    const post = async (path, body, status) => {
+    const cookies = new Map<string, string>();
+    const post = async (path: string, body: unknown, status: number): Promise<unknown> => {
       const response = await fetch(new URL(path, url), {
         method: "POST",
         redirect: "manual",
@@ -94,7 +99,7 @@ export async function startDisposableIssuer({ resources, client }) {
         throw new Error(`Disposable issuer provisioning failed at ${path} (${response.status})`);
       }
       for (const cookie of response.headers.getSetCookie()) {
-        const pair = cookie.split(";")[0];
+        const pair = cookie.split(";")[0]!;
         const separator = pair.indexOf("=");
         cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
       }
@@ -103,11 +108,11 @@ export async function startDisposableIssuer({ resources, client }) {
     await post("/api/setup", owner, 201);
     await post("/api/auth/sign-in/email", owner, 200);
     for (const resource of resources) await post("/admin/resources", resource, 201);
-    const registration = await post(
+    const registration = (await post(
       "/admin/clients",
       { ...client, confidential: true, native: true },
       201,
-    );
+    )) as { client_id: string; client_secret?: string };
     if (!registration.client_secret)
       throw new Error("Disposable issuer did not return client credentials");
     return {

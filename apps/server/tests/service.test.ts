@@ -15,7 +15,7 @@ import { validateSettings, type Settings } from "../src/config.ts";
 
 const password = "test-only owner password 8rS!";
 const email = "owner@example.internal";
-const resourceA = "https://okf.internal/mcp";
+const resourceA = "https://notes.internal/mcp";
 const resourceB = "https://reports.internal/api";
 let service: Service;
 let handle: ReturnType<typeof application>;
@@ -82,7 +82,7 @@ async function login(pass = password) {
   return request("/api/auth/sign-in/email", { email, password: pass });
 }
 const resourceFixtures = [
-  { identifier: resourceA, name: "OKF MCP", scopes: ["okf:read", "okf:write"] },
+  { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read", "notes:write"] },
   { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
 ];
 async function createResourceFixtures() {
@@ -116,7 +116,7 @@ function authorization(clientId: string, resource = resourceA, extra: Record<str
     client_id: clientId,
     redirect_uri: "http://127.0.0.1:9876/callback",
     response_type: "code",
-    scope: "openid offline_access okf:read",
+    scope: "openid offline_access notes:read",
     resource,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
@@ -797,9 +797,9 @@ describe("OAuth boundaries and lifecycle", () => {
             requiredScopes: [scope],
           },
         );
-      expect((await verify("okf:read")).sub).toBe(await Effect.runPromise(service.owner()));
-      await expect(verify("okf:write")).rejects.toThrow();
-      await expect(verify("okf:read", resourceB)).rejects.toThrow();
+      expect((await verify("notes:read")).sub).toBe(await Effect.runPromise(service.owner()));
+      await expect(verify("notes:write")).rejects.toThrow();
+      await expect(verify("notes:read", resourceB)).rejects.toThrow();
     } finally {
       await new Promise<void>((resolve) => keyServer.close(() => resolve()));
     }
@@ -813,7 +813,7 @@ describe("OAuth boundaries and lifecycle", () => {
       resourceA,
       `${settings.baseURL}/api/auth/oauth2/userinfo`,
     ]);
-    expect(verified.payload.scope).toContain("okf:read");
+    expect(verified.payload.scope).toContain("notes:read");
     expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(300);
     const pieces = tokenA.access_token.split(".");
     pieces[1] = Buffer.from(JSON.stringify({ ...verified.payload, aud: resourceB })).toString(
@@ -1119,7 +1119,7 @@ describe("dashboard resources and client access", () => {
 
   test("the same scope label has independent consent on each resource", async () => {
     const app = await client();
-    expect((await updateResource(resourceB, ["okf:read", "okf:write"])).status).toBe(200);
+    expect((await updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
     expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
     await authorize(app.client_id, resourceA);
     const flowB = authorization(app.client_id, resourceB, { prompt: "" });
@@ -1156,23 +1156,23 @@ describe("dashboard resources and client access", () => {
   test("new scopes appear immediately and need consent; name-only changes preserve refresh grants", async () => {
     const app = await client();
     const issued = await tokens(app.client_id);
-    expect((await updateResource(resourceA, ["okf:read", "okf:write"], "Renamed")).status).toBe(
+    expect((await updateResource(resourceA, ["notes:read", "notes:write"], "Renamed")).status).toBe(
       200,
     );
     expect((await refresh(app.client_id, issued.refresh_token, resourceA)).status).toBe(200);
-    expect((await updateResource(resourceA, ["okf:read", "okf:write", "okf:admin"])).status).toBe(
-      200,
-    );
+    expect(
+      (await updateResource(resourceA, ["notes:read", "notes:write", "notes:admin"])).status,
+    ).toBe(200);
     const metadata = await (
       await request("/.well-known/oauth-authorization-server/api/auth")
     ).json();
-    expect(metadata.scopes_supported).toContain("okf:admin");
+    expect(metadata.scopes_supported).toContain("notes:admin");
     const stored = (await listing()).clients.find(
       (row: { client_id: string }) => row.client_id === app.client_id,
     );
-    expect(stored.scope.split(" ")).toContain("okf:admin");
+    expect(stored.scope.split(" ")).toContain("notes:admin");
     const response = await request(
-      authorization(app.client_id, resourceA, { scope: "openid okf:admin", prompt: "none" }).path,
+      authorization(app.client_id, resourceA, { scope: "openid notes:admin", prompt: "none" }).path,
     );
     expect(
       new URL(response.headers.get("location")!, settings.baseURL).searchParams.get("error"),
@@ -1182,34 +1182,34 @@ describe("dashboard resources and client access", () => {
   test("scope removal narrows issued scopes while unconsumed grants retain their original consent", async () => {
     const app = await client();
     expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-    expect((await updateResource(resourceB, ["okf:read", "okf:write"])).status).toBe(200);
-    const sharedScopes = "openid offline_access okf:read";
+    expect((await updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
+    const sharedScopes = "openid offline_access notes:read";
     const issuedA = await tokens(app.client_id, resourceA);
     const retainedRefreshA = await tokens(app.client_id, resourceA);
     const issuedB = await tokens(app.client_id, resourceB, undefined, sharedScopes);
     const pendingA = await authorize(app.client_id, resourceA);
     const retainedA = await authorize(app.client_id, resourceA);
     const pendingB = await authorize(app.client_id, resourceB, sharedScopes);
-    expect((await updateResource(resourceA, ["okf:write"])).status).toBe(200);
+    expect((await updateResource(resourceA, ["notes:write"])).status).toBe(200);
     const narrowed = await refresh(app.client_id, issuedA.refresh_token, resourceA);
     expect(narrowed.status).toBe(200);
     const narrowedToken = await narrowed.json();
-    expect(narrowedToken.scope.split(" ")).not.toContain("okf:read");
+    expect(narrowedToken.scope.split(" ")).not.toContain("notes:read");
     const keys = createLocalJWKSet(await (await request("/api/auth/jwks")).json());
     const verified = await jwtVerify(narrowedToken.access_token, keys, { audience: resourceA });
-    expect(String(verified.payload.scope).split(" ")).not.toContain("okf:read");
+    expect(String(verified.payload.scope).split(" ")).not.toContain("notes:read");
     const narrowedCode = await exchange(app.client_id, pendingA, resourceA);
     expect(narrowedCode.status).toBe(200);
-    expect((await narrowedCode.json()).scope.split(" ")).not.toContain("okf:read");
+    expect((await narrowedCode.json()).scope.split(" ")).not.toContain("notes:read");
     expect((await refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
     expect((await exchange(app.client_id, pendingB, resourceB)).status).toBe(200);
-    expect((await updateResource(resourceA, ["okf:read", "okf:write"])).status).toBe(200);
+    expect((await updateResource(resourceA, ["notes:read", "notes:write"])).status).toBe(200);
     const restoredRefresh = await refresh(app.client_id, retainedRefreshA.refresh_token, resourceA);
     expect(restoredRefresh.status).toBe(200);
-    expect((await restoredRefresh.json()).scope.split(" ")).toContain("okf:read");
+    expect((await restoredRefresh.json()).scope.split(" ")).toContain("notes:read");
     const restoredCode = await exchange(app.client_id, retainedA, resourceA);
     expect(restoredCode.status).toBe(200);
-    expect((await restoredCode.json()).scope.split(" ")).toContain("okf:read");
+    expect((await restoredCode.json()).scope.split(" ")).toContain("notes:read");
     // Exchanging a code consumes it even when resource policy narrows its scopes.
     expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
   });
@@ -1259,7 +1259,7 @@ describe("dashboard resources and client access", () => {
       service.sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
     );
     try {
-      expect((await updateResource(resourceA, ["okf:read", "new:scope"])).status).toBe(500);
+      expect((await updateResource(resourceA, ["notes:read", "new:scope"])).status).toBe(500);
       expect(await listing()).toEqual(before);
       const metadataAfter = await (
         await request("/.well-known/oauth-authorization-server/api/auth")

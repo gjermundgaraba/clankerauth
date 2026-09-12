@@ -167,8 +167,6 @@ export async function openAuth(
               error: "temporarily_unavailable",
               error_description: "Client registration capacity reached",
             });
-          // Trust and PKCE are local policy, never self-asserted metadata.
-
           const redirects = ctx.body.redirect_uris;
           if (
             !ctx.body.application_type &&

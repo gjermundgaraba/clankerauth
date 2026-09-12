@@ -20,8 +20,8 @@ import {
 import { createOwner, type Service } from "./auth.ts";
 
 export function apiError(error: unknown) {
-  const body = { error: "Request could not be completed" };
   if (error instanceof APIError) {
+    const body = { error: error.body?.message ?? "Request could not be completed" };
     switch (error.statusCode) {
       case 400:
         return new BadRequest(body);
@@ -38,17 +38,6 @@ export function apiError(error: unknown) {
       case 503:
         return new ServiceUnavailable(body);
     }
-  }
-  return new InternalServerError(body);
-}
-
-// Local and provider errors share status mapping; provider-only descriptions stay private.
-function resourceError(error: unknown) {
-  if (error instanceof APIError) {
-    const body = { error: error.body?.message ?? "Resource request could not be completed" };
-    if (error.statusCode === 400) return new BadRequest(body);
-    if (error.statusCode === 404) return new NotFound(body);
-    if (error.statusCode === 409) return new Conflict(body);
   }
   return new InternalServerError({ error: "Request could not be completed" });
 }
@@ -122,7 +111,7 @@ export function administration(service: Service) {
       const catalog = yield* Effect.all({
         resources: service.resources.list(),
         clientAccess: service.resources.access(),
-      }).pipe(Effect.mapError(resourceError));
+      }).pipe(Effect.mapError(apiError));
       return {
         clients,
         ...catalog,
@@ -140,7 +129,7 @@ export function administration(service: Service) {
         );
       const scopes = yield* service.resources
         .scopesFor(input.resources)
-        .pipe(Effect.mapError(resourceError));
+        .pipe(Effect.mapError(apiError));
       const client = yield* Effect.tryPromise({
         try: () =>
           auth.api.createOAuthClient({
@@ -157,7 +146,7 @@ export function administration(service: Service) {
         catch: apiError,
       });
       yield* service.resources.setAccess(client.client_id, input.resources, headers).pipe(
-        Effect.mapError(resourceError),
+        Effect.mapError(apiError),
         Effect.tapError(() =>
           Effect.tryPromise({
             try: () =>
@@ -174,20 +163,20 @@ export function administration(service: Service) {
     ) {
       const clientAccess = yield* service.resources
         .setAccess(input.client_id, input.resources, headers)
-        .pipe(Effect.mapError(resourceError));
+        .pipe(Effect.mapError(apiError));
       return { clientAccess };
     }),
     createResource: Effect.fn("Administration.createResource")(function* (
       headers: Headers,
       input: typeof Resource.Type,
     ) {
-      return yield* service.resources.create(input, headers).pipe(Effect.mapError(resourceError));
+      return yield* service.resources.create(input, headers).pipe(Effect.mapError(apiError));
     }),
     updateResource: Effect.fn("Administration.updateResource")(function* (
       headers: Headers,
       input: typeof Resource.Type,
     ) {
-      return yield* service.resources.update(input, headers).pipe(Effect.mapError(resourceError));
+      return yield* service.resources.update(input, headers).pipe(Effect.mapError(apiError));
     }),
     deleteResource: Effect.fn("Administration.deleteResource")(function* (
       headers: Headers,
@@ -195,7 +184,7 @@ export function administration(service: Service) {
     ) {
       return yield* service.resources
         .delete(input.identifier, headers)
-        .pipe(Effect.mapError(resourceError));
+        .pipe(Effect.mapError(apiError));
     }),
     delete: Effect.fn("Administration.delete")(function* (
       headers: Headers,
@@ -208,12 +197,12 @@ export function administration(service: Service) {
       return { deleted: true };
     }),
     revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
-      return yield* service.onboarding.revoke(input.client_id).pipe(Effect.mapError(resourceError));
+      return yield* service.onboarding.revoke(input.client_id).pipe(Effect.mapError(apiError));
     }),
     block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
       return yield* service.onboarding
         .block(input.client_id, input.blocked)
-        .pipe(Effect.mapError(resourceError));
+        .pipe(Effect.mapError(apiError));
     }),
     rotate: Effect.fn("Administration.rotate")(function* (
       headers: Headers,

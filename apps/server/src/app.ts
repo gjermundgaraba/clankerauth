@@ -25,6 +25,17 @@ const publicPaths = new Set([
   "/.well-known/openid-configuration",
   "/.well-known/oauth-authorization-server",
 ]);
+const corsPaths = new Set([
+  "/jwks",
+  "/oauth2/register",
+  "/oauth2/token",
+  "/oauth2/revoke",
+  "/oauth2/introspect",
+  "/oauth2/userinfo",
+  "/.well-known/oauth-authorization-server",
+  "/.well-known/oauth-authorization-server/api/auth",
+  "/.well-known/openid-configuration",
+]);
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
 export function application(
@@ -93,20 +104,7 @@ export function application(
   }
   const handle = async (req: Request) => {
     const path = new URL(req.url).pathname.replace(/^\/api\/auth/, "");
-    const publicCors =
-      [
-        "/jwks",
-        "/oauth2/register",
-        "/oauth2/token",
-        "/oauth2/revoke",
-        "/oauth2/introspect",
-        "/oauth2/userinfo",
-      ].includes(path) ||
-      [
-        "/.well-known/oauth-authorization-server",
-        "/.well-known/oauth-authorization-server/api/auth",
-        "/.well-known/openid-configuration",
-      ].includes(path);
+    const publicCors = corsPaths.has(path);
     let response: Response;
     try {
       response =

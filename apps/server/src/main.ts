@@ -45,7 +45,7 @@ const program = Effect.scoped(
     );
   }),
 );
-await Effect.runPromise(program).catch(() => {
-  console.error("Startup failed. Check configuration, database schema and owner state.");
+await Effect.runPromise(program).catch((error: unknown) => {
+  console.error("Startup failed:", error);
   process.exitCode = 1;
 });

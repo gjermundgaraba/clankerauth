@@ -36,13 +36,13 @@ The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.3.pa
 - Refresh-token client binding is checked before replay-family invalidation, preventing a rotated token from client A from deleting client B's family.
 - Access-token signing and refresh writes both settle before an issuance error propagates, allowing graceful shutdown to drain outstanding provider writes.
 
-These fixes preserve provider cryptography and token formats; they do not serialize requests or add transaction rollback. Failed issuance may consume a code or leave a completed grant. Preserve the cross-client revocation and injected-signing-failure regressions and re-evaluate both fixes when upgrading.
+These fixes preserve provider cryptography and token formats; they do not serialize requests or add transaction rollback. Failed issuance may consume a code or leave a completed grant.
 
 Graceful shutdown closes admission and tracks all admitted application work, including disconnected requests, until completion before closing SQLite. Late admission receives 503.
 
 ## API-key listing patch
 
-The [API-key provider patch](../patches/@better-auth__api-key@1.7.3.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials. Recheck this behavior before removing the patch on a provider upgrade.
+The [API-key provider patch](../patches/@better-auth__api-key@1.7.3.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials.
 
 ## API-key rate-limit window
 

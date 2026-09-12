@@ -42,9 +42,6 @@ try {
     timeout: 60000,
   });
   process.stdout.write(result.stdout);
-  console.log(
-    "Standalone npm tarball installation passed without workspace or runtime dependencies.",
-  );
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

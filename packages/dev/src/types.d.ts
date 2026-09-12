@@ -14,5 +14,5 @@ export interface DisposableIssuer {
   close(): Promise<void>;
 }
 
-/** Starts a fresh real issuer on a random IPv4 loopback port. The caller owns shutdown signals. */
+/** Start a fresh issuer on a random loopback port. The caller owns signals and must await close(). */
 export function startDisposableIssuer(options: DisposableIssuerOptions): Promise<DisposableIssuer>;

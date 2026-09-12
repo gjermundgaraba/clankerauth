@@ -8,8 +8,6 @@ export function createAbortAwareTransport(
   transport: ClientMetadataResourceFetch,
   maximumPending = 8,
 ): ClientMetadataResourceFetch {
-  if (!Number.isSafeInteger(maximumPending) || maximumPending < 1)
-    throw new RangeError("maximumPending must be a positive safe integer");
   let pending = 0;
   return (input, init) => {
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);

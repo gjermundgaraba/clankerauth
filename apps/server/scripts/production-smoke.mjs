@@ -150,9 +150,6 @@ try {
     body: JSON.stringify({ email: "another@example.internal", password }),
   });
   assert.equal(repeatedSetup.status, 409);
-  console.log(
-    "PASS production package: automatic migration, web setup/login, no session JWT header, UI/assets, CIMD discovery, DCR and persisted block policy, persisted keys/session, setup stays closed; isolated DB and unrelated cwd",
-  );
 } finally {
   await stop();
   rmSync(directory, { recursive: true, force: true });
