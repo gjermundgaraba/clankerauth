@@ -2,6 +2,13 @@
 
 A disposable [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) issuer for developing and testing applications that authenticate against one. The package bundles the whole server and dashboard with no dependencies, so it needs only Node 26 or newer.
 
+It is published to GitHub Packages, which needs a GitHub token with the `read:packages` scope even for public packages. Point the scope at the registry in `.npmrc`, then install:
+
+```ini
+@gjermundgaraba:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
 ```sh
 npm install --save-dev @gjermundgaraba/clankerauth-dev
 ```
@@ -29,5 +36,10 @@ await issuer.close();
 ```
 
 Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client through the real endpoints, and returns. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them.
+
+Two optional test hooks help exercise integrations:
+
+- `cimdTransport(input, init)` replaces outbound Client ID Metadata Document retrieval and returns a `Response` or `Promise<Response>`. Its arguments match `fetch`. Use it to serve fixture metadata for HTTPS client IDs without an external server. When omitted, the issuer uses its secure metadata transport.
+- `onRequest({ method, url })` observes actual incoming HTTP requests at the issuer listener, including setup, discovery, JWKS, dynamic client registration, and token requests. `url` is a `URL`; headers and bodies are never passed. The callback runs synchronously before handling each request. A thrown error makes that request fail with HTTP 500, so keep observers nonthrowing.
 
 MIT licensed. The bundled third-party licenses are listed in `dist/THIRD_PARTY_NOTICES.txt`.

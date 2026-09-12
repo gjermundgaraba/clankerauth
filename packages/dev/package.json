@@ -19,8 +19,7 @@
     }
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "build": "vp pack && node scripts/assets.mjs",

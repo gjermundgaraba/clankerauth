@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+  packages: write
 
 jobs:
   publish:
@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26.7.0
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
       - name: Check that the tag matches the package version
         run: |
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/dev/package.json').version")"
@@ -26,3 +26,5 @@ jobs:
       - run: pnpm ready
       - run: npm publish
         working-directory: packages/dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
