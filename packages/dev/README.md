@@ -2,14 +2,11 @@
 
 A disposable [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) issuer for developing and testing applications that authenticate against one. The package bundles the whole server and dashboard with no dependencies, so it needs only Node 26 or newer.
 
-It is published to GitHub Packages, which needs a GitHub token with the `read:packages` scope even for public packages. Point the scope at the registry in `.npmrc`, then install:
-
-```ini
-@gjermundgaraba:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
+It is published to GitHub Packages, which needs a GitHub token with the `read:packages` scope even for public packages. Map the scope in the project `.npmrc` and keep the credential in your user-level `~/.npmrc`, because pnpm ignores environment-expanded credentials in a project file:
 
 ```sh
+echo '@gjermundgaraba:registry=https://npm.pkg.github.com' >> .npmrc
+echo '//npm.pkg.github.com/:_authToken=${GH_TOKEN}' >> ~/.npmrc
 npm install --save-dev @gjermundgaraba/clankerauth-dev
 ```
 
