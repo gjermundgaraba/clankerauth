@@ -10,9 +10,7 @@
     "test": "vp run -r test",
     "ready": "pnpm check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
-    "test:package": "node apps/server/scripts/production-smoke.mjs",
-    "pack:dev": "vp run build && node scripts/pack-dev.mjs",
-    "test:dev-package": "node packages/dev/scripts/package-smoke.mjs"
+    "test:package": "node apps/server/scripts/production-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",

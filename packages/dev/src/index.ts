@@ -17,7 +17,9 @@ export async function startDisposableIssuer({
 }: DisposableIssuerOptions): Promise<DisposableIssuer> {
   const staticRoot = fileURLToPath(new URL("./web/", import.meta.url));
   await access(join(staticRoot, "index.html")).catch(() => {
-    throw new Error("The @clankerauth/dev installation is missing its bundled dashboard assets");
+    throw new Error(
+      "The @gjermundgaraba/clankerauth-dev installation is missing its bundled dashboard assets",
+    );
   });
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-disposable-"));
   let service: Service | undefined;

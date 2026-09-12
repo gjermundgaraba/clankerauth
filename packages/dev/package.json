@@ -1,8 +1,13 @@
 {
-  "name": "@clankerauth/dev",
+  "name": "@gjermundgaraba/clankerauth-dev",
   "version": "0.1.1",
-  "private": true,
   "description": "Disposable local Clankerauth issuer for application development",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerauth.git",
+    "directory": "packages/dev"
+  },
   "files": [
     "dist"
   ],
@@ -13,10 +18,13 @@
       "import": "./dist/index.mjs"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "vp pack && node scripts/assets.mjs",
-    "test": "node --test tests/lifecycle.test.mjs",
-    "test:package": "node scripts/package-smoke.mjs"
+    "test": "node --test tests/lifecycle.test.mjs && node scripts/package-smoke.mjs"
   },
   "devDependencies": {
     "@clankerauth/api": "workspace:*",

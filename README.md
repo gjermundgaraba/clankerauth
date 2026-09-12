@@ -72,6 +72,8 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one.
 
+To test a client or resource server locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway issuer with your resources and a client already provisioned.
+
 ## Develop
 
 ```sh
@@ -84,7 +86,7 @@ pnpm ready    # format, lint, types, builds, all tests
 - `packages/api`: the Effect `HttpApi` contract shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
-- `packages/dev`: `startDisposableIssuer()`, a throwaway issuer for developing downstream apps, packed into a self-contained tarball by `pnpm pack:dev`.
+- `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it; a `v*` tag publishes it.
 - `patches/`: two pinned fixes to the Better Auth plugins, explained in [docs/provider-integration.md](docs/provider-integration.md).
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
