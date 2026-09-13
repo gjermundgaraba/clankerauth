@@ -31,6 +31,7 @@ try {
   const api = await import(pathToFileURL(join(installed, "dist/index.js")).href);
   assert.deepEqual(Object.keys(api).sort(), [
     "AuthError",
+    "IssuerResponseError",
     "challenge",
     "createBrowserSession",
     "createVerifier",
