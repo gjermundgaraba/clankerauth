@@ -16,6 +16,7 @@ Register one **Resource** per protected target in the dashboard, for example `ht
 
 ```ts
 import {
+  AuthError,
   createVerifier,
   failureResponse,
   protectedResourceMetadata,

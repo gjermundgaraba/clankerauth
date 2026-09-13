@@ -24,3 +24,13 @@ export class AuthError extends Error {
     this.status = statuses[code];
   }
 }
+
+/** The issuer answered a verification request with an unexpected status. Reported to `onFailure`, never thrown. */
+export class IssuerResponseError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Issuer responded ${status}`);
+    this.name = "IssuerResponseError";
+    this.status = status;
+  }
+}

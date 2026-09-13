@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-dev",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Disposable local Clankerauth issuer for application development",
   "license": "MIT",
   "repository": {

@@ -3,6 +3,7 @@ import type { JWTPayload } from "jose";
 import { test } from "vite-plus/test";
 import {
   AuthError,
+  IssuerResponseError,
   createVerifier,
   failureResponse,
   protectedResourceMetadata,
@@ -25,8 +26,10 @@ const withIssuer = async (
         issuer: issuer.issuer,
         resource,
         requiredScopes: ["notes:read"],
-        onFailure: (operation) => {
-          failures.push(operation);
+        onFailure: (operation, error) => {
+          failures.push(
+            error instanceof IssuerResponseError ? `${operation}:${error.status}` : operation,
+          );
         },
       }),
       issuer,
@@ -73,7 +76,6 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
       { iss: "https://evil.example/api/auth" },
       { aud: "http://another.example/api" },
       { exp: 0 },
-      { iat: Math.floor(Date.now() / 1000) - 600 },
       { cnf: { jkt: "proof" } },
       { client_id: undefined },
       { sub: "" },
@@ -105,7 +107,7 @@ test("malformed credentials, outages and rate limits are distinct outcomes", () 
     issuer.fail(503);
     assert.equal(await code(verifier.verify(`Bearer ${issuer.key}`)), "unavailable");
     assert.equal(await code(verifier.verify(`Bearer ${await issuer.sign()}`)), "unavailable");
-    assert.deepEqual(failures, ["api-key.verify", "jwt.verify"]);
+    assert.deepEqual(failures, ["api-key.verify:503", "jwt.verify"]);
     issuer.fail(429);
     assert.equal(await code(verifier.verify(`Bearer ${issuer.key}`)), "rate_limited");
     issuer.fail(403);

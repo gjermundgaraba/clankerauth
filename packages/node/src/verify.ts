@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
-import { AuthError } from "./errors.ts";
+import { AuthError, IssuerResponseError, type AuthErrorCode } from "./errors.ts";
 
 /** Who a request acts as. The subject is always the issuer's owner; the actor is the credential that acted. */
 export interface Principal {
@@ -39,6 +39,12 @@ const credentialErrors = [
   errors.JOSEAlgNotAllowed,
   errors.JWKSNoMatchingKey,
 ];
+/** Verification statuses that are credential outcomes rather than outages. */
+const outcomes: Record<number, AuthErrorCode | undefined> = {
+  401: "unauthorized",
+  403: "forbidden",
+  429: "rate_limited",
+};
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 const scopeList = (value: unknown): readonly string[] | undefined =>
   Array.isArray(value) && value.every(nonEmpty) ? value : undefined;
@@ -58,7 +64,6 @@ export function createVerifier(options: VerifierOptions): Verifier {
         algorithms: ["EdDSA"],
         typ: "at+jwt",
         requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
-        maxTokenAge: 300,
       }));
     } catch (error) {
       if (credentialErrors.some((kind) => error instanceof kind))
@@ -90,12 +95,11 @@ export function createVerifier(options: VerifierOptions): Verifier {
       await report("api-key.verify", error);
       throw new AuthError("unavailable");
     }
-    if (response.status === 401) return unauthorized(response);
-    if (response.status === 403) return rejected(response, new AuthError("forbidden"));
-    if (response.status === 429) return rejected(response, new AuthError("rate_limited"));
     if (!response.ok) {
       await response.body?.cancel();
-      await report("api-key.verify", new Error(`Verification responded ${response.status}`));
+      const code = outcomes[response.status];
+      if (code) throw new AuthError(code);
+      await report("api-key.verify", new IssuerResponseError(response.status));
       throw new AuthError("unavailable");
     }
     let verified: unknown;
@@ -128,14 +132,6 @@ export function createVerifier(options: VerifierOptions): Verifier {
     }
     if (expiry !== null && expiry <= Date.now()) throw new AuthError("unauthorized");
     return { subject: ownerId, scopes: verifiedScopes, actor: { kind: "key", keyId } };
-  };
-  const unauthorized = async (response: Response): Promise<never> => {
-    await response.body?.cancel();
-    throw new AuthError("unauthorized");
-  };
-  const rejected = async (response: Response, error: AuthError): Promise<never> => {
-    await response.body?.cancel();
-    throw error;
   };
   const verifyToken = async (token: string): Promise<Principal> => {
     const principal = await (token.startsWith("ca_") ? verifyKey(token) : verifyJwt(token));

@@ -1,4 +1,4 @@
-export { AuthError, type AuthErrorCode } from "./errors.ts";
+export { AuthError, IssuerResponseError, type AuthErrorCode } from "./errors.ts";
 export { createVerifier, type Principal, type Verifier, type VerifierOptions } from "./verify.ts";
 export {
   challenge,

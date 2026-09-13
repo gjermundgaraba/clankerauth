@@ -53,6 +53,7 @@ const withFixture = async (
     restart: () => BrowserSession;
     failRefresh: (failed?: boolean) => void;
     failDiscovery: (failed: boolean) => void;
+    failRevocation: () => void;
     invalidateRefresh: () => void;
     pauseRefresh: () => { started: Promise<void>; release: () => void };
     revoked: string[];
@@ -68,6 +69,7 @@ const withFixture = async (
   let discoveryReads = 0;
   let fail = false;
   let discoveryFailure = false;
+  let revocationFailure = false;
   let invalid = false;
   let pause:
     | {
@@ -142,6 +144,7 @@ const withFixture = async (
       let body = "";
       for await (const chunk of req) body += String(chunk);
       revoked.push(new URLSearchParams(body).get("token") ?? "");
+      if (revocationFailure) res.statusCode = 503;
       res.end("{}");
     } else res.end("{}");
   });
@@ -224,6 +227,9 @@ const withFixture = async (
       },
       failDiscovery: (failed) => {
         discoveryFailure = failed;
+      },
+      failRevocation: () => {
+        revocationFailure = true;
       },
     });
   } finally {
@@ -398,6 +404,18 @@ test("logout waits for an admitted refresh and revokes the rotated credential", 
     assert.equal(await refresh, "second-access");
     assert.equal((await logout).status, 204);
     assert.deepEqual(revoked, ["second-refresh"]);
+    await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
+  }));
+
+test("logout stays local when the issuer fails to revoke, and reports it", () =>
+  withFixture(async ({ auth, login, failRevocation, revoked, rows, failures }) => {
+    const cookie = await login();
+    failRevocation();
+    const logout = await auth.logout(request("/auth/logout", "POST", cookie));
+    assert.equal(logout.status, 204);
+    assert.deepEqual(revoked, ["first-refresh"]);
+    assert.equal(rows.size, 0);
+    assert.deepEqual(failures, ["browser.revoke"]);
     await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
   }));
 

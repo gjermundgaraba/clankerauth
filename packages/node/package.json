@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-node",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Clankerauth integration for Node services: token and API-key verification, protected-resource metadata, and browser login with server-held tokens",
   "license": "MIT",
   "repository": {

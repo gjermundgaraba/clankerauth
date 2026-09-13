@@ -474,10 +474,18 @@ export function createBrowserSession(options: BrowserSessionOptions): BrowserSes
         const saved = decodeCredentials(open(row.payload));
         if (!saved.refreshToken) return;
         try {
-          await oauth.revocationRequest(await provider(), client, clientAuth, saved.refreshToken, {
-            ...requestOptions(),
-            additionalParameters: { token_type_hint: "refresh_token" },
-          });
+          await oauth.processRevocationResponse(
+            await oauth.revocationRequest(
+              await provider(),
+              client,
+              clientAuth,
+              saved.refreshToken,
+              {
+                ...requestOptions(),
+                additionalParameters: { token_type_hint: "refresh_token" },
+              },
+            ),
+          );
         } catch (error) {
           // Local invalidation is authoritative even when revocation is unavailable.
           if (!(error instanceof Failure)) await report("browser.revoke", error);

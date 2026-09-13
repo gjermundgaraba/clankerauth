@@ -127,7 +127,7 @@ async function dynamicClient() {
   return response.json();
 }
 /** An authorization request without a prompt parameter: the server decides about consent. */
-function silent(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
+function unprompted(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
   const flow = authorization(clientId, resource, extra);
   const url = new URL(flow.path, settings.baseURL);
   url.searchParams.delete("prompt");
@@ -498,10 +498,6 @@ describe("owner boundary", () => {
     expect(session.status).toBe(200);
     const current = await session.json();
     expect(current.user.id).toBe(await Effect.runPromise(service.owner()));
-    // The owner's session is the single sign-on session: it lasts 30 days and slides.
-    expect(Date.parse(current.session.expiresAt) - Date.now()).toBeGreaterThan(
-      29 * 24 * 60 * 60 * 1000,
-    );
     expect(session.headers.has("set-auth-jwt")).toBe(false);
     expect((await request("/admin/clients")).status).toBe(200);
     expect((await request("/admin/clients", {}, { origin: "https://evil.example" })).status).toBe(
@@ -519,10 +515,36 @@ describe("owner boundary", () => {
 
 describe("OAuth boundaries and lifecycle", () => {
   beforeEach(setupOwner);
+  test("the owner's session is the single sign-on session: 30 days, renewed by application sign-in", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const expiry = async () => {
+      const response = await request("/api/auth/get-session");
+      expect(response.status).toBe(200);
+      return Date.parse((await response.json()).session.expiresAt);
+    };
+    await login();
+    const app = await client();
+    const initial = await expiry();
+    expect(initial - Date.now()).toBeGreaterThan(29 * day);
+    expect(initial - Date.now()).toBeLessThanOrEqual(30 * day);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * day);
+      const redirect = await request(unprompted(app.client_id).path);
+      expect(redirect.status, await redirect.clone().text()).toBe(302);
+      expect(redirect.headers.getSetCookie().join(";")).toContain("session_token");
+      const renewed = await expiry();
+      expect(renewed).toBeGreaterThan(initial + day);
+      expect(renewed - Date.now()).toBeLessThanOrEqual(30 * day);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("managed clients are first party: a signed-in owner is redirected without consent", async () => {
     await login();
     const app = await client();
-    const flow = silent(app.client_id);
+    const flow = unprompted(app.client_id);
     const response = await request(flow.path);
     expect(response.status, await response.clone().text()).toBe(302);
     const redirect = new URL(response.headers.get("location")!);
@@ -551,7 +573,7 @@ describe("OAuth boundaries and lifecycle", () => {
     const prompted = await request(authorization(app.client_id).path);
     expect(new URL(prompted.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
     const dynamic = await dynamicClient();
-    const asked = await request(silent(dynamic.client_id).path);
+    const asked = await request(unprompted(dynamic.client_id).path);
     expect(new URL(asked.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
   });
 
@@ -563,9 +585,9 @@ describe("OAuth boundaries and lifecycle", () => {
       service.sql`UPDATE oauthClient SET skipConsent = 0 WHERE clientId = ${app.client_id}`,
     );
     await restart();
-    const adopted = await request(silent(app.client_id).path);
+    const adopted = await request(unprompted(app.client_id).path);
     expect(new URL(adopted.headers.get("location")!).searchParams.has("code")).toBe(true);
-    const asked = await request(silent(dynamic.client_id).path);
+    const asked = await request(unprompted(dynamic.client_id).path);
     expect(new URL(asked.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
   });
 
@@ -1199,7 +1221,7 @@ describe("dashboard resources and client access", () => {
     const app = await dynamicClient();
     expect((await updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
     await authorize(app.client_id, resourceA);
-    const responseB = await request(silent(app.client_id, resourceB).path);
+    const responseB = await request(unprompted(app.client_id, resourceB).path);
     const consentB = new URL(responseB.headers.get("location")!, settings.baseURL);
     expect(consentB.pathname).toBe("/consent");
     expect(
@@ -1351,7 +1373,8 @@ describe("dashboard resources and client access", () => {
       access(app.client_id, [resourceA, resourceB]),
       request("/admin/resources/delete", { identifier: resourceB }),
     ]);
-    expect([200, 400]).toContain(results[0]?.status);
+    // Linking wins, or loses at whichever provider step first sees the deleted resource.
+    expect([200, 400, 404]).toContain(results[0]?.status);
     expect(results[1]?.status).toBe(200);
     const state = await listing();
     for (const link of state.clientAccess) {
