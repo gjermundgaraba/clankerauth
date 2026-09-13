@@ -1,0 +1,42 @@
+{
+  "name": "@gjermundgaraba/clankerauth-node",
+  "version": "0.2.0",
+  "description": "Clankerauth integration for Node services: token and API-key verification, protected-resource metadata, and browser login with server-held tokens",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerauth.git",
+    "directory": "packages/node"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vp test && node scripts/package-smoke.mjs"
+  },
+  "dependencies": {
+    "jose": "catalog:",
+    "oauth4webapi": "catalog:"
+  },
+  "devDependencies": {
+    "@clankerauth/server": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}

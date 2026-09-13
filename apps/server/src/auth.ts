@@ -184,7 +184,8 @@ export async function openAuth(
         }
       }),
     },
-    session: { expiresIn: 60 * 60 * 12, freshAge: 0 },
+    // The owner's session is the single sign-on session across first-party clients.
+    session: { expiresIn: 60 * 60 * 24 * 30, updateAge: 60 * 60 * 24, freshAge: 0 },
     advanced: { ipAddress: { ipAddressHeaders: ["x-clankerauth-peer"] } },
     rateLimit: {
       enabled: true,
@@ -299,6 +300,8 @@ const sqlInitialize = (service: Service) =>
       END`;
     yield* service.sql`CREATE TABLE IF NOT EXISTS clientMetadataRevision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL)`;
     yield* service.sql`INSERT OR IGNORE INTO clientMetadataRevision (id, revision) VALUES (1, 0)`;
+    // Managed clients registered before first-party policy existed.
+    yield* service.sql`UPDATE oauthClient SET skipConsent = 1 WHERE skipConsent IS NOT 1 AND clientId NOT IN (SELECT clientId FROM clientOnboarding)`;
     // Security-relevant document changes revoke grants in the same transaction
     // as metadata reconciliation; plugin notifications are only best effort.
     yield* service.sql`CREATE TRIGGER IF NOT EXISTS cimdMetadataRevocation AFTER UPDATE OF redirectUris, tokenEndpointAuthMethod, jwks, jwksUri, name, uri ON oauthClient

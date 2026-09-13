@@ -143,6 +143,9 @@ catalogs:
     kysely:
       specifier: 0.29.5
       version: 0.29.5
+    oauth4webapi:
+      specifier: 3.8.8
+      version: 3.8.8
     playwright:
       specifier: 1.62.1
       version: 1.62.1
@@ -283,6 +286,31 @@ importers:
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.0
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.3.1(@opentelemetry/api@1.9.0)(@types/node@26.5.0)(typescript@7.0.2)
+
+  packages/node:
+    dependencies:
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
+      oauth4webapi:
+        specifier: 'catalog:'
+        version: 3.8.8
+    devDependencies:
+      '@clankerauth/server':
+        specifier: workspace:*
+        version: link:../../apps/server
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.0
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: '@voidzero-dev/vite-plus-core@0.3.1(@types/node@26.5.0)(typescript@7.0.2)'
       vite-plus:
         specifier: 'catalog:'
         version: 0.3.1(@opentelemetry/api@1.9.0)(@types/node@26.5.0)(typescript@7.0.2)
@@ -1497,6 +1525,9 @@ packages:
     resolution: {integrity: sha512-s+w+rBWnpTMwSFbaE0UXsRlg7hU4FjekKU4eyAih5T8nJuNZT1nNsskXpxmeqSK9UzkBl6UgRlnKc8hz8IEqOw==}
     hasBin: true
 
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
   obug@2.1.4:
     resolution: {integrity: sha512-4a+OsYv9UktOJKE+l1A4OufDgdRF9PifWj+tJnHURo/P+WOxpG4GzUFL9qCalmWauao6ogiG+QvnCovwPoyAWA==}
     engines: {node: '>=12.20.0'}
@@ -2479,6 +2510,8 @@ snapshots:
     dependencies:
       detect-libc: 2.1.2
     optional: true
+
+  oauth4webapi@3.8.8: {}
 
   obug@2.1.4: {}
 

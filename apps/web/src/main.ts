@@ -262,7 +262,7 @@ async function refreshDashboard() {
 const scopeHelp =
   "Separate scopes with spaces. openid, profile, email and offline_access are reserved.";
 const onboardingLabel = {
-  managed: "Managed registration",
+  managed: "Managed registration · first party, no consent screen",
   dcr: "Dynamic registration",
   cimd: "Client ID Metadata Document",
 };
@@ -336,7 +336,7 @@ const clientCard = (
         .join("") || '<p class="help">No Resource access configured.</p>'
     : '<p class="help">Any configured Resource. Each needs your consent.</p>';
   const access = managed
-    ? `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Each Resource still needs consent. Removing access stops new authorization and refresh but keeps stored consent; use Revoke authorization to clear it.</p><button>Save access</button></form></details>`
+    ? `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Removing access stops new authorization and refresh; use Revoke authorization to clear issued grants.</p><button>Save access</button></form></details>`
     : "";
   const actions = [
     `<button class="secondary" data-revoke="${id}">Revoke authorization</button>`,
@@ -347,10 +347,10 @@ const clientCard = (
     managed ? `<button class="danger" data-delete="${id}">Delete client</button>` : "",
   ].join("");
   return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label>
-  <h3>Resources eligible for consent</h3>${eligible}${access}<div class="actions">${actions}</div></article>`;
+  <h3>${managed ? "Allowed Resources" : "Resources eligible for consent"}</h3>${eligible}${access}<div class="actions">${actions}</div></article>`;
 };
 const registerForm = (resources: readonly ResourceView[]) =>
-  `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE and consent are always required.</p></form>`;
+  `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
 
 async function dashboard() {
   const [data, keyData] = await Promise.all([

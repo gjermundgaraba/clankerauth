@@ -17,14 +17,20 @@ jobs:
         with:
           node-version: 26.7.0
           registry-url: https://npm.pkg.github.com
-      - name: Check that the tag matches the package version
+      - name: Check that the tag matches both package versions
         run: |
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/node/package.json').version")"
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/dev/package.json').version")"
       - run: npm install -g pnpm@12.3.4
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
       - run: pnpm ready
-      - run: npm publish
+      # pnpm resolves the workspace catalog protocol in the published manifest; npm would not.
+      - run: pnpm publish --no-git-checks
+        working-directory: packages/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: pnpm publish --no-git-checks
         working-directory: packages/dev
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

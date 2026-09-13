@@ -12,6 +12,7 @@ Application-specific behavior remains where the provider does not directly expre
 - Resource scope changes synchronize client scope ceilings, and automatic clients can request resources added after registration. This is dynamic application policy layered over provider resources and links.
 - First-run account creation and the permanent setup marker commit in one local Kysely transaction. The marker records completed setup; it is not a runtime role system.
 - Routes enforce the single-resource request contract, exact configured origin, sole-account setup and the allowed protocol endpoint surface.
+- Managed clients are registered with the provider's `skip_consent` flag, and startup sets it on managed clients that predate the policy. The owner's session lasts 30 days and slides with use; together these make sign-in at one first-party application sign-in at all of them.
 
 ## Client and resource lifecycle
 

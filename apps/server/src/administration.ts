@@ -132,7 +132,8 @@ export function administration(service: Service) {
         .pipe(Effect.mapError(apiError));
       const client = yield* Effect.tryPromise({
         try: () =>
-          auth.api.createOAuthClient({
+          // The administrative endpoint accepts skip_consent; the plain one drops it.
+          auth.api.adminCreateOAuthClient({
             headers,
             body: {
               client_name: input.name.trim(),
@@ -141,6 +142,8 @@ export function administration(service: Service) {
               application_type: input.native ? "native" : "web",
               grant_types: ["authorization_code", "refresh_token"],
               scope: scopes.join(" "),
+              // Owner-registered clients are first party: no consent screen.
+              skip_consent: true,
             },
           }),
         catch: apiError,

@@ -32,7 +32,7 @@ issuer.clientSecret;
 await issuer.close();
 ```
 
-Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client through the real endpoints, and returns. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them.
+Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client through the real endpoints, and returns. The client is first party: once the owner is signed in, an authorization request redirects straight to the callback with a code and no consent step. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them.
 
 Two optional test hooks: `cimdTransport` replaces the outbound fetch of CIMD client metadata so a test can serve fixture documents, and `onRequest` observes the method and URL of every incoming request.
 

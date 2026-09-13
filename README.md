@@ -32,10 +32,10 @@ Run it behind a reverse proxy with TLS. The server trusts only `AUTH_BASE_URL`, 
 
 Add a **Resource** in the dashboard. Its identifier is the exact URL that clients send as the `resource` parameter and that becomes the token audience; its scopes are the permissions it defines. Then:
 
-- **MCP clients** onboard themselves. Point the client at your MCP server; it discovers this issuer from the server's protected-resource metadata, registers through CIMD or DCR, and asks the owner for consent.
-- **Other clients** are registered by the owner under **Register client** with an exact redirect URI. Confidential clients receive a one-time secret.
+- **MCP clients** onboard themselves. Point the client at your MCP server; it discovers this issuer from the server's protected-resource metadata, registers through CIMD or DCR, and asks the owner for consent once per resource.
+- **Your own applications** are registered by the owner under **Register client** with an exact redirect URI. They are first party: a signed-in owner is sent straight back with a code, with no consent screen. Confidential clients receive a one-time secret.
 
-Every authorization and token request names exactly one `resource` and needs owner consent per resource. Access tokens are EdDSA JWTs valid for five minutes; refresh tokens last 30 days and rotate on every use. The dashboard lists every client: **Revoke authorization** clears its stored grants, **Block client** also stops it from authorizing again.
+Every authorization and token request names exactly one `resource`. The owner's login session lasts 30 days and slides with use, so signing in for one application signs in for all of them. Access tokens are EdDSA JWTs valid for five minutes; refresh tokens last 30 days and rotate on every use. The dashboard lists every client: **Revoke authorization** clears its stored grants, **Block client** also stops it from authorizing again.
 
 Discovery is served at `/.well-known/oauth-authorization-server/api/auth` and `/api/auth/.well-known/openid-configuration`.
 
@@ -72,7 +72,7 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one.
 
-To test a client or resource server locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway issuer with your resources and a client already provisioned.
+[`@gjermundgaraba/clankerauth-node`](packages/node/README.md) does both halves for a Node service: it verifies access tokens and API keys, publishes the protected-resource metadata, and runs the browser login as a confidential client with server-held tokens. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
 
 ## Develop
 
@@ -86,7 +86,8 @@ pnpm ready    # format, lint, types, builds, all tests
 - `packages/api`: the Effect `HttpApi` contract shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
-- `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it; a `v*` tag publishes it.
+- `packages/node`: the `@gjermundgaraba/clankerauth-node` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
+- `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it. A `v*` tag publishes both packages at that version.
 - `patches/`: two pinned fixes to the Better Auth plugins, explained in [docs/provider-integration.md](docs/provider-integration.md).
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.

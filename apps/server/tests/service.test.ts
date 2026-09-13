@@ -110,6 +110,29 @@ async function client(resource = resourceA, confidential = false) {
   expect(response.status, await response.clone().text()).toBe(201);
   return response.json();
 }
+async function dynamicClient() {
+  await createResourceFixtures();
+  const response = await request(
+    "/api/auth/oauth2/register",
+    {
+      client_name: "Dynamic client",
+      redirect_uris: ["http://127.0.0.1:9876/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    },
+    { anonymous: true },
+  );
+  expect(response.status, await response.clone().text()).toBe(201);
+  return response.json();
+}
+/** An authorization request without a prompt parameter: the server decides about consent. */
+function silent(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
+  const flow = authorization(clientId, resource, extra);
+  const url = new URL(flow.path, settings.baseURL);
+  url.searchParams.delete("prompt");
+  return { verifier: flow.verifier, path: `${url.pathname}${url.search}` };
+}
 function authorization(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
   const verifier = randomBytes(32).toString("base64url");
   const query = new URLSearchParams({
@@ -473,7 +496,12 @@ describe("owner boundary", () => {
     expect(signedIn.headers.getSetCookie().join(";")).toContain("HttpOnly");
     const session = await request("/api/auth/get-session");
     expect(session.status).toBe(200);
-    expect((await session.json()).user.id).toBe(await Effect.runPromise(service.owner()));
+    const current = await session.json();
+    expect(current.user.id).toBe(await Effect.runPromise(service.owner()));
+    // The owner's session is the single sign-on session: it lasts 30 days and slides.
+    expect(Date.parse(current.session.expiresAt) - Date.now()).toBeGreaterThan(
+      29 * 24 * 60 * 60 * 1000,
+    );
     expect(session.headers.has("set-auth-jwt")).toBe(false);
     expect((await request("/admin/clients")).status).toBe(200);
     expect((await request("/admin/clients", {}, { origin: "https://evil.example" })).status).toBe(
@@ -491,6 +519,56 @@ describe("owner boundary", () => {
 
 describe("OAuth boundaries and lifecycle", () => {
   beforeEach(setupOwner);
+  test("managed clients are first party: a signed-in owner is redirected without consent", async () => {
+    await login();
+    const app = await client();
+    const flow = silent(app.client_id);
+    const response = await request(flow.path);
+    expect(response.status, await response.clone().text()).toBe(302);
+    const redirect = new URL(response.headers.get("location")!);
+    expect(`${redirect.origin}${redirect.pathname}`).toBe("http://127.0.0.1:9876/callback");
+    expect(redirect.searchParams.get("state")).toBe("state-to-validate");
+    expect(
+      await Effect.runPromise(
+        service.sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`,
+      ),
+    ).toEqual([]);
+    const issued = await request(
+      "/api/auth/oauth2/token",
+      {
+        grant_type: "authorization_code",
+        client_id: app.client_id,
+        redirect_uri: "http://127.0.0.1:9876/callback",
+        code: redirect.searchParams.get("code"),
+        code_verifier: flow.verifier,
+        resource: resourceA,
+      },
+      { anonymous: true, form: true },
+    );
+    expect(issued.status, await issued.clone().text()).toBe(200);
+    expect((await issued.json()).scope.split(" ")).toContain("notes:read");
+    // An explicit prompt still asks, and automatic clients always ask.
+    const prompted = await request(authorization(app.client_id).path);
+    expect(new URL(prompted.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
+    const dynamic = await dynamicClient();
+    const asked = await request(silent(dynamic.client_id).path);
+    expect(new URL(asked.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
+  });
+
+  test("restart adopts first-party policy for managed clients registered before it", async () => {
+    await login();
+    const app = await client();
+    const dynamic = await dynamicClient();
+    await Effect.runPromise(
+      service.sql`UPDATE oauthClient SET skipConsent = 0 WHERE clientId = ${app.client_id}`,
+    );
+    await restart();
+    const adopted = await request(silent(app.client_id).path);
+    expect(new URL(adopted.headers.get("location")!).searchParams.has("code")).toBe(true);
+    const asked = await request(silent(dynamic.client_id).path);
+    expect(new URL(asked.headers.get("location")!, settings.baseURL).pathname).toBe("/consent");
+  });
+
   test("provider CAS prevents double rotation while independent requests remain responsive", async () => {
     await login();
     const app = await client();
@@ -1118,14 +1196,10 @@ describe("dashboard resources and client access", () => {
   });
 
   test("the same scope label has independent consent on each resource", async () => {
-    const app = await client();
+    const app = await dynamicClient();
     expect((await updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
-    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
     await authorize(app.client_id, resourceA);
-    const flowB = authorization(app.client_id, resourceB, { prompt: "" });
-    const authorizationB = new URL(flowB.path, settings.baseURL);
-    authorizationB.searchParams.delete("prompt");
-    const responseB = await request(`${authorizationB.pathname}${authorizationB.search}`);
+    const responseB = await request(silent(app.client_id, resourceB).path);
     const consentB = new URL(responseB.headers.get("location")!, settings.baseURL);
     expect(consentB.pathname).toBe("/consent");
     expect(
@@ -1154,7 +1228,7 @@ describe("dashboard resources and client access", () => {
   });
 
   test("new scopes appear immediately and need consent; name-only changes preserve refresh grants", async () => {
-    const app = await client();
+    const app = await dynamicClient();
     const issued = await tokens(app.client_id);
     expect((await updateResource(resourceA, ["notes:read", "notes:write"], "Renamed")).status).toBe(
       200,
