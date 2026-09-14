@@ -9,13 +9,13 @@ export interface Settings {
 }
 
 export const loadSettings = Effect.gen(function* () {
-  const baseURL = yield* Config.string("AUTH_BASE_URL");
-  const secret = Redacted.value(yield* Config.redacted("BETTER_AUTH_SECRET"));
-  const database = yield* Config.string("AUTH_DATABASE").pipe(
+  const baseURL = yield* Config.String("AUTH_BASE_URL");
+  const secret = Redacted.value(yield* Config.Redacted("BETTER_AUTH_SECRET"));
+  const database = yield* Config.String("AUTH_DATABASE").pipe(
     Config.withDefault("data/auth.sqlite"),
   );
-  const host = yield* Config.string("HOST").pipe(Config.withDefault("127.0.0.1"));
-  const port = yield* Config.number("PORT").pipe(Config.withDefault(3000));
+  const host = yield* Config.String("HOST").pipe(Config.withDefault("127.0.0.1"));
+  const port = yield* Config.Number("PORT").pipe(Config.withDefault(3000));
   return yield* Effect.try(() => validateSettings({ baseURL, secret, database, host, port }));
 });
 

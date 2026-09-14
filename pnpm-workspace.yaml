@@ -4,31 +4,29 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.0-rc.112
-  "@better-auth/oauth-provider": 1.7.3
-  "@better-auth/api-key": 1.7.3
-  better-auth: 1.7.3
-  effect: 4.0.0-rc.112
-  "@types/node": 26.5.0
+  "@effect/platform-node": 4.0.0-rc.115
+  "@better-auth/oauth-provider": 1.7.4
+  "@better-auth/api-key": 1.7.4
+  better-auth: 1.7.4
+  effect: 4.0.0-rc.115
+  "@types/node": 26.5.1
   jose: 6.2.12
   oauth4webapi: 3.8.8
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.3.1
   vite-plus: 0.3.1
-  playwright: 1.62.1
+  playwright: 1.63.0
   kysely: 0.29.5
-  "@better-auth/cimd": 1.7.3
-  "@better-auth/core": 1.7.3
-  "@better-auth/kysely-adapter": 1.7.3
-  "@opentelemetry/api": 1.9.0
+  "@better-auth/cimd": 1.7.4
+  "@better-auth/core": 1.7.4
+  "@better-auth/kysely-adapter": 1.7.4
+  "@opentelemetry/api": 1.9.1
 
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:
   allowAny:
     - vite
-allowBuilds:
-  msgpackr-extract: false
 patchedDependencies:
-  "@better-auth/api-key@1.7.3": patches/@better-auth__api-key@1.7.3.patch
-  "@better-auth/oauth-provider@1.7.3": patches/@better-auth__oauth-provider@1.7.3.patch
+  "@better-auth/api-key@1.7.4": patches/@better-auth__api-key@1.7.4.patch
+  "@better-auth/oauth-provider@1.7.4": patches/@better-auth__oauth-provider@1.7.4.patch

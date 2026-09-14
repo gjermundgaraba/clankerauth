@@ -1,6 +1,6 @@
 # Provider integration
 
-The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.3. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration and regressions.
+The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.4. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration and regressions.
 
 Better Auth documents Node's built-in SQLite and its Kysely adapter. This service uses the exported `NodeSqliteDialect` with `DatabaseSync`, then shares the Kysely instance with Better Auth and a small Effect tagged-query helper. WAL, foreign keys and a five-second busy timeout are enabled. Kysely owns connection reservation, transactions and cleanup. See [SQLite integration](https://better-auth.com/docs/adapters/sqlite) and [database concepts](https://better-auth.com/docs/concepts/database).
 
@@ -32,7 +32,7 @@ Administrative policy changes likewise do not turn a multi-step provider request
 
 ## Provider patch and shutdown
 
-The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.3.patch) retains two narrow fixes:
+The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.4.patch) retains two narrow fixes:
 
 - Refresh-token client binding is checked before replay-family invalidation, preventing a rotated token from client A from deleting client B's family.
 - Access-token signing and refresh writes both settle before an issuance error propagates, allowing graceful shutdown to drain outstanding provider writes.
@@ -43,7 +43,7 @@ Graceful shutdown closes admission and tracks all admitted application work, inc
 
 ## API-key listing patch
 
-The [API-key provider patch](../patches/@better-auth__api-key@1.7.3.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials.
+The [API-key provider patch](../patches/@better-auth__api-key@1.7.4.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials.
 
 ## API-key rate-limit window
 

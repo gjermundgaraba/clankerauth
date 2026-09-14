@@ -1,7 +1,7 @@
-FROM node:26.7.0-bookworm-slim AS build
-RUN npm install -g pnpm@12.3.4
+FROM node:26.8.2-bookworm-slim AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN npm install -g "$(node -p "require('./package.json').packageManager")"
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api/package.json ./packages/api/package.json
@@ -12,7 +12,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build && pnpm --filter @clankerauth/server deploy --prod /out
 
-FROM node:26.7.0-bookworm-slim
+FROM node:26.8.2-bookworm-slim
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 AUTH_DATABASE=/data/auth.sqlite
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./

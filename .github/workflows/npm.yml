@@ -12,16 +12,16 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 26.7.0
+          node-version: 26.8.2
           registry-url: https://npm.pkg.github.com
       - name: Check that the tag matches both package versions
         run: |
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/node/package.json').version")"
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/dev/package.json').version")"
-      - run: npm install -g pnpm@12.3.4
+      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
       - run: pnpm ready

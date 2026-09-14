@@ -1,7 +1,7 @@
-diff --git a/dist/authorize-9whjxVLJ.mjs b/dist/authorize-9whjxVLJ.mjs
-index 6c1d5c51cc553db32900bc750dfd0687420b12b7..1dc017761f1f21202b5dba08ffcc7f73b548d4b5 100644
---- a/dist/authorize-9whjxVLJ.mjs
-+++ b/dist/authorize-9whjxVLJ.mjs
+diff --git a/dist/authorize-zWEGx4ky.mjs b/dist/authorize-zWEGx4ky.mjs
+index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..a79d02a7d3f218f58fa44532a5b7f6f38931dfaa 100644
+--- a/dist/authorize-zWEGx4ky.mjs
++++ b/dist/authorize-zWEGx4ky.mjs
 @@ -3508,6 +3508,8 @@ async function revokeRefreshToken(ctx, opts, token, clientId) {
  		error_description: "token not found",
  		error: "invalid_request"
@@ -19,10 +19,10 @@ index 6c1d5c51cc553db32900bc750dfd0687420b12b7..1dc017761f1f21202b5dba08ffcc7f73
  	const iat = Math.floor(Date.now() / 1e3);
  	if (!await ctx.context.adapter.incrementOne({
  		model: "oauthRefreshToken",
-diff --git a/dist/introspect-CbhhXT0E.mjs b/dist/introspect-CbhhXT0E.mjs
-index e5829d8e200dbb7fe3f451b62d085b0f29856b05..862dedc13a7404ba9a8ef9058dce0793ef7aa1d5 100644
---- a/dist/introspect-CbhhXT0E.mjs
-+++ b/dist/introspect-CbhhXT0E.mjs
+diff --git a/dist/introspect-Dlc-aIaF.mjs b/dist/introspect-Dlc-aIaF.mjs
+index 4076d0580f0a7fb69684637d2d16092609713262..50a1917a42f0953752caa0f3ac59e7abfc66293e 100644
+--- a/dist/introspect-Dlc-aIaF.mjs
++++ b/dist/introspect-Dlc-aIaF.mjs
 @@ -1849,7 +1849,9 @@ async function createUserTokens(ctx, opts, params) {
  		perRequestClaims: params.accessTokenClaims,
  		resourcePolicyClaims: grantIssuance.resourceCustomClaims
