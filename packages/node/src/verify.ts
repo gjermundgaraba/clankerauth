@@ -84,7 +84,7 @@ export function createVerifier(options: VerifierOptions): Verifier {
   const verifyKey = async (key: string): Promise<Principal> => {
     let response: Response;
     try {
-      response = await fetch(new URL("/api/api-keys/verify", issuer), {
+      response = await fetch(new URL("/api/verifyApiKey", issuer), {
         method: "POST",
         redirect: "error",
         signal: AbortSignal.timeout(timeout),

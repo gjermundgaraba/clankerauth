@@ -1,5 +1,5 @@
 diff --git a/dist/authorize-zWEGx4ky.mjs b/dist/authorize-zWEGx4ky.mjs
-index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..a79d02a7d3f218f58fa44532a5b7f6f38931dfaa 100644
+index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..f70e97fde384aaedb22bdb7fa5ebf4108ba52a57 100644
 --- a/dist/authorize-zWEGx4ky.mjs
 +++ b/dist/authorize-zWEGx4ky.mjs
 @@ -3508,6 +3508,8 @@ async function revokeRefreshToken(ctx, opts, token, clientId) {
@@ -19,23 +19,141 @@ index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..a79d02a7d3f218f58fa44532a5b7f6f3
  	const iat = Math.floor(Date.now() / 1e3);
  	if (!await ctx.context.adapter.incrementOne({
  		model: "oauthRefreshToken",
+@@ -3623,6 +3624,11 @@ const schema = {
+ 	oauthClient: {
+ 		modelName: "oauthClient",
+ 		fields: {
++			grantGeneration: {
++				type: "string",
++				required: false,
++				input: false
++			},
+ 			clientId: {
+ 				type: "string",
+ 				unique: true,
 diff --git a/dist/introspect-Dlc-aIaF.mjs b/dist/introspect-Dlc-aIaF.mjs
-index 4076d0580f0a7fb69684637d2d16092609713262..50a1917a42f0953752caa0f3ac59e7abfc66293e 100644
+index 4076d0580f0a7fb69684637d2d16092609713262..befe32610e7b58dc418732e1e62bb12584679fb8 100644
 --- a/dist/introspect-Dlc-aIaF.mjs
 +++ b/dist/introspect-Dlc-aIaF.mjs
-@@ -1849,7 +1849,9 @@ async function createUserTokens(ctx, opts, params) {
+@@ -1,6 +1,7 @@
+ import { t as __exportAll } from "./rolldown-runtime-wcPFST8Q.mjs";
+ import { A as collectExtensionAccessTokenClaims, C as storeToken, E as validateClientCredentials, F as getExtensionGrantHandler, L as getSupportedGrantTypes, M as collectExtensionUserInfoClaims, R as hasUserInfoClaimExtension, T as toResourceList, a as getClient, b as resolveSubjectIdentifier, c as getStoredToken, h as parseClientMetadata, i as extractClientCredentials, j as collectExtensionIdTokenClaims, l as isPKCERequired, n as decryptStoredClientSecret, o as getJwtPlugin, p as normalizeTimestampValue, r as destructureCredentials, t as clientAllowsGrant, w as toAudienceClaim, y as resolveSessionAuthTime } from "./utils-D4G5zf06.mjs";
+ import { APIError } from "better-auth/api";
++import { getCurrentAdapter, runWithTransaction } from "@better-auth/core/context";
+ import { generateRandomString, symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
+ import { APIError as APIError$1 } from "better-call";
+ import { logger } from "@better-auth/core/env";
+@@ -1542,6 +1543,24 @@ async function revokeTokensIssuedForAuthorizationCode(ctx, authorizationCodeId)
+ 	await deleteIssuedTokens("oauthAccessToken");
+ 	await deleteIssuedTokens("oauthRefreshToken");
+ }
++// A live-client generation fences grants against revocation and metadata changes.
++// Read before loading/consuming the grant, without triggering client discovery.
++async function readGrantGeneration(ctx, clientId) {
++	const adapter = await getCurrentAdapter(ctx.context.adapter);
++	const client = await adapter.findOne({
++		model: "oauthClient",
++		where: [{ field: "clientId", value: clientId }]
++	});
++	if (!client || client.disabled || typeof client.grantGeneration !== "string") {
++		throw new APIError("BAD_REQUEST", { error: "invalid_grant", error_description: "Client grant is no longer active" });
++	}
++	return client.grantGeneration;
++}
++async function assertGrantGeneration(ctx, clientId, generation) {
++	if (await readGrantGeneration(ctx, clientId) !== generation) {
++		throw new APIError("BAD_REQUEST", { error: "invalid_grant", error_description: "Client grant changed; authorize again" });
++	}
++}
+ async function createRefreshToken(ctx, opts, user, referenceId, authorizationCodeId, client, scopes, payload, originalRefresh, authTime, resources, confirmation, requestedUserInfoClaims) {
+ 	const iat = payload.iat ?? Math.floor(Date.now() / 1e3);
+ 	const exp = payload?.exp ?? iat + (opts.refreshTokenExpiresIn ?? 2592e3);
+@@ -1562,43 +1581,24 @@ async function createRefreshToken(ctx, opts, user, referenceId, authorizationCod
+ 		createdAt: /* @__PURE__ */ new Date(iat * 1e3),
+ 		expiresAt: /* @__PURE__ */ new Date(exp * 1e3)
+ 	};
+-	if (!originalRefresh?.id) return {
+-		id: (await ctx.context.adapter.create({
+-			model: "oauthRefreshToken",
+-			data: newRow
+-		})).id,
+-		token: await encodeRefreshToken(opts, token, sessionId)
+-	};
+-	const rotatedAt = /* @__PURE__ */ new Date(iat * 1e3);
+-	const rotationUpdate = {
+-		revoked: rotatedAt,
+-		rotatedAt
+-	};
+-	const reuseInterval = opts.refreshTokenReuseInterval ?? 0;
+-	if (reuseInterval > 0) rotationUpdate.rotationReplayExpiresAt = /* @__PURE__ */ new Date((iat + reuseInterval) * 1e3);
+-	if (!await ctx.context.adapter.incrementOne({
+-		model: "oauthRefreshToken",
+-		where: [{
+-			field: "id",
+-			value: originalRefresh.id
+-		}, {
+-			field: "revoked",
+-			operator: "eq",
+-			value: null
+-		}],
+-		increment: {},
+-		set: rotationUpdate
+-	})) throw new APIError("BAD_REQUEST", {
+-		error_description: "invalid refresh token",
+-		error: "invalid_grant"
++	const id = await runWithTransaction(ctx.context.adapter, async () => {
++		const adapter = await getCurrentAdapter(ctx.context.adapter);
++		await assertGrantGeneration(ctx, client.clientId, payload.grantGeneration);
++		if (originalRefresh?.id) {
++			const rotatedAt = new Date(iat * 1e3);
++			const rotationUpdate = { revoked: rotatedAt, rotatedAt };
++			const reuseInterval = opts.refreshTokenReuseInterval ?? 0;
++			if (reuseInterval > 0) rotationUpdate.rotationReplayExpiresAt = new Date((iat + reuseInterval) * 1e3);
++			if (!await adapter.incrementOne({
++				model: "oauthRefreshToken",
++				where: [{ field: "id", value: originalRefresh.id }, { field: "revoked", operator: "eq", value: null }],
++				increment: {},
++				set: rotationUpdate
++			})) throw new APIError("BAD_REQUEST", { error: "invalid_grant", error_description: "invalid refresh token" });
++		}
++		return (await adapter.create({ model: "oauthRefreshToken", data: newRow })).id;
+ 	});
+-	return {
+-		id: (await ctx.context.adapter.create({
+-			model: "oauthRefreshToken",
+-			data: newRow
+-		})).id,
+-		token: await encodeRefreshToken(opts, token, sessionId)
+-	};
++	return { id, token: await encodeRefreshToken(opts, token, sessionId) };
+ }
+ async function resolveResourceGrantIssuance(ctx, opts, params) {
+ 	const resourcePolicy = await resolveResourcePolicy(ctx, opts, {
+@@ -1833,6 +1833,7 @@ async function createUserTokens(ctx, opts, params) {
+ 	const earlyRefreshToken = isRefreshToken && user && !isJwtAccessToken ? await createRefreshToken(ctx, opts, user, referenceId, params.authorizationCodeId, client, effectiveScopes, {
+ 		iat,
+ 		exp: refreshTokenExp,
++		grantGeneration: params.grantGeneration,
+ 		sid: sessionId
+ 	}, existingRefreshToken, authTime, refreshResources, confirmation, requestedUserInfoClaims) : void 0;
+ 	const accessTokenClaims = isJwtAccessToken ? await resolveAccessTokenClaims({
+@@ -1849,7 +1850,10 @@ async function createUserTokens(ctx, opts, params) {
  		perRequestClaims: params.accessTokenClaims,
  		resourcePolicyClaims: grantIssuance.resourceCustomClaims
  	}) : void 0;
 -	const [accessToken, refreshToken] = await Promise.all([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
++	if (isJwtAccessToken) accessTokenClaims.grant_generation = params.grantGeneration;
 +	// Do not report a signing failure while refresh writes are still running;
 +	// shutdown must be able to drain every write admitted by the request.
 +	const tokenResults = await Promise.allSettled([isJwtAccessToken ? createJwtAccessToken(ctx, opts, user, client, audienceClaim, effectiveScopes, {
  		iat,
  		exp,
  		sid: sessionId,
-@@ -1866,6 +1868,8 @@ async function createUserTokens(ctx, opts, params) {
+@@ -1864,8 +1868,11 @@ async function createUserTokens(ctx, opts, params) {
+ 	}, params?.resources, referenceId, params.authorizationCodeId, earlyRefreshToken?.id, confirmation, requestedUserInfoClaims), earlyRefreshToken ? earlyRefreshToken : isRefreshToken && user ? createRefreshToken(ctx, opts, user, referenceId, params.authorizationCodeId, client, effectiveScopes, {
+ 		iat,
  		exp: refreshTokenExp,
++		grantGeneration: params.grantGeneration,
  		sid: sessionId
  	}, existingRefreshToken, authTime, refreshResources, confirmation, requestedUserInfoClaims) : void 0]);
 +	for (const result of tokenResults) if (result.status === "rejected") throw result.reason;
@@ -43,3 +161,59 @@ index 4076d0580f0a7fb69684637d2d16092609713262..50a1917a42f0953752caa0f3ac59e7ab
  	const idToken = isIdToken ? await createIdToken(ctx, opts, user, client, effectiveScopes, nonce, sessionId, authTime, accessToken, additionalIdTokenClaims) : void 0;
  	const responseBody = {
  		...customFields,
+@@ -1887,6 +1894,7 @@ async function createUserTokens(ctx, opts, params) {
+ 	} catch (error) {
+ 		ctx.context.logger.error("failed to store refresh token rotation replay", error);
+ 	}
++	await assertGrantGeneration(ctx, client.clientId, params.grantGeneration);
+ 	return ctx.json(responseBody);
+ }
+ /** Checks verification value */
+@@ -1971,6 +1979,7 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
+ 		error_description: "Either code_verifier or client_secret is required",
+ 		error: "invalid_request"
+ 	});
++	const grantGeneration = await readGrantGeneration(ctx, client_id);
+ 	/** Get and check Verification Value */
+ 	const { verificationValue, effectiveResources, authorizedResources, authorizationCodeId } = await checkVerificationValue(ctx, opts, code, client_id, redirect_uri, resources);
+ 	const scopes = verificationValue.query.scope?.split(" ");
+@@ -2033,6 +2042,7 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
+ 	const authTime = verificationValue.authTime != null ? normalizeTimestampValue(verificationValue.authTime) : resolveSessionAuthTime(session);
+ 	const requestedUserInfoClaims = getRequestedUserInfoClaims(verificationValue.query.claims, getSupportedClaims(opts));
+ 	return createUserTokens(ctx, opts, {
++		grantGeneration,
+ 		client,
+ 		scopes: verificationValue.query.scope?.split(" ") ?? [],
+ 		user,
+@@ -2109,6 +2119,7 @@ async function handleRefreshTokenGrant(ctx, opts) {
+ 		error_description: "Missing a required refresh_token for refresh_token grant",
+ 		error: "invalid_request"
+ 	});
++	const grantGeneration = await readGrantGeneration(ctx, client_id);
+ 	const decodedRefresh = await decodeRefreshToken(opts, refresh_token);
+ 	const refreshToken = await ctx.context.adapter.findOne({
+ 		model: "oauthRefreshToken",
+@@ -2170,6 +2181,7 @@ async function handleRefreshTokenGrant(ctx, opts) {
+ 	});
+ 	const authTime = refreshToken.authTime != null ? normalizeTimestampValue(refreshToken.authTime) : void 0;
+ 	return createUserTokens(ctx, opts, {
++		grantGeneration,
+ 		client,
+ 		scopes: requestedScopes ?? scopes,
+ 		user,
+diff --git a/dist/oauth-1Ud-hvZY.d.mts b/dist/oauth-1Ud-hvZY.d.mts
+index 130fd5d8f3ddd36d1b776338367af5b8cb7f0e79..dc57753a90b4b3bfd78b9d18c526c00fa9116f70 100644
+--- a/dist/oauth-1Ud-hvZY.d.mts
++++ b/dist/oauth-1Ud-hvZY.d.mts
+@@ -10,6 +10,11 @@ declare const schema: {
+   oauthClient: {
+     modelName: string;
+     fields: {
++      grantGeneration: {
++        type: "string";
++        required: false;
++        input: false;
++      };
+       clientId: {
+         type: "string";
+         unique: true;

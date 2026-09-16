@@ -1,23 +1,23 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
-  Api,
+  Actions,
+  Http,
   type Client,
   type ClientCredentials,
   type MachineKey,
-  type Resource,
+  type ResourceSummary,
 } from "@clankerauth/api";
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
 import "./style.css";
 
 type ClientView = typeof Client.Type;
-type ResourceView = typeof Resource.Type;
+type ResourceView = typeof ResourceSummary.Type;
 type KeyView = typeof MachineKey.Type;
 
 const api = await Effect.runPromise(
-  HttpApiClient.make(Api, { baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
+  Http.client(Actions, { baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
 );
 
 function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
@@ -96,12 +96,10 @@ function setup() {
         throw new Error("Use a password between 8 and 128 characters.");
       if (password !== confirmation) throw new Error("Passwords do not match.");
       await request(
-        api.setup
-          .create({
-            payload: {
-              email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-              password,
-            },
+        api
+          .setupOwner({
+            email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+            password,
           })
           .pipe(
             Effect.tap(() => Effect.sync(() => location.replace("/login?setup=complete"))),
@@ -300,8 +298,11 @@ const keyChoices = (
 const resourceCard = (resource: ResourceView, dependents: readonly ClientView[]) =>
   `<article class="resource"><h3>${escape(resource.name)}</h3>${resourceSummary(resource)}
   <p class="help dependencies">Managed Clients with access: ${dependents.length ? dependents.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
-  <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p><button>Save resource</button></form></details>
-  <button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button></article>`;
+  ${resource.builtIn ? '<p class="help">Built-in administration resource. OAuth access tokens are required; its scopes and identifier are fixed.</p>' : ""}
+  <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label>
+  ${resource.builtIn ? "" : `<label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p>`}
+  <button>Save resource</button></form></details>
+  ${resource.builtIn ? "" : `<button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`}</article>`;
 const resourceForm = () =>
   `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later.</p><label>Scopes<input name="scopes" required placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
 
@@ -314,7 +315,8 @@ const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
         `<code>${escape(resource)}</code><p class="help">${escape(scopes.join(" · "))}</p>`,
     )
     .join("")}
-  <details><summary>Edit key</summary><form data-key-edit="${escape(key.keyId)}"><label>Name<input name="name" required maxlength="100" value="${escape(key.name)}"></label>${keyChoices(resources, key.permissions)}<p class="help">Saving replaces the key’s grants with the selected scopes.</p><button>Save key</button></form></details>
+  <details><summary>Rename key</summary><form data-key-rename="${escape(key.keyId)}"><label>Name<input name="name" required maxlength="100" value="${escape(key.name)}"></label><button>Save name</button></form></details>
+  <details><summary>Edit grants</summary><form data-key-grants="${escape(key.keyId)}">${keyChoices(resources, key.permissions)}<p class="help">Saving replaces all grants, including any not currently available, with the selected scopes.</p><button>Save grants</button></form></details>
   <div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`;
 const keyForm = (resources: readonly ResourceView[]) =>
   `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">At most one year ahead; blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
@@ -354,10 +356,11 @@ const registerForm = (resources: readonly ResourceView[]) =>
 
 async function dashboard() {
   const [data, keyData] = await Promise.all([
-    request(api.clients.list()),
-    request(api.apiKeys.list()),
+    request(api.listClients()),
+    request(api.listApiKeys()),
   ]);
   const { resources } = data;
+  const keyResources = resources.filter((resource) => !resource.builtIn);
   const allowed = (clientId: string) =>
     data.clientAccess
       .filter((access) => access.client_id === clientId)
@@ -394,14 +397,14 @@ async function dashboard() {
       "API keys",
       keyData.keys.length,
       "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access.",
-      keyData.keys.map((key) => keyCard(key, resources)).join("") ||
+      keyData.keys.map((key) => keyCard(key, keyResources)).join("") ||
         empty("No API keys", "Create a key for a CLI or automation that needs direct access."),
-      keyForm(resources),
+      keyForm(keyResources),
     )}
     ${columns(
       "Clients",
       data.clients.length,
-      "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking, blocking and deleting apply to the next token request, and issued access tokens stay valid for up to five minutes.",
+      "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking and blocking take effect immediately for this server’s administration MCP. Other resource servers may accept issued access tokens for up to five minutes.",
       data.clients
         .map((client) => clientCard(client, resources, allowed(client.client_id)))
         .join("") ||
@@ -434,14 +437,12 @@ async function dashboard() {
   onSubmit(form("#register"), async (target) => {
     const fields = new FormData(target);
     const result = await request(
-      api.clients.create({
-        payload: {
-          name: textField(fields, "name"),
-          redirect: textField(fields, "redirect"),
-          resources: selectedResources(target),
-          native: fields.has("native"),
-          confidential: fields.has("confidential"),
-        },
+      api.createClient({
+        name: textField(fields, "name"),
+        redirect: textField(fields, "redirect"),
+        resources: selectedResources(target),
+        native: fields.has("native"),
+        confidential: fields.has("confidential"),
       }),
     );
     target.reset();
@@ -453,12 +454,10 @@ async function dashboard() {
     const fields = new FormData(target);
     const expiry = textField(fields, "expiry");
     const result = await request(
-      api.apiKeys.create({
-        payload: {
-          name: textField(fields, "name"),
-          permissions: keyGrants(target),
-          expiresAt: expiry ? new Date(expiry).toISOString() : null,
-        },
+      api.createApiKey({
+        name: textField(fields, "name"),
+        permissions: keyGrants(target),
+        expiresAt: expiry ? new Date(expiry).toISOString() : null,
       }),
     );
     pendingKeys.set(result.keyId, `${result.name}\n${result.key}`);
@@ -469,34 +468,44 @@ async function dashboard() {
   onSubmit(form("#resource-create"), async (target) => {
     const fields = new FormData(target);
     await request(
-      api.resources.create({
-        payload: { identifier: textField(fields, "identifier"), ...resourceFields(fields) },
+      api.createResource({
+        identifier: textField(fields, "identifier"),
+        ...resourceFields(fields),
       }),
     );
     target.reset();
     await refreshDashboard();
   });
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-edit]"))
+  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-rename]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.apiKeys.update({
-          payload: {
-            keyId: target.dataset.keyEdit!,
-            name: textField(new FormData(target), "name"),
-            permissions: keyGrants(target),
-          },
+        api.updateApiKey({
+          keyId: target.dataset.keyRename!,
+          name: textField(new FormData(target), "name"),
+        }),
+      );
+      await refreshDashboard();
+    });
+  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-grants]"))
+    onSubmit(edit, async (target) => {
+      await request(
+        api.updateApiKey({
+          keyId: target.dataset.keyGrants!,
+          permissions: keyGrants(target),
         }),
       );
       await refreshDashboard();
     });
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]"))
     onSubmit(edit, async (target) => {
+      const resource = resources.find(
+        (resource) => resource.identifier === target.dataset.resourceEdit,
+      )!;
       await request(
-        api.resources.update({
-          payload: {
-            identifier: target.dataset.resourceEdit!,
-            ...resourceFields(new FormData(target)),
-          },
+        api.updateResource({
+          identifier: target.dataset.resourceEdit!,
+          name: textField(new FormData(target), "name"),
+          scopes: resource.builtIn ? resource.scopes : resourceFields(new FormData(target)).scopes,
         }),
       );
       await refreshDashboard();
@@ -508,7 +517,7 @@ async function dashboard() {
       const selected = selectedResources(edit);
       const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
       const save = async () => {
-        await request(api.clients.access({ payload: { client_id, resources: selected } }));
+        await request(api.setClientAccess({ client_id, resources: selected }));
         await refreshDashboard();
       };
       if (removed.length)
@@ -521,8 +530,9 @@ async function dashboard() {
   onClick("[data-key-toggle]", (button) => {
     void submit(async () => {
       await request(
-        api.apiKeys.update({
-          payload: { keyId: button.dataset.keyToggle!, enabled: button.dataset.enabled !== "true" },
+        api.updateApiKey({
+          keyId: button.dataset.keyToggle!,
+          enabled: button.dataset.enabled !== "true",
         }),
       );
       await refreshDashboard();
@@ -531,7 +541,7 @@ async function dashboard() {
   onClick("[data-key-delete]", (button) => {
     const keyId = button.dataset.keyDelete!;
     confirmed("Delete this API key?", async () => {
-      await request(api.apiKeys.delete({ payload: { keyId } }));
+      await request(api.deleteApiKey({ keyId }));
       pendingKeys.delete(keyId);
       renderCredentials();
       await refreshDashboard();
@@ -540,7 +550,7 @@ async function dashboard() {
   onClick("[data-revoke]", (button) => {
     const client_id = button.dataset.revoke!;
     confirmed("Revoke this Client’s authorization? It can request consent again.", async () => {
-      await request(api.clients.revoke({ payload: { client_id } }));
+      await request(api.revokeClient({ client_id }));
       await refreshDashboard();
     });
   });
@@ -550,7 +560,7 @@ async function dashboard() {
     confirmed(
       blocked ? "Block this Client and revoke its authorization?" : "Unblock this Client?",
       async () => {
-        await request(api.clients.block({ payload: { client_id, blocked } }));
+        await request(api.blockClient({ client_id, blocked }));
         await refreshDashboard();
       },
     );
@@ -558,7 +568,7 @@ async function dashboard() {
   onClick("[data-rotate]", (button) => {
     const client_id = button.dataset.rotate!;
     confirmed("Rotate the secret? The old one stops working immediately.", async () => {
-      const result = await request(api.clients.rotate({ payload: { client_id } }));
+      const result = await request(api.rotateClientSecret({ client_id }));
       pendingCredentials.set(result.client_id, result);
       showCredentials();
     });
@@ -566,7 +576,7 @@ async function dashboard() {
   onClick("[data-delete]", (button) => {
     const client_id = button.dataset.delete!;
     confirmed("Delete this Client and its grants?", async () => {
-      await request(api.clients.delete({ payload: { client_id } }));
+      await request(api.deleteClient({ client_id }));
       pendingCredentials.delete(client_id);
       renderCredentials();
       await refreshDashboard();
@@ -577,7 +587,7 @@ async function dashboard() {
     confirmed(
       `Delete Resource ${identifier}? Stored grants are kept and may become usable again if it is recreated.`,
       async () => {
-        await request(api.resources.delete({ payload: { identifier } }));
+        await request(api.deleteResource({ identifier }));
         await refreshDashboard();
       },
     );
@@ -585,7 +595,7 @@ async function dashboard() {
 }
 
 try {
-  const state = await request(api.setup.status());
+  const state = await request(api.setupStatus());
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");
     else setup();

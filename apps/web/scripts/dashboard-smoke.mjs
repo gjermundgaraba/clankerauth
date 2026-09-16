@@ -23,7 +23,9 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const calls = [];
   const registrations = [];
+  const keyUpdates = [];
   const resource = {
+    builtIn: false,
     name: "Fixture API",
     identifier: "https://fixture.invalid/api",
     scopes: ["fixture:read"],
@@ -65,7 +67,7 @@ try {
     let response;
     if (url.origin === origin) {
       switch (key) {
-        case "GET /api/setup":
+        case "POST /api/setupStatus":
           response = ok({ required: false });
           break;
         case "GET /api/auth/get-session":
@@ -83,10 +85,10 @@ try {
             },
           });
           break;
-        case "GET /admin/api-keys":
+        case "POST /api/listApiKeys":
           response = ok({ keys: machineKeys });
           break;
-        case "POST /admin/api-keys": {
+        case "POST /api/createApiKey": {
           const payload = request.postDataJSON();
           assert.deepEqual(payload.permissions, { [resource.identifier]: ["fixture:read"] });
           assert.equal(payload.expiresAt, null);
@@ -100,29 +102,43 @@ try {
           response = ok({ ...key, key: "ca_fixture-once-only" }, 201);
           break;
         }
-        case "POST /admin/api-keys/update": {
+        case "POST /api/updateApiKey": {
           const payload = request.postDataJSON();
+          keyUpdates.push(payload);
           machineKeys = machineKeys.map((key) =>
             key.keyId === payload.keyId ? { ...key, ...payload } : key,
           );
           response = ok(machineKeys.find((key) => key.keyId === payload.keyId));
           break;
         }
-        case "POST /admin/api-keys/delete":
+        case "POST /api/deleteApiKey":
           machineKeys = [];
           response = ok({ deleted: true });
           break;
-        case "GET /admin/clients":
+        case "POST /api/listClients":
           response = await listResponse();
           break;
-        case "POST /admin/resources":
+        case "POST /api/updateResource": {
+          const payload = request.postDataJSON();
+          const previous = data.resources.find(
+            (resource) => resource.identifier === payload.identifier,
+          );
+          assert.ok(previous);
+          if (previous.builtIn) assert.deepEqual(payload.scopes, ["admin"]);
+          data.resources = data.resources.map((resource) =>
+            resource.identifier === payload.identifier ? { ...resource, ...payload } : resource,
+          );
+          response = ok(payload);
+          break;
+        }
+        case "POST /api/createResource":
           response = resourceResponse();
           break;
-        case "POST /admin/clients":
+        case "POST /api/createClient":
           registrations.push(request.postDataJSON());
           response = ok({ ...created, client_secret: "fixture-first-secret" }, 201);
           break;
-        case "POST /admin/clients/rotate":
+        case "POST /api/rotateClientSecret":
           response = ok({ ...created, client_secret: "fixture-rotated-secret" });
           break;
         case "GET /api/auth/oauth2/public-client":
@@ -131,11 +147,11 @@ try {
             client_name: "<em>Client name</em>",
           });
           break;
-        case "POST /admin/clients/revoke":
+        case "POST /api/revokeClient":
           assert.equal(request.postDataJSON().client_id, data.clients[0].client_id);
           response = ok({ revoked: true });
           break;
-        case "POST /admin/clients/block": {
+        case "POST /api/blockClient": {
           const payload = request.postDataJSON();
           assert.equal(payload.client_id, data.clients[0].client_id);
           data = {
@@ -145,7 +161,7 @@ try {
           response = ok({ blocked: payload.blocked });
           break;
         }
-        case "POST /admin/clients/delete":
+        case "POST /api/deleteClient":
           response = ok({ deleted: true });
           break;
       }
@@ -196,7 +212,7 @@ try {
   await emptyRegister.getByRole("button").click();
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
   await waitForIdle();
-  assert.equal(count("POST /admin/clients"), 1);
+  assert.equal(count("POST /api/createClient"), 1);
   assert.deepEqual(registrations[0].resources, []);
   await page.locator("#credentials button").click();
 
@@ -209,7 +225,8 @@ try {
   };
   await fillResource(resource.name);
   const listStarted = page.waitForRequest(
-    (request) => request.method() === "GET" && new URL(request.url()).pathname === "/admin/clients",
+    (request) =>
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
   await resourceForm.getByRole("button").click();
   await listStarted;
@@ -218,7 +235,7 @@ try {
   await resourceForm.dispatchEvent("submit");
   releaseList.resolve();
   await waitForSaved();
-  assert.equal(count("POST /admin/resources"), 1);
+  assert.equal(count("POST /api/createResource"), 1);
   for (const name of ["name", "identifier", "scopes"]) {
     assert.equal(await resourceForm.locator(`[name="${name}"]`).inputValue(), "");
   }
@@ -227,11 +244,19 @@ try {
   const beforeRetry = calls.length;
   await retry.click();
   await waitForSaved();
-  assert.deepEqual(calls.slice(beforeRetry), ["GET /admin/clients", "GET /admin/api-keys"]);
+  assert.deepEqual(calls.slice(beforeRetry), ["POST /api/listClients", "POST /api/listApiKeys"]);
 
   data = {
     ...data,
-    resources: [resource],
+    resources: [
+      resource,
+      {
+        identifier: `${origin}/mcp`,
+        name: "Clanker Auth administration",
+        scopes: ["admin"],
+        builtIn: true,
+      },
+    ],
     clients: [existing],
     clientAccess: [{ client_id: existing.client_id, resource: resource.identifier }],
   };
@@ -241,6 +266,18 @@ try {
   await waitForIdle();
   assert.equal(await retry.count(), 0);
   assert.equal(await page.locator("#message").textContent(), "");
+  const builtInEdit = page.locator(`[data-resource-edit="${origin}/mcp"]`);
+  await builtInEdit.locator("..").getByText("Edit resource", { exact: true }).click();
+  assert.equal(await builtInEdit.locator('[name="scopes"]').count(), 0);
+  await builtInEdit.locator('[name="name"]').fill("My administration");
+  await builtInEdit.getByRole("button", { name: "Save resource", exact: true }).click();
+  await page.getByRole("heading", { name: "My administration", exact: true }).waitFor();
+  await waitForIdle();
+  assert.equal(
+    await page.locator("#key-create").getByText("My administration", { exact: true }).count(),
+    0,
+  );
+  assert.equal(await page.locator("[data-resource-delete]").count(), 1);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
   assert.equal(
     await page.locator("#dashboard-mutations").evaluate((fieldset) => fieldset.disabled),
@@ -249,11 +286,11 @@ try {
   assert.equal(await resourceForm.getByRole("button").isEnabled(), true);
   assert.equal(await resourceForm.locator('[name="name"]').isEnabled(), true);
   assert.equal(await page.locator("#register button").isEnabled(), true);
-  assert.equal(count("POST /admin/resources"), 1);
+  assert.equal(count("POST /api/createResource"), 1);
 
   // A rejected write preserves user input and never offers a saved-write retry.
   resourceResponse = () => failed;
-  const listsBeforeFailure = count("GET /admin/clients");
+  const listsBeforeFailure = count("POST /api/listClients");
   await fillResource("Keep my draft");
   await resourceForm.getByRole("button").click();
   await page.locator("#message").filter({ hasText: "Fixture request failed" }).waitFor();
@@ -262,7 +299,7 @@ try {
   assert.equal(await resourceForm.locator('[name="identifier"]').inputValue(), resource.identifier);
   assert.equal(await resourceForm.locator('[name="scopes"]').inputValue(), "fixture:read");
   assert.equal(await retry.count(), 0);
-  assert.equal(count("GET /admin/clients"), listsBeforeFailure);
+  assert.equal(count("POST /api/listClients"), listsBeforeFailure);
   assert.equal((await page.locator("#message").textContent()).includes("Saved"), false);
 
   // One-time credentials are visible while the follow-up list is still pending.
@@ -274,22 +311,26 @@ try {
   const register = page.locator("#register");
   await register.locator('[name="name"]').fill(created.client_name);
   await register.locator('[name="redirect"]').fill(created.redirect_uris[0]);
-  await register.locator('[name="resources"]').check();
+  await register.locator(`[name="resources"][value="${resource.identifier}"]`).check();
   await register.locator('[name="confidential"]').check();
   const clientListStarted = page.waitForRequest(
-    (request) => request.method() === "GET" && new URL(request.url()).pathname === "/admin/clients",
+    (request) =>
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
   await register.getByRole("button").click();
   await clientListStarted;
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
   assert.equal(await register.locator('[name="name"]').inputValue(), "");
   assert.equal(await register.locator('[name="redirect"]').inputValue(), "");
-  assert.equal(await register.locator('[name="resources"]').isChecked(), false);
+  assert.equal(
+    await register.locator(`[name="resources"][value="${resource.identifier}"]`).isChecked(),
+    false,
+  );
   assert.equal(await register.locator('[name="confidential"]').isChecked(), false);
   await register.dispatchEvent("submit");
   releaseClientList.resolve();
   await waitForSaved();
-  assert.equal(count("POST /admin/clients"), 2);
+  assert.equal(count("POST /api/createClient"), 2);
   assert.deepEqual(registrations[1].resources, [resource.identifier]);
   assert.match(await page.locator("#credentials").textContent(), /fixture-first-secret/);
 
@@ -305,22 +346,22 @@ try {
   );
   assert.equal(await register.getByRole("button").isEnabled(), true);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
-  assert.equal(count("POST /admin/clients"), 2);
+  assert.equal(count("POST /api/createClient"), 2);
 
-  const listsBeforeRotation = count("GET /admin/clients");
+  const listsBeforeRotation = count("POST /api/listClients");
   await page.locator('[data-rotate="created-client"]').click();
   await page.locator("#credentials").filter({ hasText: "fixture-rotated-secret" }).waitFor();
   await waitForIdle();
   assert.doesNotMatch(await page.locator("#credentials").textContent(), /fixture-first-secret/);
-  assert.equal(count("GET /admin/clients"), listsBeforeRotation);
-  assert.equal(count("POST /admin/clients/rotate"), 1);
+  assert.equal(count("POST /api/listClients"), listsBeforeRotation);
+  assert.equal(count("POST /api/rotateClientSecret"), 1);
 
   listResponse = async () => failed;
   await page.locator('[data-delete="created-client"]').click();
   await waitForSaved();
   assert.equal(await page.locator("#credentials").isVisible(), false);
   assert.equal(await page.locator("#credentials").textContent(), "");
-  assert.equal(count("POST /admin/clients/delete"), 1);
+  assert.equal(count("POST /api/deleteClient"), 1);
   // Automatic clients expose authorization lifecycle controls without managed-only mutations.
   const automatic = {
     ...existing,
@@ -342,7 +383,7 @@ try {
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
   await page.getByRole("button", { name: "Revoke authorization", exact: true }).click();
   await waitForIdle();
-  assert.equal(count("POST /admin/clients/revoke"), 1);
+  assert.equal(count("POST /api/revokeClient"), 1);
   await page.getByRole("button", { name: "Block client", exact: true }).click();
   await page.getByRole("button", { name: "Unblock client", exact: true }).waitFor();
   await waitForIdle();
@@ -350,7 +391,7 @@ try {
   await page.getByRole("button", { name: "Unblock client", exact: true }).click();
   await page.getByRole("button", { name: "Block client", exact: true }).waitFor();
   await waitForIdle();
-  assert.equal(count("POST /admin/clients/block"), 2);
+  assert.equal(count("POST /api/blockClient"), 2);
   data = { ...data, clients: [{ ...automatic, onboarding: "dcr" }] };
   await page.reload();
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
@@ -374,12 +415,27 @@ try {
   await page.getByRole("button", { name: "Enable key", exact: true }).click();
   await page.getByRole("button", { name: "Disable key", exact: true }).waitFor();
   await waitForIdle();
-  const keyEdit = page.locator('[data-key-edit="fixture-key"]');
-  await keyEdit.locator("..").getByText("Edit key", { exact: true }).click();
+  const retainedGrants = {
+    ...machineKeys[0].permissions,
+    "https://removed.example/api": ["read"],
+  };
+  machineKeys[0].permissions = retainedGrants;
+  const keyEdit = page.locator('[data-key-rename="fixture-key"]');
+  await keyEdit.locator("..").getByText("Rename key", { exact: true }).click();
   await keyEdit.locator('[name="name"]').fill("Renamed automation");
-  await keyEdit.getByRole("button", { name: "Save key", exact: true }).click();
+  await keyEdit.getByRole("button", { name: "Save name", exact: true }).click();
   await page.getByRole("heading", { name: "Renamed automation", exact: true }).waitFor();
   await waitForIdle();
+  assert.deepEqual(keyUpdates.at(-1), { keyId: "fixture-key", name: "Renamed automation" });
+  assert.deepEqual(machineKeys[0].permissions, retainedGrants);
+  const grantsEdit = page.locator('[data-key-grants="fixture-key"]');
+  await grantsEdit.locator("..").getByText("Edit grants", { exact: true }).click();
+  await grantsEdit.getByRole("button", { name: "Save grants", exact: true }).click();
+  await waitForIdle();
+  assert.deepEqual(keyUpdates.at(-1), {
+    keyId: "fixture-key",
+    permissions: { [resource.identifier]: ["fixture:read"] },
+  });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page
@@ -413,9 +469,9 @@ try {
   assert.equal(await page.getByText("ca_fixture-once-only", { exact: false }).count(), 0);
   await page.getByRole("button", { name: "Delete key", exact: true }).click();
   await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
-  assert.equal(count("POST /admin/api-keys"), 2);
-  assert.equal(count("POST /admin/api-keys/update"), 3);
-  assert.equal(count("POST /admin/api-keys/delete"), 2);
+  assert.equal(count("POST /api/createApiKey"), 2);
+  assert.equal(count("POST /api/updateApiKey"), 4);
+  assert.equal(count("POST /api/deleteApiKey"), 2);
 
   // Consent renders the actual identifier/callback and escapes client-supplied display names.
   const callback = "http://127.0.0.1:43129/callback";

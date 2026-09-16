@@ -4,17 +4,18 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.0-rc.115
+  "@effect/platform-node": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@4e4a3a6
   "@better-auth/oauth-provider": 1.7.4
   "@better-auth/api-key": 1.7.4
   better-auth: 1.7.4
-  effect: 4.0.0-rc.115
+  better-call: 1.4.0
+  effect: https://pkg.pr.new/Effect-TS/effect/effect@4e4a3a6
   "@types/node": 26.5.1
   jose: 6.2.12
   oauth4webapi: 3.8.8
   typescript: 7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.1
-  vite-plus: 0.3.1
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
+  vite-plus: 0.3.2
   playwright: 1.63.0
   kysely: 0.29.5
   "@better-auth/cimd": 1.7.4
@@ -25,8 +26,32 @@ catalog:
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:
-  allowAny:
-    - vite
+  allowedVersions:
+    vite: "0.3.2"
+    "@effect/platform-node>effect": https://pkg.pr.new/Effect-TS/effect/effect@4e4a3a6
+    "@effect/platform-node-shared>effect": https://pkg.pr.new/Effect-TS/effect/effect@4e4a3a6
+    "@gjermundgaraba/effect-actions>effect": https://pkg.pr.new/Effect-TS/effect/effect@4e4a3a6
 patchedDependencies:
   "@better-auth/api-key@1.7.4": patches/@better-auth__api-key@1.7.4.patch
   "@better-auth/oauth-provider@1.7.4": patches/@better-auth__oauth-provider@1.7.4.patch
+# Registry releases wait one day. The Vite+ 0.3.2 upgrade and the current
+# effect-actions release are explicitly approved; future versions must pass the
+# quarantine.
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - "@voidzero-dev/vite-plus-core@0.3.2"
+  - "@voidzero-dev/vite-plus-darwin-arm64@0.3.2"
+  - "@voidzero-dev/vite-plus-darwin-x64@0.3.2"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.3.2"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.3.2"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.3.2"
+  - "@voidzero-dev/vite-plus-linux-x64-musl@0.3.2"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.2"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.2"
+  - vite-plus@0.3.2
+  - "@gjermundgaraba/effect-actions@0.1.0-rc.0"
+
+# Required by the pinned platform-node -> platform-node-shared snapshot URL.
+# pnpm 12.4.1 rejects it even with an explicit override or direct dependency;
+# re-enable this when the Effect snapshot is replaced by registry releases.
+blockExoticSubdeps: false

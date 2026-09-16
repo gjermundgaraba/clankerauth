@@ -35,8 +35,28 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     const page = await fetch(issuer.url);
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-type"), /text\/html/);
-    assert.equal((await (await fetch(`${issuer.url}/api/setup`)).json()).required, false);
-    assert.equal((await fetch(`${issuer.url}/admin/clients`)).status, 401);
+    assert.equal(
+      (
+        await (
+          await fetch(`${issuer.url}/api/setupStatus`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          })
+        ).json()
+      ).required,
+      false,
+    );
+    assert.equal(
+      (
+        await fetch(`${issuer.url}/api/listClients`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+      401,
+    );
     const session = await login(issuer);
     assert.equal(session.status, 200);
     const cookie = session.headers
@@ -45,12 +65,19 @@ await test("real HTTP issuer provisions resources and a confidential native clie
       .join("; ");
     await session.body.cancel();
     const state = await (
-      await fetch(`${issuer.url}/admin/clients`, { headers: { cookie } })
+      await fetch(`${issuer.url}/api/listClients`, {
+        method: "POST",
+        headers: { cookie, origin: issuer.url, "content-type": "application/json" },
+        body: "{}",
+      })
     ).json();
     assert.equal(state.email, issuer.owner.email);
-    assert.equal(state.resources.length, 1);
-    assert.equal(state.resources[0].identifier, resource.identifier);
-    assert.deepEqual(state.resources[0].scopes, resource.scopes);
+    assert.equal(state.resources.length, 2);
+    assert.deepEqual(
+      state.resources.find((item) => item.identifier === resource.identifier),
+      { ...resource, builtIn: false },
+    );
+    assert.ok(state.resources.some((item) => item.identifier === `${issuer.url}/mcp`));
     assert.equal(state.clients.length, 1);
     assert.equal(state.clients[0].client_id, issuer.clientId);
     assert.equal(state.clients[0].token_endpoint_auth_method, "client_secret_basic");
@@ -58,7 +85,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.ok(issuer.clientSecret);
     assert.equal(
       (
-        await fetch(`${issuer.url}/api/setup`, {
+        await fetch(`${issuer.url}/api/setupOwner`, {
           method: "POST",
           headers: { "content-type": "application/json", origin: issuer.url },
           body: "x".repeat(65537),
@@ -118,7 +145,7 @@ await test("bundled provider preserves complete key listings and fixed verificat
     const headers = { cookie, origin: issuer.url, "content-type": "application/json" };
     let first;
     for (let index = 0; index < 101; index++) {
-      const response = await fetch(`${issuer.url}/admin/api-keys`, {
+      const response = await fetch(`${issuer.url}/api/createApiKey`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -131,13 +158,15 @@ await test("bundled provider preserves complete key listings and fixed verificat
       const key = await response.json();
       first ??= key;
     }
-    const listing = await (await fetch(`${issuer.url}/admin/api-keys`, { headers })).json();
+    const listing = await (
+      await fetch(`${issuer.url}/api/listApiKeys`, { method: "POST", headers, body: "{}" })
+    ).json();
     assert.equal(listing.keys.length, 101);
     assert.ok(listing.keys.some((key) => key.name === "Development key 100"));
     assert.ok(!JSON.stringify(listing).includes(first.key));
     context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     for (let index = 0; index < 1100; index++) {
-      const response = await fetch(`${issuer.url}/api/api-keys/verify`, {
+      const response = await fetch(`${issuer.url}/api/verifyApiKey`, {
         method: "POST",
         headers: { authorization: `Bearer ${first.key}`, "content-type": "application/json" },
         body: JSON.stringify({ resource: resource.identifier }),
@@ -181,7 +210,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
     },
   });
   try {
-    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/setup`));
+    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/setupOwner`));
     requests.length = 0;
     const discoveryURL = `${issuer.issuer}/.well-known/openid-configuration`;
     const discoveryResponse = await fetch(discoveryURL);

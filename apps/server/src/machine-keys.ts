@@ -1,16 +1,18 @@
 import { Effect, Schema } from "effect";
 import {
   BadRequest,
-  CurrentOwner,
   Forbidden,
   KeyPermissions,
   TooManyRequests,
   Unauthorized,
+  type ApiKeyId,
   type ApiKeyInput,
   type ApiKeyUpdate,
 } from "@clankerauth/api";
 import type { Service } from "./auth.ts";
-import { apiError } from "./administration.ts";
+import { mcpResource } from "./resources.ts";
+import { CurrentOwner } from "./current-owner.ts";
+import { apiError } from "./api-errors.ts";
 
 const provider = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({ try: operation, catch: apiError });
@@ -44,6 +46,10 @@ export function machineKeys(service: Service) {
         new BadRequest({ error: "Select at least one Resource and scope" }),
       );
     for (const [identifier, scopes] of Object.entries(grants)) {
+      if (identifier === mcpResource(service.settings.baseURL))
+        return yield* Effect.fail(
+          new BadRequest({ error: "Administration requires OAuth access tokens, not API keys" }),
+        );
       const resource = yield* service.resources.get(identifier).pipe(Effect.mapError(apiError));
       if (
         !resource ||
@@ -59,7 +65,9 @@ export function machineKeys(service: Service) {
     }
   });
   return {
-    list: Effect.fn("MachineKeys.list")(function* (headers: Headers) {
+    list: Effect.fn("MachineKeys.list")(function* () {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       const result = yield* provider(() => service.auth.api.listApiKeys({ headers }));
       return { keys: result.apiKeys.map(summary) };
     }),
@@ -110,7 +118,9 @@ export function machineKeys(service: Service) {
         ),
       );
     }),
-    delete: Effect.fn("MachineKeys.delete")(function* (headers: Headers, keyId: string) {
+    delete: Effect.fn("MachineKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       yield* provider(() => service.auth.api.deleteApiKey({ headers, body: { keyId } }));
       return { deleted: true };
     }),

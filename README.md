@@ -19,14 +19,15 @@ Without Docker: `pnpm install --frozen-lockfile && pnpm build && pnpm start`, wh
 
 Open the configured origin, create the owner account, sign in, and add a resource. Do this on the private network before exposing the service.
 
-| Variable             | Meaning                                                                                                                                |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_BASE_URL`      | Public origin without a path. HTTPS unless loopback. The OAuth issuer is `AUTH_BASE_URL/api/auth`.                                     |
-| `BETTER_AUTH_SECRET` | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups. |
-| `AUTH_DATABASE`      | SQLite file, default `data/auth.sqlite`. Persist the whole directory. The container defaults to `/data/auth.sqlite`.                   |
-| `HOST`, `PORT`       | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                             |
+| Variable              | Meaning                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_BASE_URL`       | Public origin without a path. HTTPS unless loopback. The OAuth issuer is `AUTH_BASE_URL/api/auth`.                                                      |
+| `BETTER_AUTH_SECRET`  | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups.                  |
+| `AUTH_DATABASE`       | SQLite file, default `data/auth.sqlite`. Persist the whole directory. The container defaults to `/data/auth.sqlite`.                                    |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated additional browser origins allowed to call administration MCP. Exact HTTPS origins, or loopback HTTP for development; defaults to none. |
+| `HOST`, `PORT`        | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                              |
 
-Run it behind a reverse proxy with TLS. The server trusts only `AUTH_BASE_URL`, never forwarding headers, and rate-limits by direct peer address, so enforce per-client limits at the proxy. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
+Run it behind a reverse proxy with TLS. The server uses `AUTH_BASE_URL` as its canonical origin, never forwarding headers, and rate-limits by direct peer address, so enforce per-client limits at the proxy. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
 
 ## Connect a client
 
@@ -63,7 +64,7 @@ MCP servers additionally publish RFC 9728 protected-resource metadata that lists
 For CLIs and automation, the owner creates **API keys** with explicit per-resource scopes. A resource server verifies one with:
 
 ```http
-POST /api/api-keys/verify
+POST /api/verifyApiKey
 Authorization: Bearer ca_…
 Content-Type: application/json
 
@@ -83,12 +84,92 @@ pnpm dev      # dashboard on :3000, API on :3001, state in .dev/
 pnpm ready    # format, lint, types, builds, all tests
 ```
 
-- `packages/api`: the Effect `HttpApi` contract shared by server and dashboard.
+- `packages/api`: custom API contracts defined with effect-actions, shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
 - `packages/node`: the `@gjermundgaraba/clankerauth-node` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
 - `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it. A `v*` tag publishes both packages at that version.
-- `patches/`: two pinned fixes to the Better Auth plugins, explained in [docs/provider-integration.md](docs/provider-integration.md).
+- `patches/`: version-pinned patches to the Better Auth plugins, explained in [docs/provider-integration.md](docs/provider-integration.md).
+
+### effect-actions integration
+
+Custom API operations use the published
+[`@gjermundgaraba/effect-actions`](https://www.npmjs.com/package/@gjermundgaraba/effect-actions)
+release and are exposed at `POST /api/<actionName>`. No-input actions take
+`{}`; create actions return HTTP 201. OAuth protocol endpoints and the
+operational `GET /healthz` endpoint are separate.
+
+| Action                 | Access                                                      | Transport |
+| ---------------------- | ----------------------------------------------------------- | --------- |
+| `setupStatus`          | Public                                                      | HTTP      |
+| `setupOwner`           | Configured Origin; succeeds only before an owner exists     | HTTP      |
+| `verifyApiKey`         | Bearer API key scoped to the requested resource             | HTTP      |
+| Administration actions | Owner session and configured Origin                         | HTTP      |
+| Administration tools   | OAuth access token for `<AUTH_BASE_URL>/mcp`, scope `admin` | MCP       |
+
+The dashboard uses the direct typed action client. Shared schema-error handling returns
+sanitized `BadRequest` JSON (400) for malformed input and `InternalServerError`
+JSON (500) for invalid handler output. MCP tool failures carry the same tagged
+errors in `structuredContent` with `isError: true`.
+
+### Connect to administration MCP
+
+Point an OAuth-capable MCP client at `<AUTH_BASE_URL>/mcp`. The client discovers
+this issuer, registers using CIMD or DCR, and opens the owner login and consent
+page. Approving the `admin` scope grants full administration access, including
+client and API-key creation. Create and rotate operations return secrets once.
+No separate dashboard grant is needed.
+
+For browser-hosted MCP clients, add their origins to the server environment:
+
+```sh
+MCP_ALLOWED_ORIGINS=https://mcp.example.com,http://localhost:5173
+```
+
+These are exact web origins, without paths, trailing slashes, or wildcards. The
+issuer's own origin is always allowed. The same allowlist governs MCP Origin
+validation and CORS, including preflight and exposed authentication/session headers.
+Actual MCP requests require OAuth bearer tokens; browser clients should omit
+cookies. Native and server clients that send no Origin need no allowlist entry.
+This setting does not grant OAuth access or relax the dashboard's cookie policy.
+
+The built-in **Clanker Auth administration** resource is created at startup.
+Its display name can be changed; its identifier and scope are fixed, and the
+resource cannot be deleted. Protected-resource metadata
+is public at `/.well-known/oauth-protected-resource/mcp` and advertises `admin`
+and `offline_access`. Clients must send the resource parameter during authorization
+and token exchange. The authentication challenge requests only `admin`. Clients
+that want rotating refresh tokens also request `offline_access` and declare the
+`refresh_token` grant type. Access tokens last five minutes; clients without refresh
+access must authorize again after expiration.
+
+Every MCP request requires a bearer OAuth access token. Owner cookies and API
+keys do not authenticate MCP, and API keys cannot be granted administration
+permissions. Tokens must belong to this issuer, owner, resource,
+and an active client grant. Dashboard **Revoke authorization** and **Block client**
+invalidate administration MCP access immediately; unblocking does not restore a
+revoked grant. Browser-session expiry and dashboard sign-out do not revoke
+administration MCP access.
+Offline refresh grants survive dashboard sign-out; use **Revoke authorization** or
+**Block client** to end delegated access.
+Other resource servers that verify JWTs locally may accept issued tokens until expiry.
+
+MCP supports **2026-07-28**, **2025-11-25**, **2025-06-18**, and **2025-03-26**
+transport revisions. OAuth clients must support resource indicators. Unary JSON
+responses work through the buffered Node bridge; historical two-endpoint SSE
+and long-lived streaming are not supported.
+
+HTTP administration continues to require the owner session and configured Origin.
+The combined `GET /openapi.json` document requires the owner cookie and permits
+browser navigation without Origin:
+
+```sh
+curl "$AUTH_BASE_URL/api/listClients" \
+  -H "Origin: $AUTH_BASE_URL" -H "Cookie: $OWNER_COOKIE" \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+See [the breaking 0.3.0 release notes](docs/releases/0.3.0.md) before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

@@ -97,11 +97,11 @@ const startServer = async () => {
 test("first-party browser login, verification of tokens and keys, and logout against the real issuer", async () => {
   const issuer = await startServer();
   try {
-    assert.equal((await issuer.call("/api/setup", owner)).status, 201);
+    assert.equal((await issuer.call("/api/setupOwner", owner)).status, 201);
     assert.equal((await issuer.call("/api/auth/sign-in/email", owner)).status, 200);
     assert.equal(
       (
-        await issuer.call("/admin/resources", {
+        await issuer.call("/api/createResource", {
           identifier: resource,
           name: "Notes",
           scopes: ["notes:read", "notes:write"],
@@ -109,7 +109,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
       ).status,
       201,
     );
-    const registration = await issuer.call("/admin/clients", {
+    const registration = await issuer.call("/api/createClient", {
       name: "Notes web",
       redirect: `${origin}/auth/callback`,
       resources: [resource],
@@ -200,7 +200,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     assert.equal(((await session.json()) as { subject: string }).subject, principal.subject);
 
     // API keys are verified online with their granted scopes and the key as actor.
-    const created = await issuer.call("/admin/api-keys", {
+    const created = await issuer.call("/api/createApiKey", {
       name: "Backup script",
       permissions: { [resource]: ["notes:read"] },
       expiresAt: null,
@@ -215,10 +215,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
       other.verifyToken(key),
       (error) => error instanceof AuthError && error.code === "forbidden",
     );
-    assert.equal(
-      (await issuer.call("/admin/api-keys/update", { keyId, enabled: false })).status,
-      200,
-    );
+    assert.equal((await issuer.call("/api/updateApiKey", { keyId, enabled: false })).status, 200);
     await assert.rejects(
       verifier.verifyToken(key),
       (error) => error instanceof AuthError && error.code === "unauthorized",

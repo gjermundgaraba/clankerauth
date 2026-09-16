@@ -123,11 +123,11 @@ export async function startDisposableIssuer({
       }
       return response.json();
     };
-    await post("/api/setup", owner, 201);
+    await post("/api/setupOwner", owner, 201);
     await post("/api/auth/sign-in/email", owner, 200);
-    for (const resource of resources) await post("/admin/resources", resource, 201);
+    for (const resource of resources) await post("/api/createResource", resource, 201);
     const registration = (await post(
-      "/admin/clients",
+      "/api/createClient",
       { ...client, confidential: true, native: true },
       201,
     )) as { client_id: string; client_secret?: string };

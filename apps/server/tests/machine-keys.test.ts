@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { mcpRequest } from "@gjermundgaraba/effect-actions/testing";
+import { withMcpClient } from "@gjermundgaraba/effect-actions/testing/client";
+import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
+import { Actions, Administration } from "@clankerauth/api";
+import { createNodeServer, nodeListener } from "../src/node-http.ts";
 import { application } from "../src/app.ts";
 import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
 import { validateSettings } from "../src/config.ts";
@@ -14,6 +19,7 @@ let directory: string;
 let service: Service;
 let handle: ReturnType<typeof application>;
 let cookie: string;
+let bearer: string | undefined;
 const call = (path: string, body?: unknown, headers: Record<string, string> = {}) =>
   handle(
     new Request(`${origin}${path}`, {
@@ -23,12 +29,9 @@ const call = (path: string, body?: unknown, headers: Record<string, string> = {}
     }),
   );
 const verify = (key: string, target = resource) =>
-  call(
-    "/api/api-keys/verify",
-    { resource: target },
-    { authorization: `Bearer ${key}`, cookie: "" },
-  );
+  call("/api/verifyApiKey", { resource: target }, { authorization: `Bearer ${key}`, cookie: "" });
 beforeEach(async () => {
+  bearer = undefined;
   directory = mkdtempSync(join(tmpdir(), "clankerauth-keys-"));
   service = await openAuth(
     validateSettings({
@@ -55,7 +58,7 @@ beforeEach(async () => {
     .join("; ");
   expect(
     (
-      await call("/admin/resources", {
+      await call("/api/createResource", {
         identifier: resource,
         name: "Example",
         scopes: ["example:read", "example:write"],
@@ -70,7 +73,7 @@ afterEach(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 const create = async () => {
-  const response = await call("/admin/api-keys", {
+  const response = await call("/api/createApiKey", {
     name: "Automation",
     permissions: { [resource]: ["example:read"] },
     expiresAt: null,
@@ -88,7 +91,7 @@ test("hash-only storage, explicit scopes, one-time display and next-request disa
   expect(stored[0]?.key).not.toBe(key.key);
   expect(stored[0]?.rateLimitMax).toBe(1000);
   expect(stored[0]?.rateLimitTimeWindow).toBe(60000);
-  const list = await call("/admin/api-keys");
+  const list = await call("/api/listApiKeys", {});
   expect(await list.text()).not.toContain(key.key);
   const response = await verify(key.key);
   expect(response.status).toBe(200);
@@ -100,31 +103,26 @@ test("hash-only storage, explicit scopes, one-time display and next-request disa
     expiresAt: null,
   });
   expect((await verify(key.key, "https://other.internal/api")).status).toBe(403);
-  expect((await call("/admin/api-keys/update", { keyId: key.keyId, enabled: false })).status).toBe(
-    200,
-  );
+  expect((await call("/api/updateApiKey", { keyId: key.keyId, enabled: false })).status).toBe(200);
   expect((await verify(key.key)).status).toBe(401);
-  expect((await call("/admin/api-keys/update", { keyId: key.keyId, enabled: true })).status).toBe(
-    200,
-  );
+  expect((await call("/api/updateApiKey", { keyId: key.keyId, enabled: true })).status).toBe(200);
   expect((await verify(key.key)).status).toBe(200);
-  expect((await call("/admin/api-keys/delete", { keyId: key.keyId })).status).toBe(200);
+  expect((await call("/api/deleteApiKey", { keyId: key.keyId })).status).toBe(200);
   expect((await verify(key.key)).status).toBe(401);
 });
 
 test("valid-session and Origin administration; keys cannot create sessions or reach plugin routes", async () => {
   const key = await create();
   expect(
-    (await call("/admin/api-keys", undefined, { cookie: "", authorization: `Bearer ${key.key}` }))
-      .status,
+    (await call("/api/listApiKeys", {}, { cookie: "", authorization: `Bearer ${key.key}` })).status,
   ).toBe(401);
-  expect(
-    (await call("/admin/api-keys", undefined, { cookie: "", "x-api-key": key.key })).status,
-  ).toBe(401);
+  expect((await call("/api/listApiKeys", {}, { cookie: "", "x-api-key": key.key })).status).toBe(
+    401,
+  );
   expect(
     (
       await call(
-        "/admin/api-keys/update",
+        "/api/updateApiKey",
         { keyId: key.keyId, enabled: false },
         { origin: "https://evil.example" },
       )
@@ -136,27 +134,27 @@ test("valid-session and Origin administration; keys cannot create sessions or re
 
 test("resource policy removal and restoration retains only explicit grants", async () => {
   const key = await create();
-  await call("/admin/resources/update", {
+  await call("/api/updateResource", {
     identifier: resource,
     name: "Example",
     scopes: ["example:write"],
   });
   expect((await verify(key.key)).status).toBe(403);
-  await call("/admin/resources/update", {
+  await call("/api/updateResource", {
     identifier: resource,
     name: "Example",
     scopes: ["example:read", "example:write", "example:new"],
   });
   expect((await (await verify(key.key)).json()).scopes).toEqual(["example:read"]);
-  await call("/admin/resources/delete", { identifier: resource });
+  await call("/api/deleteResource", { identifier: resource });
   expect((await verify(key.key)).status).toBe(403);
-  await call("/admin/resources", {
+  await call("/api/createResource", {
     identifier: resource,
     name: "Example",
     scopes: ["example:read", "example:write"],
   });
   expect((await verify(key.key)).status).toBe(200);
-  await call("/admin/api-keys/update", {
+  await call("/api/updateApiKey", {
     keyId: key.keyId,
     permissions: { [resource]: ["example:write"] },
   });
@@ -184,11 +182,11 @@ test("creation rejects implicit, unknown and invalid expiry grants", async () =>
     { "https://unknown.internal": ["example:read"] },
   ])
     expect(
-      (await call("/admin/api-keys", { name: "Bad", permissions, expiresAt: null })).status,
+      (await call("/api/createApiKey", { name: "Bad", permissions, expiresAt: null })).status,
     ).toBe(400);
   expect(
     (
-      await call("/admin/api-keys", {
+      await call("/api/createApiKey", {
         name: "Bad",
         permissions: { [resource]: ["example:read"] },
         expiresAt: "not a date",
@@ -200,7 +198,7 @@ test("creation rejects implicit, unknown and invalid expiry grants", async () =>
 test("listing includes every key beyond the provider database page and preserves pagination", async () => {
   const created = [];
   for (let index = 0; index < 101; index++) created.push(await create());
-  const response = await call("/admin/api-keys");
+  const response = await call("/api/listApiKeys", {});
   expect(response.status).toBe(200);
   const body = await response.json();
   expect(body.keys).toHaveLength(created.length);
@@ -229,18 +227,18 @@ test("key writes reuse middleware owner authorization", async () => {
     const key = await create();
     expect(sessions).toHaveBeenCalledTimes(1);
     sessions.mockClear();
-    expect(
-      (await call("/admin/api-keys/update", { keyId: key.keyId, name: "Renamed" })).status,
-    ).toBe(200);
+    expect((await call("/api/updateApiKey", { keyId: key.keyId, name: "Renamed" })).status).toBe(
+      200,
+    );
     expect(sessions).toHaveBeenCalledTimes(1);
     expect(
-      (await call("/admin/api-keys/update", { keyId: key.keyId, enabled: false }, { cookie: "" }))
+      (await call("/api/updateApiKey", { keyId: key.keyId, enabled: false }, { cookie: "" }))
         .status,
     ).toBe(401);
     expect(
       (
         await call(
-          "/admin/api-keys",
+          "/api/createApiKey",
           { name: "Denied", permissions: { [resource]: ["example:read"] }, expiresAt: null },
           { origin: "https://evil.example" },
         )
@@ -294,4 +292,256 @@ test("concurrent verification respects fixed-window capacity and resets at the e
   expect((await verify(key.key)).status).toBe(429);
   vi.setSystemTime(start + 120000);
   expect((await verify(key.key)).status).toBe(200);
+});
+
+const mcp = async (
+  method: string,
+  params: Record<string, unknown> = {},
+  headers: Record<string, string> = {},
+) => {
+  bearer ??= (await mcpOAuthGrant(handle, origin, cookie)).tokens.access_token;
+  return handle(
+    mcpRequest(method, params, {
+      url: `${origin}/mcp`,
+      headers: { authorization: `Bearer ${bearer}`, ...headers },
+    }),
+  );
+};
+
+test("HTTP and MCP share administration contracts, writes, secrets and revocation", async () => {
+  const discovery = await mcp("tools/list");
+  expect(discovery.status).toBe(200);
+  expect(discovery.headers.get("cache-control")).toBe("no-store");
+  const {
+    result: { tools },
+  } = await discovery.json();
+  expect(tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
+    Administration.actions.map((action) => action.name).sort(),
+  );
+  expect(tools).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "listApiKeys",
+        annotations: expect.objectContaining({ readOnlyHint: true }),
+      }),
+      expect.objectContaining({
+        name: "deleteApiKey",
+        annotations: expect.objectContaining({ destructiveHint: true }),
+      }),
+    ]),
+  );
+  const openapi = await handle(new Request(`${origin}/openapi.json`, { headers: { cookie } }));
+  expect(openapi.status).toBe(200);
+  const document = await openapi.json();
+  expect(Object.keys(document.paths).sort()).toEqual(
+    Actions.actions.map((action) => `/api/${action.name}`).sort(),
+  );
+  for (const name of ["setupStatus", "setupOwner", "verifyApiKey"]) {
+    expect(tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
+  }
+  expect(document.paths["/api/createApiKey"].post.responses).toHaveProperty("201");
+
+  const created = await mcp("tools/call", {
+    name: "createApiKey",
+    arguments: {
+      name: "MCP automation",
+      permissions: { [resource]: ["example:read"] },
+      expiresAt: null,
+    },
+  });
+  expect(created.status).toBe(200);
+  const { result } = await created.json();
+  expect(result.isError).toBe(false);
+  const key = result.structuredContent.value;
+  expect(key.key).toMatch(/^ca_/);
+  expect((await verify(key.key)).status).toBe(200);
+  const listing = await call("/api/listApiKeys", {});
+  expect(await listing.json()).toMatchObject({
+    keys: [{ keyId: key.keyId, name: "MCP automation" }],
+  });
+  const mcpListing = await mcp("tools/call", { name: "listApiKeys", arguments: {} });
+  expect(await mcpListing.text()).not.toContain(key.key);
+
+  expect((await call("/api/updateApiKey", { keyId: key.keyId, name: "HTTP rename" })).status).toBe(
+    200,
+  );
+  const renamed = await (await mcp("tools/call", { name: "listApiKeys", arguments: {} })).json();
+  expect(renamed.result.structuredContent.value.keys[0].name).toBe("HTTP rename");
+  const disabled = await (
+    await mcp("tools/call", {
+      name: "updateApiKey",
+      arguments: { keyId: key.keyId, enabled: false },
+    })
+  ).json();
+  expect(disabled.result.structuredContent.value.enabled).toBe(false);
+  expect((await verify(key.key)).status).toBe(401);
+
+  const invalid = await (
+    await mcp("tools/call", {
+      name: "createResource",
+      arguments: {
+        identifier: "not a URL",
+        name: "Invalid",
+        scopes: [],
+      },
+    })
+  ).json();
+  expect(invalid.result.isError).toBe(true);
+  expect(invalid.result.structuredContent._tag).toBe("BadRequest");
+  const malformed = await (
+    await mcp("tools/call", { name: "updateApiKey", arguments: { keyId: 42 } })
+  ).json();
+  expect(malformed.result.isError).toBe(true);
+  expect(malformed.result.structuredContent).toEqual({
+    _tag: "BadRequest",
+    error: "Invalid request",
+  });
+  const malformedHttp = await call("/api/updateApiKey", { keyId: 42 });
+  expect(malformedHttp.status).toBe(400);
+  expect(await malformedHttp.json()).toEqual(malformed.result.structuredContent);
+});
+
+test("HTTP and MCP sanitize invalid managed-client output", async () => {
+  const created = await call("/api/createClient", {
+    name: "Corrupt-output test",
+    redirect: "http://127.0.0.1:9876/callback",
+    resources: [],
+    native: true,
+    confidential: true,
+  });
+  expect(created.status).toBe(201);
+  const { client_id } = await created.json();
+  await Effect.runPromise(
+    service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${client_id}`,
+  );
+
+  const listing = await call("/api/listClients", {});
+  expect(listing.status).toBe(500);
+  const expected = { _tag: "InternalServerError", error: "Request could not be completed" };
+  expect(await listing.json()).toEqual(expected);
+
+  const tool = await mcp("tools/call", { name: "listClients", arguments: {} });
+  expect(tool.status).toBe(200);
+  const { result } = await tool.json();
+  expect(result.isError).toBe(true);
+  expect(result.structuredContent).toEqual(expected);
+});
+
+test("HTTP administration requires owner session and Origin; MCP requires bearer authorization", async () => {
+  const spoofedOwner = { userId: await Effect.runPromise(service.owner()), cookie };
+  expect((await call("/api/listClients", spoofedOwner, { cookie: "" })).status).toBe(401);
+  expect(
+    (
+      await mcp(
+        "tools/call",
+        { name: "listClients", arguments: spoofedOwner },
+        { authorization: "" },
+      )
+    ).status,
+  ).toBe(401);
+  const rejectedHeaders: Array<Record<string, string>> = [
+    { cookie: "" },
+    { origin: "https://evil.example" },
+    { origin: "" },
+  ];
+  for (const headers of rejectedHeaders) {
+    const status = headers.cookie === "" ? 401 : 403;
+    if (headers.origin !== "") {
+      expect((await mcp("tools/list", {}, headers)).status).toBe(headers.cookie === "" ? 200 : 403);
+    }
+    expect((await call("/api/listClients", {}, headers)).status).toBe(status);
+    expect(
+      (
+        await handle(
+          new Request(`${origin}/openapi.json`, { headers: { origin, cookie, ...headers } }),
+        )
+      ).status,
+    ).toBe(headers.cookie === "" ? 401 : 200);
+  }
+  const key = await create();
+  expect(
+    (await mcp("tools/list", {}, { cookie: "", authorization: `Bearer ${key.key}` })).status,
+  ).toBe(401);
+  expect((await call("/api/listClients")).status).toBe(404);
+});
+
+test.each(["modern", "legacy"] as const)(
+  "official %s MCP client uses OAuth bearer authentication through the Node bridge",
+  async (mode) => {
+    const { tokens } = await mcpOAuthGrant(handle, origin, cookie);
+    const server = createNodeServer(nodeListener(handle, origin));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP listener");
+      await withMcpClient(
+        (request) => fetch(request),
+        async (client) => {
+          const { tools } = await client.listTools();
+          expect(tools.map((tool) => tool.name).sort()).toEqual(
+            Administration.actions.map((action) => action.name).sort(),
+          );
+          const listing = await client.callTool({ name: "listClients", arguments: {} });
+          expect(listing.isError).toBe(false);
+          expect(listing.structuredContent).toMatchObject({
+            value: {
+              email: "owner@example.internal",
+              resources: [
+                administrationResource(origin),
+                {
+                  identifier: resource,
+                  name: "Example",
+                  scopes: ["example:read", "example:write"],
+                  builtIn: false,
+                },
+              ],
+            },
+          });
+          const malformed = await client.callTool({
+            name: "updateApiKey",
+            arguments: { keyId: 42 },
+          });
+          expect(malformed.isError).toBe(true);
+          expect(malformed.structuredContent).toEqual({
+            _tag: "BadRequest",
+            error: "Invalid request",
+          });
+        },
+        {
+          mode,
+          path: "/mcp",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          headers: { authorization: `Bearer ${tokens.access_token}` },
+        },
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  },
+);
+
+test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
+  const permissions = { [`${origin}/mcp`]: ["admin"] };
+  const created = await call("/api/createApiKey", {
+    name: "Invalid administration key",
+    permissions,
+    expiresAt: null,
+  });
+  expect(created.status).toBe(400);
+  const key = await create();
+  expect((await call("/api/updateApiKey", { keyId: key.keyId, permissions })).status).toBe(400);
+  expect((await (await verify(key.key)).json()).scopes).toEqual(["example:read"]);
+});
+
+test("renaming a key preserves grants for resources that are no longer available", async () => {
+  const key = await create();
+  expect((await call("/api/deleteResource", { identifier: resource })).status).toBe(200);
+  expect((await call("/api/updateApiKey", { keyId: key.keyId, name: "Renamed" })).status).toBe(200);
+  const { keys } = await (await call("/api/listApiKeys", {})).json();
+  expect(keys[0]).toMatchObject({
+    name: "Renamed",
+    permissions: { [resource]: ["example:read"] },
+  });
 });

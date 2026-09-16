@@ -1,11 +1,8 @@
-import { Context, Schema } from "effect";
-import {
-  HttpApi,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  HttpApiMiddleware,
-  HttpApiSchema,
-} from "effect/unstable/httpapi";
+import { Schema } from "effect";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/http";
+import { HttpApiSchema } from "effect/unstable/httpapi";
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()(
   "BadRequest",
@@ -64,7 +61,7 @@ export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()
   { httpApiStatus: 503 },
 ) {}
 
-const errors = [
+export const errors = [
   BadRequest,
   Unauthorized,
   Forbidden,
@@ -74,24 +71,6 @@ const errors = [
   InternalServerError,
   ServiceUnavailable,
 ];
-
-export class ApiValidation extends HttpApiMiddleware.Service<ApiValidation>()(
-  "ClankerAuth/ApiValidation",
-  { error: [BadRequest, InternalServerError] },
-) {}
-
-export class CurrentOwner extends Context.Service<
-  CurrentOwner,
-  { readonly userId: string; readonly email: string }
->()("ClankerAuth/CurrentOwner") {}
-export class OwnerAuthorization extends HttpApiMiddleware.Service<
-  OwnerAuthorization,
-  { provides: CurrentOwner }
->()("ClankerAuth/OwnerAuthorization", { error: errors }) {}
-export class SetupProtection extends HttpApiMiddleware.Service<SetupProtection>()(
-  "ClankerAuth/SetupProtection",
-  { error: [BadRequest, Forbidden] },
-) {}
 
 export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
 export const ClientInput = Schema.Struct({
@@ -129,6 +108,7 @@ export const Resource = Schema.Struct({
   name: Schema.String,
   scopes: Schema.Array(Schema.String),
 });
+export const ResourceSummary = Resource.pipe(Schema.fieldsAssign({ builtIn: Schema.Boolean }));
 export const ResourceId = Schema.Struct({ identifier: Schema.String });
 export const ClientAccess = Schema.Struct({
   client_id: Schema.String,
@@ -162,120 +142,147 @@ export const MachineKey = Schema.Struct({
   createdAt: Schema.String,
 });
 
-export const Api = HttpApi.make("ClankerAuth")
-  .add(
-    HttpApiGroup.make("apiKeys")
-      .add(
-        HttpApiEndpoint.get("list", "/admin/api-keys", {
-          success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("create", "/admin/api-keys", {
-          payload: ApiKeyInput,
-          success: MachineKey.pipe(
-            Schema.fieldsAssign({ key: Schema.String }),
-            HttpApiSchema.status(201),
-          ),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("update", "/admin/api-keys/update", {
-          payload: ApiKeyUpdate,
-          success: MachineKey,
-          error: errors,
-        }),
-        HttpApiEndpoint.post("delete", "/admin/api-keys/delete", {
-          payload: ApiKeyId,
-          success: Schema.Struct({ deleted: Schema.Boolean }),
-          error: errors,
-        }),
-      )
-      .middleware(OwnerAuthorization),
-    HttpApiGroup.make("keyVerification").add(
-      HttpApiEndpoint.post("verify", "/api/api-keys/verify", {
-        payload: Schema.Struct({ resource: Schema.String }),
-        success: Schema.Struct({
-          keyId: Schema.String,
-          ownerId: Schema.String,
-          resource: Schema.String,
-          scopes: Schema.Array(Schema.String),
-          expiresAt: Schema.NullOr(Schema.String),
-        }),
-        error: errors,
-      }),
+// These actions have their own access rules, not an owner-session requirement.
+// They are HTTP-only: bootstrap and key introspection are not MCP administration tools.
+export const IssuerActions = ActionGroup.make(
+  Action.make("setupStatus", {
+    description: "Check whether the issuer needs its first owner account.",
+    success: Schema.Struct({ required: Schema.Boolean }),
+    error: errors,
+    mcp: false,
+  }),
+  Action.make("setupOwner", {
+    description: "Create the first owner account. Requires the configured browser origin.",
+    input: SetupInput,
+    success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
+    error: errors,
+    mcp: false,
+  }),
+  Action.make("verifyApiKey", {
+    description: "Verify the bearer API key against one resource and return its granted scopes.",
+    input: Schema.Struct({ resource: Schema.String }),
+    success: Schema.Struct({
+      keyId: Schema.String,
+      ownerId: Schema.String,
+      resource: Schema.String,
+      scopes: Schema.Array(Schema.String),
+      expiresAt: Schema.NullOr(Schema.String),
+    }),
+    error: errors,
+    mcp: false,
+  }),
+);
+
+export const ClientListResult = Schema.Struct({
+  clients: Schema.Array(Client),
+  resources: Schema.Array(ResourceSummary),
+  clientAccess: Schema.Array(ClientAccess),
+  email: Schema.String,
+  issuer: Schema.String,
+});
+
+export const Administration = ActionGroup.make(
+  Action.make("listClients", {
+    description: "List clients, resources and access grants.",
+    success: ClientListResult,
+    error: errors,
+    mcp: { readOnly: true },
+  }),
+  Action.make("createClient", {
+    description: "Register a first-party OAuth client. Returns its secret once when confidential.",
+    input: ClientInput,
+    success: ClientCredentials.pipe(HttpApiSchema.status(201)),
+    error: errors,
+  }),
+  Action.make("deleteClient", {
+    description: "Delete an OAuth client.",
+    input: ClientId,
+    success: Schema.Struct({ deleted: Schema.Boolean }),
+    error: errors,
+  }),
+  Action.make("revokeClient", {
+    description: "Revoke a client’s authorization grants.",
+    input: ClientId,
+    success: Schema.Struct({ revoked: Schema.Boolean }),
+    error: errors,
+  }),
+  Action.make("blockClient", {
+    description: "Block or unblock OAuth authorization for a client.",
+    input: ClientBlockInput,
+    success: Schema.Struct({ blocked: Schema.Boolean }),
+    error: errors,
+  }),
+  Action.make("rotateClientSecret", {
+    description: "Rotate a confidential client secret. Returns the new secret once.",
+    input: ClientId,
+    success: ClientCredentials,
+    error: errors,
+  }),
+  Action.make("setClientAccess", {
+    description: "Set the resources a managed client may access.",
+    input: ClientAccessInput,
+    success: ClientAccessResult,
+    error: errors,
+  }),
+  Action.make("createResource", {
+    description: "Create an OAuth resource and its scopes.",
+    input: Resource,
+    success: Resource.pipe(HttpApiSchema.status(201)),
+    error: errors,
+  }),
+  Action.make("updateResource", {
+    description: "Update an OAuth resource and its scopes.",
+    input: Resource,
+    success: Resource,
+    error: errors,
+  }),
+  Action.make("deleteResource", {
+    description:
+      "Delete a resource and its client-resource links. Stored authorization grants and API-key permissions are retained; recreating the resource can restore access.",
+    input: ResourceId,
+    success: Schema.Struct({ deleted: Schema.Boolean }),
+    error: errors,
+  }),
+  Action.make("listApiKeys", {
+    description: "List API key metadata without secret values.",
+    success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
+    error: errors,
+    mcp: { readOnly: true },
+  }),
+  Action.make("createApiKey", {
+    description: "Create a scoped API key. Returns its secret once.",
+    input: ApiKeyInput,
+    success: MachineKey.pipe(
+      Schema.fieldsAssign({ key: Schema.String }),
+      HttpApiSchema.status(201),
     ),
-    HttpApiGroup.make("setup").add(
-      HttpApiEndpoint.get("status", "/api/setup", {
-        success: Schema.Struct({ required: Schema.Boolean }),
-        error: errors,
-      }),
-      HttpApiEndpoint.post("create", "/api/setup", {
-        payload: SetupInput,
-        success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
-        error: errors,
-      }).middleware(SetupProtection),
-    ),
-    HttpApiGroup.make("clients")
-      .add(
-        HttpApiEndpoint.get("list", "/admin/clients", {
-          success: Schema.Struct({
-            clients: Schema.Array(Client),
-            resources: Schema.Array(Resource),
-            clientAccess: Schema.Array(ClientAccess),
-            email: Schema.String,
-            issuer: Schema.String,
-          }),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("create", "/admin/clients", {
-          payload: ClientInput,
-          success: ClientCredentials.pipe(HttpApiSchema.status(201)),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("delete", "/admin/clients/delete", {
-          payload: ClientId,
-          success: Schema.Struct({ deleted: Schema.Boolean }),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("revoke", "/admin/clients/revoke", {
-          payload: ClientId,
-          success: Schema.Struct({ revoked: Schema.Boolean }),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("block", "/admin/clients/block", {
-          payload: ClientBlockInput,
-          success: Schema.Struct({ blocked: Schema.Boolean }),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("rotate", "/admin/clients/rotate", {
-          payload: ClientId,
-          success: ClientCredentials,
-          error: errors,
-        }),
-        HttpApiEndpoint.post("access", "/admin/clients/access", {
-          payload: ClientAccessInput,
-          success: ClientAccessResult,
-          error: errors,
-        }),
-      )
-      .middleware(OwnerAuthorization),
-    HttpApiGroup.make("resources")
-      .add(
-        HttpApiEndpoint.post("create", "/admin/resources", {
-          payload: Resource,
-          success: Resource.pipe(HttpApiSchema.status(201)),
-          error: errors,
-        }),
-        HttpApiEndpoint.post("update", "/admin/resources/update", {
-          payload: Resource,
-          success: Resource,
-          error: errors,
-        }),
-        HttpApiEndpoint.post("delete", "/admin/resources/delete", {
-          payload: ResourceId,
-          success: Schema.Struct({ deleted: Schema.Boolean }),
-          error: errors,
-        }),
-      )
-      .middleware(OwnerAuthorization),
-  )
-  .middleware(ApiValidation);
+    error: errors,
+  }),
+  Action.make("updateApiKey", {
+    description: "Update an API key’s name, permissions or enabled state.",
+    input: ApiKeyUpdate,
+    success: MachineKey,
+    error: errors,
+  }),
+  Action.make("deleteApiKey", {
+    description: "Delete an API key.",
+    input: ApiKeyId,
+    success: Schema.Struct({ deleted: Schema.Boolean }),
+    error: errors,
+  }),
+);
+
+export const Actions = ActionGroup.make(...Administration.actions, ...IssuerActions.actions);
+export const schemaError = {
+  errors: [BadRequest, InternalServerError],
+  map: (failure) =>
+    failure.phase === "output"
+      ? new InternalServerError({ error: "Request could not be completed" })
+      : new BadRequest({ error: "Invalid request" }),
+} satisfies Action.SchemaErrorPolicy<readonly [typeof BadRequest, typeof InternalServerError]>;
+export const Http = ActionHttp.configure({
+  apiPath: "/api",
+  openapiPath: false,
+  schemaError,
+});
+export const Api = Http.api(Actions);

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { APIError } from "better-auth/api";
 import type { Service } from "./auth.ts";
-import { customApi } from "./custom-api.ts";
+import { actionApi } from "./action-api.ts";
 
 const ResourceRequest = Schema.Struct({ resource: Schema.String });
 const publicPaths = new Set([
@@ -26,6 +26,7 @@ const publicPaths = new Set([
   "/.well-known/oauth-authorization-server",
 ]);
 const corsPaths = new Set([
+  "/.well-known/oauth-protected-resource/mcp",
   "/jwks",
   "/oauth2/register",
   "/oauth2/token",
@@ -37,6 +38,18 @@ const corsPaths = new Set([
   "/.well-known/openid-configuration",
 ]);
 const json = (body: unknown, status = 200) => Response.json(body, { status });
+const mcpMethods = ["GET", "POST", "DELETE"];
+const mcpRequestHeaders = [
+  "Authorization",
+  "Content-Type",
+  "Accept",
+  "Mcp-Protocol-Version",
+  "Mcp-Session-Id",
+  "Mcp-Method",
+  "Mcp-Name",
+  "Last-Event-ID",
+];
+const mcpRequestHeaderNames = new Set(mcpRequestHeaders.map((header) => header.toLowerCase()));
 
 export function application(
   service: Service,
@@ -45,17 +58,23 @@ export function application(
   ),
 ) {
   const { auth, settings } = service;
-  const api = customApi(service);
+  // The same exact allowlist governs CORS and native MCP Origin admission.
+  const mcpAllowedOrigins = [...new Set([settings.baseURL, ...(settings.mcpAllowedOrigins ?? [])])];
+  const api = actionApi(service, mcpAllowedOrigins);
   async function dispatch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/healthz" && req.method === "GET") {
       await Effect.runPromise(service.sql`SELECT 1`);
       return json({ status: "ok" });
     }
+    // Custom actions are POST /api/<name>. OAuth remains under /api/auth.
     if (
-      url.pathname === "/api/setup" ||
-      url.pathname === "/api/api-keys/verify" ||
-      url.pathname.startsWith("/admin/")
+      (url.pathname.startsWith("/api/") &&
+        url.pathname !== "/api/auth" &&
+        !url.pathname.startsWith("/api/auth/")) ||
+      url.pathname === "/openapi.json" ||
+      url.pathname === "/mcp" ||
+      url.pathname === "/.well-known/oauth-protected-resource/mcp"
     )
       return api.handler(req);
     if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
@@ -103,14 +122,35 @@ export function application(
     });
   }
   const handle = async (req: Request) => {
-    const path = new URL(req.url).pathname.replace(/^\/api\/auth/, "");
+    const pathname = new URL(req.url).pathname;
+    const path = pathname.replace(/^\/api\/auth/, "");
+    const isMcp = pathname === "/mcp";
+    const origin = req.headers.get("origin");
+    const mcpOriginAllowed = origin !== null && mcpAllowedOrigins.includes(origin);
     const publicCors = corsPaths.has(path);
     let response: Response;
     try {
-      response =
-        publicCors && req.method === "OPTIONS"
-          ? new Response(null, { status: 204 })
-          : await service.run(() => dispatch(req));
+      if (isMcp && origin !== null && !mcpOriginAllowed) {
+        response = json({ error: "Invalid origin" }, 403);
+      } else if (isMcp && req.method === "OPTIONS") {
+        const method = req.headers.get("access-control-request-method");
+        const headers = (req.headers.get("access-control-request-headers") ?? "")
+          .split(",")
+          .map((header) => header.trim().toLowerCase())
+          .filter(Boolean);
+        response =
+          mcpOriginAllowed &&
+          method !== null &&
+          mcpMethods.includes(method) &&
+          headers.every((header) => mcpRequestHeaderNames.has(header))
+            ? new Response(null, { status: 204 })
+            : json({ error: "MCP preflight rejected" }, 403);
+      } else {
+        response =
+          publicCors && req.method === "OPTIONS"
+            ? new Response(null, { status: 204 })
+            : await service.run(() => dispatch(req));
+      }
     } catch (error) {
       const status =
         error instanceof APIError
@@ -129,6 +169,21 @@ export function application(
       response.headers.set("access-control-allow-headers", "Authorization, Content-Type, DPoP");
       response.headers.set("access-control-expose-headers", "WWW-Authenticate, DPoP-Nonce");
       response.headers.delete("access-control-allow-credentials");
+    }
+    if (isMcp) {
+      response.headers.append("vary", "Origin");
+      response.headers.delete("access-control-allow-credentials");
+      if (mcpOriginAllowed && origin !== null) {
+        response.headers.set("access-control-allow-origin", origin);
+        response.headers.set(
+          "access-control-expose-headers",
+          "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version",
+        );
+        if (req.method === "OPTIONS" && response.ok) {
+          response.headers.set("access-control-allow-methods", mcpMethods.join(", "));
+          response.headers.set("access-control-allow-headers", mcpRequestHeaders.join(", "));
+        }
+      }
     }
     response.headers.set("cache-control", "no-store");
     response.headers.set("referrer-policy", "no-referrer");

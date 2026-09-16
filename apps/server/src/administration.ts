@@ -1,14 +1,7 @@
 import { Effect, Schema } from "effect";
-import { APIError } from "better-auth/api";
+import { apiError } from "./api-errors.ts";
 import {
   BadRequest,
-  Conflict,
-  Forbidden,
-  InternalServerError,
-  NotFound,
-  ServiceUnavailable,
-  TooManyRequests,
-  Unauthorized,
   type ClientInput,
   type ClientBlockInput,
   type ClientId,
@@ -17,53 +10,20 @@ import {
   type ResourceId,
   type SetupInput,
 } from "@clankerauth/api";
+import { mcpResource } from "./resources.ts";
+import { CurrentOwner } from "./current-owner.ts";
 import { createOwner, type Service } from "./auth.ts";
-
-export function apiError(error: unknown) {
-  if (error instanceof APIError) {
-    const body = { error: error.body?.message ?? "Request could not be completed" };
-    switch (error.statusCode) {
-      case 400:
-        return new BadRequest(body);
-      case 401:
-        return new Unauthorized({ error: "Authentication required" });
-      case 403:
-        return new Forbidden(body);
-      case 404:
-        return new NotFound(body);
-      case 409:
-        return new Conflict(body);
-      case 429:
-        return new TooManyRequests(body);
-      case 503:
-        return new ServiceUnavailable(body);
-    }
-  }
-  return new InternalServerError({ error: "Request could not be completed" });
-}
 
 export function administration(service: Service) {
   const { auth, settings } = service;
-  const requireOwner = Effect.fn("Administration.requireOwner")(function* (
-    headers: Headers,
-    mutate: boolean,
-  ) {
-    const session = yield* Effect.tryPromise({
-      try: () => auth.api.getSession({ headers }),
-      catch: apiError,
-    });
-    if (!session) return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
-    if (mutate && headers.get("origin") !== settings.baseURL)
-      return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
-    return session;
-  });
   return {
-    requireOwner,
     setup: Effect.fn("Administration.setup")(function* (input: typeof SetupInput.Type) {
       yield* Effect.tryPromise({ try: () => createOwner(service, input), catch: apiError });
       return { created: true };
     }),
-    list: Effect.fn("Administration.list")(function* (headers: Headers, email: string) {
+    list: Effect.fn("Administration.list")(function* () {
+      const { providerHeaders, email } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       const managed = yield* Effect.tryPromise({
         try: () => auth.api.getOAuthClients({ headers }),
         catch: apiError,
@@ -114,15 +74,17 @@ export function administration(service: Service) {
       }).pipe(Effect.mapError(apiError));
       return {
         clients,
-        ...catalog,
+        resources: catalog.resources.map((resource) => ({
+          ...resource,
+          builtIn: resource.identifier === mcpResource(settings.baseURL),
+        })),
+        clientAccess: catalog.clientAccess,
         email,
         issuer: `${settings.baseURL}/api/auth`,
       };
     }),
-    create: Effect.fn("Administration.create")(function* (
-      headers: Headers,
-      input: typeof ClientInput.Type,
-    ) {
+    create: Effect.fn("Administration.create")(function* (input: typeof ClientInput.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
       if (!input.name.trim() || input.name.length > 100)
         return yield* Effect.fail(
           new BadRequest({ error: "Client names require 1–100 characters" }),
@@ -130,6 +92,7 @@ export function administration(service: Service) {
       const scopes = yield* service.resources
         .scopesFor(input.resources)
         .pipe(Effect.mapError(apiError));
+      const headers = yield* providerHeaders;
       const client = yield* Effect.tryPromise({
         try: () =>
           // The administrative endpoint accepts skip_consent; the plain one drops it.
@@ -160,39 +123,40 @@ export function administration(service: Service) {
       );
       return client;
     }),
-    access: Effect.fn("Administration.access")(function* (
-      headers: Headers,
-      input: typeof ClientAccessInput.Type,
-    ) {
+    access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       const clientAccess = yield* service.resources
         .setAccess(input.client_id, input.resources, headers)
         .pipe(Effect.mapError(apiError));
       return { clientAccess };
     }),
     createResource: Effect.fn("Administration.createResource")(function* (
-      headers: Headers,
       input: typeof Resource.Type,
     ) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       return yield* service.resources.create(input, headers).pipe(Effect.mapError(apiError));
     }),
     updateResource: Effect.fn("Administration.updateResource")(function* (
-      headers: Headers,
       input: typeof Resource.Type,
     ) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       return yield* service.resources.update(input, headers).pipe(Effect.mapError(apiError));
     }),
     deleteResource: Effect.fn("Administration.deleteResource")(function* (
-      headers: Headers,
       input: typeof ResourceId.Type,
     ) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       return yield* service.resources
         .delete(input.identifier, headers)
         .pipe(Effect.mapError(apiError));
     }),
-    delete: Effect.fn("Administration.delete")(function* (
-      headers: Headers,
-      body: typeof ClientId.Type,
-    ) {
+    delete: Effect.fn("Administration.delete")(function* (body: typeof ClientId.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       yield* Effect.tryPromise({
         try: () => auth.api.deleteOAuthClient({ headers, body }),
         catch: apiError,
@@ -200,17 +164,18 @@ export function administration(service: Service) {
       return { deleted: true };
     }),
     revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
+      yield* CurrentOwner;
       return yield* service.onboarding.revoke(input.client_id).pipe(Effect.mapError(apiError));
     }),
     block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
+      yield* CurrentOwner;
       return yield* service.onboarding
         .block(input.client_id, input.blocked)
         .pipe(Effect.mapError(apiError));
     }),
-    rotate: Effect.fn("Administration.rotate")(function* (
-      headers: Headers,
-      body: typeof ClientId.Type,
-    ) {
+    rotate: Effect.fn("Administration.rotate")(function* (body: typeof ClientId.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
       return yield* Effect.tryPromise({
         try: () => auth.api.rotateClientSecret({ headers, body }),
         catch: apiError,

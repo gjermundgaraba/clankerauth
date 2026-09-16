@@ -18,7 +18,7 @@ import {
 } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
-import { protocolScopes, resourceReference, resourceStore } from "./resources.ts";
+import { mcpResource, protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
 export async function openAuth(
   settings: Settings,
@@ -28,15 +28,6 @@ export async function openAuth(
   const database = await openDatabase(settings.database);
   const { sql } = database;
   const onboarding = onboardingStore(database.kysely);
-  const metadataRevision = () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const rows = yield* sql`SELECT revision FROM clientMetadataRevision WHERE id = 1`;
-        return (yield* Schema.decodeUnknownEffect(Schema.Struct({ revision: Schema.Number }))(
-          rows[0],
-        )).revision;
-      }),
-    );
   const owner = Effect.fn("Auth.owner")(function* () {
     const rows = yield* sql`SELECT userId FROM serviceOwner WHERE id = 1`;
     if (!rows.length) return undefined;
@@ -84,18 +75,6 @@ export async function openAuth(
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
     codeExpiresIn: 120,
     refreshTokenReuseInterval: 0,
-    customTokenResponseFields: async () => {
-      const context = getCurrentAuthEndpointContext().context;
-      if (
-        "clientMetadataRevision" in context &&
-        context.clientMetadataRevision !== (await metadataRevision())
-      )
-        throw new APIError("BAD_REQUEST", {
-          error: "invalid_grant",
-          error_description: "Client metadata changed; authorize again",
-        });
-      return {};
-    },
     // Session-backed DCR needs a source marker distinct from owner-managed clients.
     // Anonymous DCR is already unowned; both are tracked by the creation trigger.
     clientReference: () =>
@@ -112,6 +91,7 @@ export async function openAuth(
       provider.options.scopes = scopes;
       provider.options.clientRegistrationDefaultResources = identifiers;
     },
+    mcpResource(settings.baseURL),
   );
   const options = {
     appName: "Clanker Auth",
@@ -129,17 +109,6 @@ export async function openAuth(
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
-        const basic = ctx.headers?.get("authorization");
-        let basicClientId: string | undefined;
-        if (basic?.startsWith("Basic ")) {
-          try {
-            basicClientId = decodeURIComponent(
-              Buffer.from(basic.slice(6), "base64").toString("utf8").split(":")[0] ?? "",
-            );
-          } catch {
-            /* Provider rejects malformed credentials. */
-          }
-        }
         const clientId =
           typeof ctx.body?.client_id === "string"
             ? ctx.body.client_id
@@ -147,20 +116,16 @@ export async function openAuth(
               ? ctx.query.client_id
               : typeof ctx.body?.oauth_query === "string"
                 ? new URLSearchParams(ctx.body.oauth_query).get("client_id")
-                : basicClientId;
+                : undefined;
         if (
           clientId &&
-          ["/oauth2/authorize", "/oauth2/token", "/oauth2/consent", "/oauth2/continue"].includes(
-            ctx.path,
-          ) &&
+          ["/oauth2/authorize", "/oauth2/consent", "/oauth2/continue"].includes(ctx.path) &&
           (await Effect.runPromise(onboarding.isBlocked(clientId)))
         )
           throw new APIError("BAD_REQUEST", {
             error: "invalid_client",
             error_description: "Client is blocked",
           });
-        if (ctx.path === "/oauth2/token")
-          Object.assign(ctx.context, { clientMetadataRevision: await metadataRevision() });
         if (ctx.path === "/oauth2/register") {
           if (!(await Effect.runPromise(onboarding.admit())))
             throw new APIError("TOO_MANY_REQUESTS", {
@@ -246,6 +211,17 @@ export async function openAuth(
     );
     return result;
   };
+  // Request scopes may finish asynchronous finalizers after their HTTP response.
+  // Keep those lifetimes admitted until all provider cleanup has completed.
+  const retain = () => {
+    if (closing) throw new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" });
+    const lifetime = Promise.withResolvers<void>();
+    active.add(lifetime.promise);
+    return () => {
+      active.delete(lifetime.promise);
+      lifetime.resolve();
+    };
+  };
   const close = async () => {
     closing = true;
     await Promise.allSettled(active);
@@ -263,6 +239,7 @@ export async function openAuth(
     resources,
     onboarding,
     run,
+    retain,
     close,
   };
 }
@@ -298,22 +275,24 @@ const sqlInitialize = (service: Service) =>
         UPDATE oauthClient SET disabled = 1 WHERE clientId = NEW.clientId
           AND EXISTS (SELECT 1 FROM clientOnboarding WHERE clientId = NEW.clientId AND blocked = 1);
       END`;
-    yield* service.sql`CREATE TABLE IF NOT EXISTS clientMetadataRevision (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL)`;
-    yield* service.sql`INSERT OR IGNORE INTO clientMetadataRevision (id, revision) VALUES (1, 0)`;
-    // Managed clients registered before first-party policy existed.
-    yield* service.sql`UPDATE oauthClient SET skipConsent = 1 WHERE skipConsent IS NOT 1 AND clientId NOT IN (SELECT clientId FROM clientOnboarding)`;
+    // Every insertion, including deterministic CIMD recreation, gets a fresh identity.
+    // Keeping the generation on the live row bounds its lifetime to the client.
+    yield* service.sql`CREATE TRIGGER IF NOT EXISTS clientGrantGeneration AFTER INSERT ON oauthClient
+      BEGIN
+        UPDATE oauthClient SET grantGeneration = lower(hex(randomblob(16))) WHERE clientId = NEW.clientId;
+      END`;
     // Security-relevant document changes revoke grants in the same transaction
     // as metadata reconciliation; plugin notifications are only best effort.
     yield* service.sql`CREATE TRIGGER IF NOT EXISTS cimdMetadataRevocation AFTER UPDATE OF redirectUris, tokenEndpointAuthMethod, jwks, jwksUri, name, uri ON oauthClient
       WHEN NEW.clientDiscoveryId IS NOT NULL AND (OLD.redirectUris IS NOT NEW.redirectUris OR OLD.tokenEndpointAuthMethod IS NOT NEW.tokenEndpointAuthMethod OR OLD.jwks IS NOT NEW.jwks OR OLD.jwksUri IS NOT NEW.jwksUri OR OLD.name IS NOT NEW.name OR OLD.uri IS NOT NEW.uri)
       BEGIN
-        UPDATE clientMetadataRevision SET revision = revision + 1 WHERE id = 1;
+        UPDATE oauthClient SET grantGeneration = lower(hex(randomblob(16))) WHERE clientId = NEW.clientId;
         DELETE FROM oauthConsent WHERE clientId = NEW.clientId;
         DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = NEW.clientId;
         DELETE FROM oauthAccessToken WHERE clientId = NEW.clientId;
         DELETE FROM oauthRefreshToken WHERE clientId = NEW.clientId;
       END`;
-    yield* service.resources.synchronize();
+    yield* service.resources.initialize();
   });
 
 export async function createOwner(service: Service, input: { email: string; password: string }) {

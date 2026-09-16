@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { normalizeError, type Sql } from "./database.ts";
 import { APIError } from "better-auth/api";
 import type { Auth } from "better-auth";
 import type { oauthProvider } from "@better-auth/oauth-provider";
 import { ClientAccess, Resource } from "@clankerauth/api";
+
+export const mcpScope = "admin";
+export const mcpResource = (baseURL: string) => `${baseURL}/mcp`;
 
 export const protocolScopes = ["openid", "profile", "email", "offline_access"];
 export const resourceReference = (identifier: string) => `resource:${identifier}`;
@@ -44,6 +48,7 @@ export function resourceStore(
   sql: Sql,
   getAuth: () => ResourceAuth,
   changed: (scopes: string[], identifiers: string[]) => void,
+  reservedIdentifier: string,
 ) {
   const decodeResource = Effect.fn("Resources.decode")(function* (value: unknown) {
     const row = yield* resourceRow(value);
@@ -171,9 +176,18 @@ export function resourceStore(
   const synchronize = Effect.fn("Resources.synchronize")(function* () {
     publish(yield* list());
   });
+  const initialize = Effect.fn("Resources.initialize")(function* () {
+    // This resource is application policy, present even before owner setup.
+    const now = Date.now();
+    yield* sql`INSERT OR IGNORE INTO oauthResource
+      (id, identifier, name, allowedScopes, accessTokenTtl, disabled, createdAt, updatedAt, policyVersion)
+      VALUES (${randomUUID()}, ${reservedIdentifier}, 'Clanker Auth administration', ${JSON.stringify([...protocolScopes, mcpScope])}, 300, 0, ${now}, ${now}, 1)`;
+    publish(yield* list());
+  });
   return {
     list,
     get,
+    initialize,
     access,
     hasAccess: Effect.fn("Resources.hasAccess")(function* (clientId: string, identifier: string) {
       const rows =
@@ -218,19 +232,33 @@ export function resourceStore(
     }),
     update: Effect.fn("Resources.update")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
+      const builtIn = resource.identifier === reservedIdentifier;
+      if (builtIn && (resource.scopes.length !== 1 || resource.scopes[0] !== mcpScope))
+        return yield* Effect.fail(
+          new APIError("BAD_REQUEST", {
+            message: "The administration Resource scopes are reserved",
+          }),
+        );
       yield* providerCall(() =>
         getAuth().api.adminUpdateOAuthResource({
           headers,
           params: resourceParams(resource.identifier),
-          body: { name: resource.name, allowedScopes: [...protocolScopes, ...resource.scopes] },
+          body: builtIn
+            ? { name: resource.name }
+            : { name: resource.name, allowedScopes: [...protocolScopes, ...resource.scopes] },
         }),
       );
+      if (builtIn) return resource;
       yield* synchronize();
       for (const link of yield* accessForResource(resource.identifier))
         yield* syncClient(link.client_id, headers);
       return resource;
     }),
     delete: Effect.fn("Resources.delete")(function* (identifier: string, headers: Headers) {
+      if (identifier === reservedIdentifier)
+        return yield* Effect.fail(
+          new APIError("BAD_REQUEST", { message: "The administration Resource is reserved" }),
+        );
       const links = yield* accessForResource(identifier);
       yield* providerCall(() =>
         getAuth().api.adminDeleteOAuthResource({

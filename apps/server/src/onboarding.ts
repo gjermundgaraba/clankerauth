@@ -27,6 +27,7 @@ export function onboardingStore(database: Kysely<DatabaseSchema>) {
         .length
     )
       return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+    yield* query`UPDATE oauthClient SET grantGeneration = lower(hex(randomblob(16))) WHERE clientId = ${clientId}`;
     yield* query`DELETE FROM oauthConsent WHERE clientId = ${clientId}`;
     yield* query`DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = ${clientId}`;
     yield* query`DELETE FROM oauthAccessToken WHERE clientId = ${clientId}`;

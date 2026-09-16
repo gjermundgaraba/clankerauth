@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @clankerauth/api build && vp run --no-cache --parallel -r dev",
+    "dev": "vp run @clankerauth/api#build && vp run --no-cache --parallel -r dev",
     "build": "vp run -r build",
-    "check": "pnpm --filter @clankerauth/api build && vp check",
+    "check": "vp run @clankerauth/api#build && vp check",
     "test": "vp run -r test",
     "ready": "pnpm check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",

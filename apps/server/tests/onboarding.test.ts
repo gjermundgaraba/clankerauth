@@ -458,8 +458,27 @@ test.each([false, true])(
       { clientId: client.client_id },
     ]);
     expect(await Effect.runPromise(service.resources.access())).toEqual([
+      { client_id: client.client_id, resource: `${baseURL}/mcp` },
       { client_id: client.client_id, resource },
     ]);
     expect((await Effect.runPromise(service.onboarding.list())).length).toBe(1);
   },
 );
+
+test("abandoned registration cleanup bounds generations to live clients across repeated cycles", async () => {
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await Effect.runPromise(service.sql`WITH RECURSIVE n(value) AS (VALUES(1) UNION ALL SELECT value + 1 FROM n WHERE value < 1000)
+      INSERT INTO oauthClient (id, clientId, redirectUris, createdAt, updatedAt)
+      SELECT ${String(cycle)} || '-' || value, ${String(cycle)} || '-' || value, '[]', 0, 0 FROM n`);
+    expect(
+      await Effect.runPromise(
+        service.sql`SELECT count(*) AS count FROM oauthClient WHERE length(grantGeneration) = 32`,
+      ),
+    ).toEqual([{ count: 1000 }]);
+    await Effect.runPromise(service.onboarding.cleanup());
+    expect(await Effect.runPromise(service.sql`SELECT count(*) AS count FROM oauthClient`)).toEqual(
+      [{ count: 0 }],
+    );
+    expect(await Effect.runPromise(service.onboarding.list())).toEqual([]);
+  }
+});

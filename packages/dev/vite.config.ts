@@ -10,7 +10,7 @@ export default defineConfig({
     format: ["esm"],
     dts: false,
     minify: true,
-    deps: { alwaysBundle: [/./], onlyBundle: false },
+    deps: { resolveDepSubpath: true, alwaysBundle: [/./], onlyBundle: false },
     plugins: [
       {
         name: "bundled-dependency-notices",

@@ -1,0 +1,564 @@
+import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { mcpRequest } from "@gjermundgaraba/effect-actions/testing";
+import { withMcpClient } from "@gjermundgaraba/effect-actions/testing/client";
+import { Effect } from "effect";
+import { randomBytes, randomUUID } from "node:crypto";
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { application } from "../src/app.ts";
+import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
+import {
+  administrationResource,
+  mcpOAuthCode,
+  mcpOAuthGrant,
+  oauthToken,
+} from "./mcp-oauth-helper.ts";
+
+const baseURL = "http://localhost:3000";
+let directory: string;
+let service: Service;
+let handle: ReturnType<typeof application>;
+let cookie: string;
+
+const admin = (action: string, body: unknown) =>
+  handle(
+    new Request(`${baseURL}/api/${action}`, {
+      method: "POST",
+      headers: { cookie, origin: baseURL, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+const mcp = (token?: string, headers: Record<string, string> = {}) =>
+  handle(
+    mcpRequest(
+      "tools/list",
+      {},
+      {
+        url: `${baseURL}/mcp`,
+        headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+      },
+    ),
+  );
+const refresh = (client_id: string, refresh_token: string) =>
+  oauthToken(handle, baseURL, {
+    grant_type: "refresh_token",
+    client_id,
+    refresh_token,
+    resource: `${baseURL}/mcp`,
+  });
+
+beforeEach(async () => {
+  directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-oauth-"));
+  service = await openAuth({
+    baseURL,
+    database: join(directory, "auth.sqlite"),
+    secret: randomBytes(32).toString("hex"),
+    host: "127.0.0.1",
+    port: 3000,
+  });
+  await initialize(service);
+  handle = application(service);
+  await createOwner(service, {
+    email: "owner@example.internal",
+    password: "test-only password123",
+  });
+  const login = await handle(
+    new Request(`${baseURL}/api/auth/sign-in/email`, {
+      method: "POST",
+      headers: { origin: baseURL, "content-type": "application/json" },
+      body: JSON.stringify({ email: "owner@example.internal", password: "test-only password123" }),
+    }),
+  );
+  expect(login.status).toBe(200);
+  cookie = login.headers
+    .getSetCookie()
+    .map((part) => part.split(";")[0])
+    .join("; ");
+});
+afterEach(async () => {
+  vi.useRealTimers();
+  await handle.dispose();
+  await service.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("anonymous discovery leads to PKCE owner consent, bearer administration, and refresh", async () => {
+  const unauthorized = await mcp();
+  expect(unauthorized.status).toBe(401);
+  const challenge = unauthorized.headers.get("www-authenticate");
+  expect(challenge).toContain("Bearer");
+  const metadataURL = /resource_metadata="([^"]+)"/.exec(challenge ?? "")?.[1];
+  expect(metadataURL).toBe(`${baseURL}/.well-known/oauth-protected-resource/mcp`);
+  const metadata = await handle(new Request(metadataURL ?? ""));
+  expect(metadata.status).toBe(200);
+  expect(await metadata.json()).toMatchObject({
+    resource: `${baseURL}/mcp`,
+    authorization_servers: [`${baseURL}/api/auth`],
+    scopes_supported: ["admin", "offline_access"],
+    bearer_methods_supported: ["header"],
+  });
+  const discovery = await handle(
+    new Request(`${baseURL}/.well-known/oauth-authorization-server/api/auth`),
+  );
+  expect(discovery.status).toBe(200);
+  expect(await discovery.json()).toMatchObject({
+    issuer: `${baseURL}/api/auth`,
+    authorization_endpoint: `${baseURL}/api/auth/oauth2/authorize`,
+    token_endpoint: `${baseURL}/api/auth/oauth2/token`,
+    registration_endpoint: `${baseURL}/api/auth/oauth2/register`,
+    code_challenge_methods_supported: ["S256"],
+  });
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  expect((await mcp(tokens.access_token)).status).toBe(200);
+  // The token grants MCP access only; browser administration still requires its own session.
+  const http = await handle(
+    new Request(`${baseURL}/api/listClients`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }),
+  );
+  expect(http.status).toBe(401);
+  await withMcpClient(
+    handle,
+    async (client) => {
+      const created = await client.callTool({
+        name: "createClient",
+        arguments: {
+          name: "Created through MCP",
+          redirect: "http://127.0.0.1:9912/callback",
+          resources: [],
+          native: true,
+          confidential: true,
+        },
+      });
+      expect(created.isError).toBe(false);
+      expect(created.structuredContent).toMatchObject({
+        value: { client_secret: expect.any(String) },
+      });
+      const listing = await client.callTool({ name: "listClients", arguments: {} });
+      expect(listing.isError).toBe(false);
+      expect(JSON.stringify(listing.structuredContent)).not.toContain('"client_secret":');
+    },
+    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
+  );
+  const rotated = await refresh(client_id, tokens.refresh_token);
+  expect(rotated.status, await rotated.clone().text()).toBe(200);
+  const replacement = await rotated.json();
+  expect(replacement.refresh_token).not.toBe(tokens.refresh_token);
+  expect((await mcp(replacement.access_token)).status).toBe(200);
+});
+
+test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and insufficient-scope tokens", async () => {
+  const rejectedHeaders: Array<Record<string, string>> = [
+    { cookie },
+    { authorization: "Basic invalid" },
+    { authorization: "Bearer invalid" },
+  ];
+  for (const headers of rejectedHeaders) {
+    const response = await mcp(undefined, headers);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
+  }
+  const target = "https://resource.example/api";
+  expect(
+    (
+      await admin("createResource", {
+        identifier: target,
+        name: "Other audience",
+        scopes: ["read"],
+      })
+    ).status,
+  ).toBe(201);
+  const created = await admin("createApiKey", {
+    name: "Not an OAuth token",
+    permissions: { [target]: ["read"] },
+    expiresAt: null,
+  });
+  expect(created.status).toBe(201);
+  expect((await mcp((await created.json()).key)).status).toBe(401);
+  const other = await mcpOAuthGrant(handle, baseURL, cookie, {
+    resource: target,
+    scope: "openid offline_access read",
+  });
+  expect((await mcp(other.tokens.access_token)).status).toBe(401);
+  const insufficient = await mcpOAuthGrant(handle, baseURL, cookie, {
+    scope: "openid offline_access",
+  });
+  const denied = await mcp(insufficient.tokens.access_token);
+  expect(denied.status).toBe(403);
+  expect(denied.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+  expect(denied.headers.get("www-authenticate")).toContain('scope="admin"');
+  const valid = await mcpOAuthGrant(handle, baseURL, cookie);
+  const parts = valid.tokens.access_token.split(".");
+  parts[1] = Buffer.from(
+    JSON.stringify({ sub: "not-owner", aud: `${baseURL}/mcp`, scope: "admin" }),
+  ).toString("base64url");
+  expect((await mcp(parts.join("."))).status).toBe(401);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.now() + (Number(valid.tokens.expires_in) + 60) * 1000);
+  expect((await mcp(valid.tokens.access_token)).status).toBe(401);
+});
+
+test("administration resource permits persistent renaming but reserves its scopes and identity", async () => {
+  const resource = administrationResource(baseURL);
+  expect((await admin("createResource", resource)).status).toBe(409);
+  expect((await admin("updateResource", { ...resource, scopes: ["everything"] })).status).toBe(400);
+  expect((await admin("deleteResource", { identifier: resource.identifier })).status).toBe(400);
+  const renamed = { ...resource, name: "My administration" };
+  expect((await admin("updateResource", renamed)).status).toBe(200);
+  await handle.dispose();
+  await service.close();
+  service = await openAuth({
+    baseURL,
+    database: join(directory, "auth.sqlite"),
+    secret: service.settings.secret,
+    host: "127.0.0.1",
+    port: 3000,
+  });
+  await initialize(service);
+  handle = application(service);
+  expect((await (await admin("listClients", {})).json()).resources).toEqual([renamed]);
+});
+
+test.each(["block", "revoke"] as const)(
+  "%s invalidates existing MCP grants and refresh on the next request",
+  async (operation) => {
+    const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+    expect((await mcp(tokens.access_token)).status).toBe(200);
+    const response = await admin(operation === "block" ? "blockClient" : "revokeClient", {
+      client_id,
+      ...(operation === "block" ? { blocked: true } : {}),
+    });
+    expect(response.status).toBe(200);
+    expect((await mcp(tokens.access_token)).status).toBe(401);
+    expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
+    if (operation === "block") {
+      expect((await admin("blockClient", { client_id, blocked: false })).status).toBe(200);
+      expect((await mcp(tokens.access_token)).status).toBe(401);
+    }
+    const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id });
+    expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
+    expect((await mcp(tokens.access_token)).status).toBe(401);
+  },
+);
+
+test("MCP protocol and owner-identity operations do not acquire provider sessions", async () => {
+  const resource = "https://automation.example/api";
+  expect(
+    (
+      await admin("createResource", {
+        identifier: resource,
+        name: "Automation",
+        scopes: ["read"],
+      })
+    ).status,
+  ).toBe(201);
+  const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  const target = await mcpOAuthGrant(handle, baseURL, cookie);
+  const context = await service.auth.$context;
+  const createSession = vi.spyOn(context.internalAdapter, "createSession");
+  const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
+  await withMcpClient(
+    handle,
+    async (client) => {
+      // Connecting initializes the protocol; listing tools needs no provider credentials either.
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+      expect(createSession).not.toHaveBeenCalled();
+      const created = await client.callTool({
+        name: "createApiKey",
+        arguments: {
+          name: "Owner identity only",
+          permissions: { [resource]: ["read"] },
+          expiresAt: null,
+        },
+      });
+      expect(created.isError).toBe(false);
+      const listing = await admin("listApiKeys", {});
+      const { keys } = await listing.json();
+      const updated = await client.callTool({
+        name: "updateApiKey",
+        arguments: { keyId: keys[0].keyId, enabled: false },
+      });
+      expect(updated.isError).toBe(false);
+      for (const name of ["revokeClient", "blockClient"]) {
+        const result = await client.callTool({
+          name,
+          arguments: {
+            client_id: target.client_id,
+            ...(name === "blockClient" ? { blocked: true } : {}),
+          },
+        });
+        expect(result.isError).toBe(false);
+      }
+      expect(createSession).not.toHaveBeenCalled();
+      expect(deleteSession).not.toHaveBeenCalled();
+    },
+    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
+  );
+});
+
+test("provider-backed MCP writes release temporary sessions and offline grants survive owner sign-out", async () => {
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  const sessions = () => Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`);
+  const before = await sessions();
+  const context = await service.auth.$context;
+  const createSession = vi.spyOn(context.internalAdapter, "createSession");
+  const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
+  await withMcpClient(
+    handle,
+    async (client) => {
+      const result = await client.callTool({
+        name: "createResource",
+        arguments: {
+          identifier: "https://temporary-session.example/api",
+          name: "Created with OAuth",
+          scopes: ["read"],
+        },
+      });
+      expect(result.isError).toBe(false);
+      const duplicate = await client.callTool({
+        name: "createResource",
+        arguments: {
+          identifier: "https://temporary-session.example/api",
+          name: "Duplicate",
+          scopes: ["read"],
+        },
+      });
+      expect(duplicate.isError).toBe(true);
+    },
+    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
+  );
+  // HTTP responses may resolve before the request Scope finishes its asynchronous release.
+  await expect.poll(sessions).toEqual(before);
+  expect(createSession).toHaveBeenCalledTimes(2);
+  expect(deleteSession).toHaveBeenCalledTimes(2);
+  const logout = await handle(
+    new Request(`${baseURL}/api/auth/sign-out`, {
+      method: "POST",
+      headers: { cookie, origin: baseURL, "content-type": "application/json" },
+      body: "{}",
+    }),
+  );
+  expect(logout.status).toBe(200);
+  expect((await mcp(tokens.access_token)).status).toBe(200);
+  const refreshed = await refresh(client_id, tokens.refresh_token);
+  expect(refreshed.status, await refreshed.clone().text()).toBe(200);
+  expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
+});
+
+test("deleting and recreating a client identity cannot revive its old MCP access token", async () => {
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  expect((await mcp(tokens.access_token)).status).toBe(200);
+  // Model metadata-cache eviction and re-registration with the same deterministic client ID.
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* service.sql`CREATE TEMP TABLE savedMcpClient AS SELECT * FROM oauthClient WHERE clientId = ${client_id}`;
+      yield* service.sql`CREATE TEMP TABLE savedMcpLinks AS SELECT * FROM oauthClientResource WHERE clientId = ${client_id}`;
+      yield* service.sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
+      yield* service.sql`INSERT INTO oauthClient SELECT * FROM savedMcpClient`;
+      yield* service.sql`INSERT INTO oauthClientResource SELECT * FROM savedMcpLinks`;
+    }),
+  );
+  expect(await Effect.runPromise(service.resources.hasAccess(client_id, `${baseURL}/mcp`))).toBe(
+    true,
+  );
+  expect((await mcp(tokens.access_token)).status).toBe(401);
+});
+
+test("offline MCP access and refresh survive browser-session expiry and cleanup", async () => {
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  expect((await mcp(tokens.access_token)).status).toBe(200);
+  await Effect.runPromise(
+    service.sql`UPDATE session SET expiresAt = ${new Date(Date.now() - 60_000).toISOString()}`,
+  );
+  expect((await mcp(tokens.access_token)).status).toBe(200);
+  const refreshed = await refresh(client_id, tokens.refresh_token);
+  expect(refreshed.status, await refreshed.clone().text()).toBe(200);
+  const replacement = await refreshed.json();
+  expect((await mcp(replacement.access_token)).status).toBe(200);
+  await Effect.runPromise(service.sql`DELETE FROM session`);
+  const afterCleanup = await refresh(client_id, replacement.refresh_token);
+  expect(afterCleanup.status, await afterCleanup.clone().text()).toBe(200);
+  expect((await mcp((await afterCleanup.json()).access_token)).status).toBe(200);
+});
+
+test.each(["Basic", "basic", "bAsIc", "private_key_jwt"])(
+  "%s authentication without body client_id issues usable grants after revocation",
+  async (method) => {
+    const { publicKey, privateKey } = await generateKeyPair("ES256");
+    const registration = await handle(
+      new Request(`${baseURL}/api/auth/oauth2/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Authenticated MCP client",
+          redirect_uris: ["http://127.0.0.1:9876/callback"],
+          token_endpoint_auth_method: method === "private_key_jwt" ? method : "client_secret_basic",
+          ...(method === "private_key_jwt"
+            ? { jwks: { keys: [{ ...(await exportJWK(publicKey)), kid: "test-key" }] } }
+            : {}),
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+        }),
+      }),
+    );
+    expect(registration.status, await registration.clone().text()).toBe(201);
+    const { client_id, client_secret } = await registration.json();
+    const exchange = async (form: Record<string, string>) => {
+      const body = new URLSearchParams(form);
+      body.delete("client_id");
+      const headers = new Headers({ "content-type": "application/x-www-form-urlencoded" });
+      if (method === "private_key_jwt") {
+        body.set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        body.set(
+          "client_assertion",
+          await new SignJWT({})
+            .setProtectedHeader({ alg: "ES256", kid: "test-key" })
+            .setIssuer(client_id)
+            .setSubject(client_id)
+            .setAudience(`${baseURL}/api/auth/oauth2/token`)
+            .setIssuedAt()
+            .setExpirationTime("2m")
+            .setJti(randomUUID())
+            .sign(privateKey),
+        );
+      } else {
+        headers.set(
+          "authorization",
+          `${method} ${Buffer.from(`${encodeURIComponent(client_id)}:${encodeURIComponent(client_secret)}`).toString("base64")}`,
+        );
+      }
+      return handle(
+        new Request(`${baseURL}/api/auth/oauth2/token`, { method: "POST", headers, body }),
+      );
+    };
+    const first = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
+    expect((await mcp(first.tokens.access_token)).status).toBe(200);
+    expect((await admin("revokeClient", { client_id })).status).toBe(200);
+    const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
+    expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
+    expect(decodeJwt(renewed.tokens.access_token).grant_generation).not.toBe(
+      decodeJwt(first.tokens.access_token).grant_generation,
+    );
+    const refreshed = await exchange({
+      grant_type: "refresh_token",
+      refresh_token: renewed.tokens.refresh_token,
+      resource: `${baseURL}/mcp`,
+    });
+    expect(refreshed.status, await refreshed.clone().text()).toBe(200);
+    expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
+    expect((await mcp(first.tokens.access_token)).status).toBe(401);
+  },
+);
+
+test.each(["revoke", "block", "metadata", "unrelated-metadata"])(
+  "%s during refresh persistence respects the client's generation",
+  async (change) => {
+    const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+    const other = await mcpOAuthGrant(handle, baseURL, cookie);
+    const context = await service.auth.$context;
+    const transact = context.adapter.transaction.bind(context.adapter);
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(context.adapter, "transaction").mockImplementationOnce(async (operation) => {
+      reached.resolve();
+      await release.promise;
+      return transact(operation);
+    });
+    const pending = refresh(client_id, tokens.refresh_token);
+    try {
+      await reached.promise;
+      if (change === "revoke" || change === "block") {
+        expect(
+          (
+            await admin(change === "revoke" ? "revokeClient" : "blockClient", {
+              client_id,
+              ...(change === "block" ? { blocked: true } : {}),
+            })
+          ).status,
+        ).toBe(200);
+      } else {
+        const changedId = change === "metadata" ? client_id : other.client_id;
+        await Effect.runPromise(
+          service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = 'Changed metadata' WHERE clientId = ${changedId}`,
+        );
+      }
+      release.resolve();
+      const response = await pending;
+      if (change === "unrelated-metadata") {
+        expect(response.status, await response.clone().text()).toBe(200);
+        expect((await mcp((await response.json()).access_token)).status).toBe(200);
+      } else {
+        expect(response.status, await response.clone().text()).toBe(400);
+        expect((await response.json()).error).toBe("invalid_grant");
+        expect(
+          await Effect.runPromise(
+            service.sql`SELECT id FROM oauthRefreshToken WHERE clientId = ${client_id}`,
+          ),
+        ).toEqual([]);
+        expect((await mcp(tokens.access_token)).status).toBe(401);
+      }
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
+
+test.each(["admin", "offline_access admin"])(
+  "revocation during code-exchange signing rejects issuance (scope: %s)",
+  async (scope) => {
+    const form = await mcpOAuthCode(handle, baseURL, cookie, { scope });
+    const context = await service.auth.$context;
+    const findMany = context.adapter.findMany.bind(context.adapter);
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(context.adapter, "findMany").mockImplementation(async (input) => {
+      const result = await findMany(input);
+      if (input.model === "jwks") {
+        reached.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    const pending = oauthToken(handle, baseURL, form);
+    try {
+      await reached.promise;
+      expect((await admin("revokeClient", { client_id: form.client_id })).status).toBe(200);
+      release.resolve();
+      const response = await pending;
+      expect(response.status, await response.clone().text()).toBe(400);
+      expect((await response.json()).error).toBe("invalid_grant");
+      expect(
+        await Effect.runPromise(
+          service.sql`SELECT id FROM oauthRefreshToken WHERE clientId = ${form.client_id}`,
+        ),
+      ).toEqual([]);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
+
+test("failed replacement insertion rolls back the parent refresh CAS", async () => {
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  await Effect.runPromise(service.sql`CREATE TRIGGER failRefreshInsertion BEFORE INSERT ON oauthRefreshToken
+    BEGIN SELECT RAISE(ABORT, 'Injected refresh insert failure'); END`);
+  expect((await refresh(client_id, tokens.refresh_token)).status).toBe(500);
+  expect(
+    await Effect.runPromise(
+      service.sql`SELECT revoked FROM oauthRefreshToken WHERE clientId = ${client_id}`,
+    ),
+  ).toEqual([{ revoked: null }]);
+  await Effect.runPromise(service.sql`DROP TRIGGER failRefreshInsertion`);
+  const retried = await refresh(client_id, tokens.refresh_token);
+  expect(retried.status, await retried.clone().text()).toBe(200);
+  expect((await mcp((await retried.json()).access_token)).status).toBe(200);
+});

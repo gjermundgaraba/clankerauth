@@ -11,7 +11,8 @@ export default defineConfig(({ command }) => {
       strictPort: true,
       proxy: {
         "/api/": proxy,
-        "/admin/": proxy,
+        "/mcp": proxy,
+        "/openapi.json": proxy,
         "/.well-known/": proxy,
         "/healthz": proxy,
       },

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { publicUrl, startIssuer } from "../tests/issuer.ts";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -44,6 +45,27 @@ try {
     resource: "https://notes.example/api",
   });
   await assert.rejects(verifier.verify(null), (error) => error.code === "unauthorized");
+  // Verify API-key authentication and revocation through the installed package.
+  const issuer = await startIssuer();
+  try {
+    const installedVerifier = api.createVerifier({
+      issuer: issuer.issuer,
+      resource: `${publicUrl}/api`,
+    });
+    assert.deepEqual(await installedVerifier.verifyToken(issuer.key), {
+      subject: "owner",
+      scopes: ["notes:read", "notes:write"],
+      actor: { kind: "key", keyId: "writer" },
+    });
+    issuer.keys.delete(issuer.key);
+    await assert.rejects(
+      installedVerifier.verifyToken(issuer.key),
+      (error) => error.code === "unauthorized",
+    );
+    assert.equal(issuer.count(), 2);
+  } finally {
+    await issuer.close();
+  }
   process.stdout.write(`${name}@${version} installs and loads\n`);
 } finally {
   await rm(directory, { recursive: true, force: true });

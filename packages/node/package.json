@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-node",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Clankerauth integration for Node services: token and API-key verification, protected-resource metadata, and browser login with server-held tokens",
   "license": "MIT",
   "repository": {
@@ -22,7 +22,6 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
     "test": "vp test && node scripts/package-smoke.mjs"
   },
   "dependencies": {

@@ -12,19 +12,19 @@ Application-specific behavior remains where the provider does not directly expre
 - Resource scope changes synchronize client scope ceilings, and automatic clients can request resources added after registration. This is dynamic application policy layered over provider resources and links.
 - First-run account creation and the permanent setup marker commit in one local Kysely transaction. The marker records completed setup; it is not a runtime role system.
 - Routes enforce the single-resource request contract, exact configured origin, sole-account setup and the allowed protocol endpoint surface.
-- Managed clients are registered with the provider's `skip_consent` flag, and startup sets it on managed clients that predate the policy. The owner's session lasts 30 days and slides with use; together these make sign-in at one first-party application sign-in at all of them.
+- Managed clients are registered with the provider's `skip_consent` flag at creation. The owner's session lasts 30 days and slides with use; together these make sign-in at one first-party application sign-in at all of them.
 
 ## Client and resource lifecycle
 
-Resources, scopes and client access are stored in SQLite. Fresh installations start empty and restarts preserve edits. Resource identifiers remain stable; names and scopes can change. Managed clients may be registered without resource access and linked later. Each authorization and token request targets exactly one resource, with independent consent; new scopes require consent before issuance.
+Resources, scopes and client access are stored in SQLite. Fresh installations contain the built-in administration resource; restarts preserve edits. Resource identifiers remain stable; names and ordinary resource scopes can change. The built-in administration scope is fixed. Managed clients may be registered without resource access and linked later. Each authorization and token request targets exactly one resource, with independent consent; new scopes require consent before issuance.
 
 Client/resource unlinking is a policy change. It prevents new authorization and refresh while unlinked, retaining consent, codes and credentials. Relinking may permit those retained authorizations again. Removing a scope narrows newly issued tokens to the resource's current allowed scopes without deleting grants; a refresh may still succeed with fewer scopes. Restoring scopes can make retained authorization usable again. Deleting a resource removes its client links through provider behavior; there is no application dependency blocker or custom grant cleanup.
 
-**Revoke authorization** explicitly clears stored consent, codes and credentials. **Block client** also disables authorization for that identifier until unblocked, including across CIMD metadata rediscovery. Unblocking does not restore old grants. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. These database mutations cannot retract JWTs at offline verifiers; access tokens remain usable until expiry, at most five minutes after issuance.
+**Revoke authorization** explicitly clears stored consent, codes and credentials. **Block client** also disables authorization for that identifier until unblocked, including across CIMD metadata rediscovery. Unblocking does not restore old grants. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. Administration MCP checks the live client grant generation, so revocation, blocking, metadata changes and deletion invalidate its access tokens immediately. Other resource servers that verify JWTs offline may accept them until expiry, at most five minutes after issuance.
 
 ## Concurrency and transactions
 
-Run only one process/Service instance against a database. Requests run concurrently; there is no service-wide FIFO queue. The provider's individual operations and database transactions define consistency. Refresh rotation can race with revocation and insert a replacement after revocation has completed, so a successful revocation response is not an atomic barrier against an in-flight refresh. Clients must serialize refresh and replace their stored credential atomically.
+Run only one process/Service instance against a database. Requests run concurrently; there is no service-wide FIFO queue. The provider's individual operations and database transactions define consistency. Refresh persistence checks the captured client grant generation, rotates the parent with CAS and inserts its replacement in one provider transaction. Revocation either precedes that transaction and prevents issuance, or follows it and deletes the committed credentials. Clients must still serialize refresh and replace their stored credential atomically.
 
 Replay invalidation covers all refresh grants for the same client ID and user ID, across sessions and resources, plus associated opaque access rows. Other clients' grants remain separate. Revocation of an already-rotated parent responds `400 invalid_request` in this provider version.
 
@@ -32,12 +32,17 @@ Administrative policy changes likewise do not turn a multi-step provider request
 
 ## Provider patch and shutdown
 
-The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.4.patch) retains two narrow fixes:
+The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.4.patch) contains these integration changes:
 
 - Refresh-token client binding is checked before replay-family invalidation, preventing a rotated token from client A from deleting client B's family.
 - Access-token signing and refresh writes both settle before an issuance error propagates, allowing graceful shutdown to drain outstanding provider writes.
+- The provider schema includes an internal `oauthClient.grantGeneration` string. Application triggers assign a random 128-bit generation on every client insertion, including recreation of the same identifier. Revocation and security-relevant CIMD metadata changes replace it. Deletion removes it with the client; cleanup retains no historical generation records.
+- Authorization-code and refresh exchanges capture that generation using the provider-resolved client identity before loading or consuming the grant. This supports assertion-only `private_key_jwt` and all provider-supported Basic authentication casing, without parsing credentials in application hooks.
+- Refresh persistence validates the generation inside its short transaction. JWTs carry the captured `grant_generation`, and a final generation check rejects an exchange invalidated during signing or other asynchronous work. Unrelated clients' metadata changes do not abort the exchange.
 
-These fixes preserve provider cryptography and token formats; they do not serialize requests or add transaction rollback. Failed issuance may consume a code or leave a completed grant.
+Provider cryptography remains unchanged; the JWT gains an application grant-generation claim. Only database persistence is transactional: client discovery, signing, hashing and token formatting remain outside that transaction. Failed issuance may still consume a code or leave a completed grant after an unrelated signing failure, but cannot resurrect credentials across revocation. The patch is specific to this service's authorization-code and refresh grant configuration and requires the application generation triggers.
+
+This pre-release requires a fresh database; old counter tables, trigger definitions and tokens are not migrated.
 
 Graceful shutdown closes admission and tracks all admitted application work, including disconnected requests, until completion before closing SQLite. Late admission receives 503.
 

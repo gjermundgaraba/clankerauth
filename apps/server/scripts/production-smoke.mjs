@@ -1,7 +1,7 @@
 // Run against a pnpm deploy --prod output, never a live database or .env.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
@@ -53,24 +53,30 @@ async function stop() {
   }
   child = undefined;
 }
-const login = (value) =>
-  fetch(`${baseURL}/api/auth/sign-in/email`, {
+const post = (path, body, headers = {}) =>
+  fetch(baseURL + path, {
     method: "POST",
-    headers: { origin: baseURL, "content-type": "application/json" },
-    body: JSON.stringify({ email: "package@example.internal", password: value }),
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
   });
+const login = (value) =>
+  post(
+    "/api/auth/sign-in/email",
+    { email: "package@example.internal", password: value },
+    { origin: baseURL },
+  );
 
 try {
   await start();
-  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: true });
+  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: true });
   await stop();
   await start();
-  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: true });
-  const setup = await fetch(`${baseURL}/api/setup`, {
-    method: "POST",
-    headers: { origin: baseURL, "content-type": "application/json" },
-    body: JSON.stringify({ email: "package@example.internal", password }),
-  });
+  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: true });
+  const setup = await post(
+    "/api/setupOwner",
+    { email: "package@example.internal", password },
+    { origin: baseURL },
+  );
   assert.equal(setup.status, 201);
   assert.deepEqual(await setup.json(), { created: true });
   assert.equal(setup.headers.has("set-cookie"), false);
@@ -85,26 +91,19 @@ try {
     name: "Package MCP",
     scopes: ["read"],
   };
-  const empty = await (await fetch(`${baseURL}/admin/clients`, { headers: { cookie } })).json();
-  assert.deepEqual(empty.resources, []);
-  const createdResource = await fetch(`${baseURL}/admin/resources`, {
-    method: "POST",
-    headers: { cookie, origin: baseURL, "content-type": "application/json" },
-    body: JSON.stringify(resource),
+  const empty = await (await post("/api/listClients", {}, { cookie, origin: baseURL })).json();
+  const builtin = {
+    identifier: `${baseURL}/mcp`,
+    name: "Clanker Auth administration",
+    scopes: ["admin"],
+    builtIn: true,
+  };
+  assert.deepEqual(empty.resources, [builtin]);
+  const createdResource = await post("/api/createResource", resource, {
+    cookie,
+    origin: baseURL,
   });
   assert.equal(createdResource.status, 201, await createdResource.clone().text());
-  const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
-  assert.equal(session.status, 200);
-  assert.equal(session.headers.has("set-auth-jwt"), false);
-  for (const path of ["/", "/setup", "/login", "/consent"]) {
-    const page = await fetch(baseURL + path);
-    assert.equal(page.status, 200);
-    const html = await page.text();
-    assert.match(html, /<title>Clanker Auth<\/title>/);
-    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
-    assert.equal(assets.length, 2);
-    for (const [, asset] of assets) assert.equal((await fetch(baseURL + asset)).status, 200);
-  }
   const metadata = await (
     await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)
   ).json();
@@ -124,31 +123,128 @@ try {
   const registered = await registration.json();
   assert.equal(typeof registered.client_id, "string");
   assert.equal(registered.client_secret, undefined);
-  const blocked = await fetch(`${baseURL}/admin/clients/block`, {
-    method: "POST",
-    headers: { cookie, origin: baseURL, "content-type": "application/json" },
-    body: JSON.stringify({ client_id: registered.client_id, blocked: true }),
+  const denied = await fetch(`${baseURL}/mcp`, { method: "POST" });
+  assert.equal(denied.status, 401);
+  assert.match(denied.headers.get("www-authenticate"), /resource_metadata=/);
+  const protectedResource = await (
+    await fetch(`${baseURL}/.well-known/oauth-protected-resource/mcp`)
+  ).json();
+  assert.equal(protectedResource.resource, builtin.identifier);
+  assert.deepEqual(protectedResource.scopes_supported, ["admin", "offline_access"]);
+  const verifier = randomBytes(32).toString("base64url");
+  const query = new URLSearchParams({
+    client_id: registered.client_id,
+    redirect_uri: "http://127.0.0.1:49152/callback",
+    response_type: "code",
+    scope: "admin offline_access",
+    resource: builtin.identifier,
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+    code_challenge_method: "S256",
+    state: "package-smoke",
   });
+  const authorize = await fetch(`${metadata.authorization_endpoint}?${query}`, {
+    headers: { cookie, accept: "application/json" },
+    redirect: "manual",
+  });
+  // Fetch requests receive the provider’s redirect descriptor; browser navigation uses 302.
+  assert.equal(authorize.status, 200, await authorize.clone().text());
+  const consentUrl = new URL((await authorize.json()).url, baseURL);
+  assert.equal(consentUrl.pathname, "/consent");
+  const consent = await post(
+    "/api/auth/oauth2/consent",
+    {
+      accept: true,
+      oauth_query: consentUrl.search.slice(1),
+    },
+    { cookie, origin: baseURL },
+  );
+  assert.equal(consent.status, 200, await consent.clone().text());
+  const callback = new URL((await consent.json()).url);
+  assert.equal(callback.searchParams.get("state"), "package-smoke");
+  const tokenResponse = await fetch(metadata.token_endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: registered.client_id,
+      redirect_uri: "http://127.0.0.1:49152/callback",
+      code: callback.searchParams.get("code"),
+      code_verifier: verifier,
+      resource: builtin.identifier,
+    }),
+  });
+  assert.equal(tokenResponse.status, 200, await tokenResponse.clone().text());
+  const token = await tokenResponse.json();
+  assert.equal(typeof token.refresh_token, "string");
+  // Exercise the generated MCP adapter through the real buffered Node bridge.
+  const mcp = await fetch(`${baseURL}/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token.access_token}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "tools/call",
+      "mcp-name": "listClients",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "listClients",
+        arguments: {},
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientInfo": { name: "production-smoke", version: "0" },
+        },
+      },
+    }),
+  });
+  assert.equal(mcp.status, 200);
+  assert.match(mcp.headers.get("content-type"), /application\/json/);
+  assert.deepEqual((await mcp.json()).result.structuredContent.value.resources, [
+    builtin,
+    { ...resource, builtIn: false },
+  ]);
+  const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
+  assert.equal(session.status, 200);
+  assert.equal(session.headers.has("set-auth-jwt"), false);
+  for (const path of ["/", "/setup", "/login", "/consent"]) {
+    const page = await fetch(baseURL + path);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /<title>Clanker Auth<\/title>/);
+    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
+    assert.equal(assets.length, 2);
+    for (const [, asset] of assets) assert.equal((await fetch(baseURL + asset)).status, 200);
+  }
+  const blocked = await post(
+    "/api/blockClient",
+    { client_id: registered.client_id, blocked: true },
+    { cookie, origin: baseURL },
+  );
   assert.equal(blocked.status, 200, await blocked.clone().text());
   const keys = await (await fetch(metadata.jwks_uri)).json();
   assert.ok(keys.keys.length > 0);
   await stop();
   await start();
   assert.deepEqual(await (await fetch(metadata.jwks_uri)).json(), keys);
-  const persistedClients = await fetch(`${baseURL}/admin/clients`, { headers: { cookie } });
+  const persistedClients = await post("/api/listClients", {}, { cookie, origin: baseURL });
   assert.equal(persistedClients.status, 200);
   const persisted = await persistedClients.json();
-  assert.deepEqual(persisted.resources, [resource]);
+  assert.deepEqual(persisted.resources, [builtin, { ...resource, builtIn: false }]);
   assert.equal(persisted.clients.length, 1);
   assert.equal(persisted.clients[0].client_id, registered.client_id);
   assert.equal(persisted.clients[0].onboarding, "dcr");
   assert.equal(persisted.clients[0].blocked, true);
-  assert.deepEqual(await (await fetch(`${baseURL}/api/setup`)).json(), { required: false });
-  const repeatedSetup = await fetch(`${baseURL}/api/setup`, {
-    method: "POST",
-    headers: { origin: baseURL, "content-type": "application/json" },
-    body: JSON.stringify({ email: "another@example.internal", password }),
-  });
+  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: false });
+  const repeatedSetup = await post(
+    "/api/setupOwner",
+    { email: "another@example.internal", password },
+    { origin: baseURL },
+  );
   assert.equal(repeatedSetup.status, 409);
 } finally {
   await stop();
