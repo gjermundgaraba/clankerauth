@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import { mcpRequest } from "@gjermundgaraba/effect-actions/testing";
-import { withMcpClient } from "@gjermundgaraba/effect-actions/testing/client";
+import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
+import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { Effect } from "effect";
 import { randomBytes, randomUUID } from "node:crypto";
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -32,14 +32,11 @@ const admin = (action: string, body: unknown) =>
   );
 const mcp = (token?: string, headers: Record<string, string> = {}) =>
   handle(
-    mcpRequest(
-      "tools/list",
-      {},
-      {
-        url: `${baseURL}/mcp`,
-        headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
-      },
-    ),
+    mcpRequest({
+      method: "tools/list",
+      url: `${baseURL}/mcp`,
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+    }),
   );
 const refresh = (client_id: string, refresh_token: string) =>
   oauthToken(handle, baseURL, {
@@ -125,7 +122,12 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   );
   expect(http.status).toBe(401);
   await withMcpClient(
-    handle,
+    {
+      fetch: handle,
+      path: "/mcp",
+      baseUrl: baseURL,
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    },
     async (client) => {
       const created = await client.callTool({
         name: "createClient",
@@ -145,7 +147,6 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
       expect(listing.isError).toBe(false);
       expect(JSON.stringify(listing.structuredContent)).not.toContain('"client_secret":');
     },
-    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
   );
   const rotated = await refresh(client_id, tokens.refresh_token);
   expect(rotated.status, await rotated.clone().text()).toBe(200);
@@ -265,7 +266,12 @@ test("MCP protocol and owner-identity operations do not acquire provider session
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
-    handle,
+    {
+      fetch: handle,
+      path: "/mcp",
+      baseUrl: baseURL,
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    },
     async (client) => {
       // Connecting initializes the protocol; listing tools needs no provider credentials either.
       expect((await client.listTools()).tools.length).toBeGreaterThan(0);
@@ -299,7 +305,6 @@ test("MCP protocol and owner-identity operations do not acquire provider session
       expect(createSession).not.toHaveBeenCalled();
       expect(deleteSession).not.toHaveBeenCalled();
     },
-    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
   );
 });
 
@@ -311,7 +316,12 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
-    handle,
+    {
+      fetch: handle,
+      path: "/mcp",
+      baseUrl: baseURL,
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    },
     async (client) => {
       const result = await client.callTool({
         name: "createResource",
@@ -332,7 +342,6 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
       });
       expect(duplicate.isError).toBe(true);
     },
-    { path: "/mcp", baseUrl: baseURL, headers: { authorization: `Bearer ${tokens.access_token}` } },
   );
   // HTTP responses may resolve before the request Scope finishes its asynchronous release.
   await expect.poll(sessions).toEqual(before);

@@ -1,18 +1,17 @@
 import { Effect, Layer } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
-import * as Authentication from "@gjermundgaraba/effect-actions/authentication";
-import * as ActionMcp from "@gjermundgaraba/effect-actions/mcp";
+import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { McpProtocol } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { OpenApi } from "effect/unstable/httpapi";
 import {
-  Actions,
   Http,
   errors,
   Administration,
   IssuerActions,
   Forbidden,
   InternalServerError,
-  schemaError,
 } from "@clankerauth/api";
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
@@ -59,37 +58,43 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
         return yield* keys.verify(new Headers(request.headers), resource);
       }),
   });
-  const discovery = ActionMcp.protectedResource({
+  const discovery = Authentication.protectedResource({
     resource: mcpResource(service.settings.baseURL),
     authorizationServers: [`${service.settings.baseURL}/api/auth`],
     scopesSupported: [mcpScope, "offline_access"],
   });
-  const ownerRoutes = Layer.mergeAll(
-    Http.layer(owner),
+  const ownerSession = ownerAuthentication(service).layer;
+  // Owner administration and the document need an owner session; issuer actions
+  // have their own access rules and must work before anyone has signed in.
+  const httpRoutes = Layer.mergeAll(
+    Http.layer(owner).pipe(Layer.provide(ownerSession)),
     HttpRouter.add(
       "GET",
       "/openapi.json",
-      HttpServerResponse.json(Http.openapi(Actions)).pipe(Effect.orDie),
-    ),
-  ).pipe(Layer.provide(ownerAuthentication(service).layer));
-  const mcpRoutes = ActionMcp.layer(owner, {
-    schemaError,
-    name: "clankerauth-admin",
-    version: "0.3.0",
-    path: "/mcp",
-    // Unary Streamable HTTP works through the buffered Node bridge. Historical
-    // 2024 two-endpoint SSE and long-lived streaming are not supported here.
-    protocols: [
-      McpProtocol.v2026_07_28,
-      McpProtocol.v2025_11_25,
-      McpProtocol.v2025_06_18,
-      McpProtocol.v2025_03_26,
-    ],
-    // Native MCP admission needs this allowlist even after owner authentication.
-    allowedOrigins: mcpAllowedOrigins,
-    instructions:
-      "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
-  }).pipe(
+      HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
+    ).pipe(Layer.provide(ownerSession)),
+    Http.layer(issuer),
+  );
+  const mcpRoutes = ActionMcp.layer(
+    {
+      name: "clankerauth-admin",
+      version: "0.3.0",
+      path: "/mcp",
+      // Unary Streamable HTTP works through the buffered Node bridge. Historical
+      // 2024 two-endpoint SSE and long-lived streaming are not supported here.
+      protocols: [
+        McpProtocol.v2026_07_28,
+        McpProtocol.v2025_11_25,
+        McpProtocol.v2025_06_18,
+        McpProtocol.v2025_03_26,
+      ],
+      // Native MCP admission needs this allowlist even after owner authentication.
+      allowedOrigins: mcpAllowedOrigins,
+      instructions:
+        "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
+    },
+    owner,
+  ).pipe(
     Layer.provide(
       Authentication.middleware(CurrentOwner, {
         errors,
@@ -111,7 +116,7 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
       }).layer,
     ),
   );
-  const routes = Layer.mergeAll(Http.layer(issuer), ownerRoutes, mcpRoutes, discovery.layer).pipe(
+  const routes = Layer.mergeAll(httpRoutes, mcpRoutes, discovery.layer).pipe(
     Layer.provide(NodeHttpServer.layerHttpServices),
   );
   return HttpRouter.toWebHandler(routes, { disableLogger: true });

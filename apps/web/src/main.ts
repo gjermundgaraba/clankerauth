@@ -1,7 +1,6 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
-  Actions,
   Http,
   type Client,
   type ClientCredentials,
@@ -17,7 +16,7 @@ type ResourceView = typeof ResourceSummary.Type;
 type KeyView = typeof MachineKey.Type;
 
 const api = await Effect.runPromise(
-  Http.client(Actions, { baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
+  Http.client({ baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
 );
 
 function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {

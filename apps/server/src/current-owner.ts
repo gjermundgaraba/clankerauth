@@ -2,7 +2,7 @@ import { Context, Effect, type Scope } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { Forbidden, Unauthorized, errors } from "@clankerauth/api";
 import { apiError } from "./api-errors.ts";
-import * as Authentication from "@gjermundgaraba/effect-actions/authentication";
+import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import type { Service } from "./auth.ts";
 
 /** Authenticated per request, never supplied by action arguments or at startup. */

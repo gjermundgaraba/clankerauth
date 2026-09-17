@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
-import * as ActionHttp from "@gjermundgaraba/effect-actions/http";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { HttpApiSchema } from "effect/unstable/httpapi";
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()(
@@ -142,20 +142,29 @@ export const MachineKey = Schema.Struct({
   createdAt: Schema.String,
 });
 
+// Every action can fail with the shared API errors, and both transports answer malformed
+// requests and unencodable results the same way, so each group declares both once.
+const schemaError = {
+  errors: [BadRequest, InternalServerError],
+  map: (failure: Action.SchemaFailure) =>
+    failure.phase === "output"
+      ? new InternalServerError({ error: "Request could not be completed" })
+      : new BadRequest({ error: "Invalid request" }),
+};
+
 // These actions have their own access rules, not an owner-session requirement.
 // They are HTTP-only: bootstrap and key introspection are not MCP administration tools.
 export const IssuerActions = ActionGroup.make(
+  { name: "issuer", errors, schemaError },
   Action.make("setupStatus", {
     description: "Check whether the issuer needs its first owner account.",
     success: Schema.Struct({ required: Schema.Boolean }),
-    error: errors,
     mcp: false,
   }),
   Action.make("setupOwner", {
     description: "Create the first owner account. Requires the configured browser origin.",
     input: SetupInput,
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
-    error: errors,
     mcp: false,
   }),
   Action.make("verifyApiKey", {
@@ -168,7 +177,6 @@ export const IssuerActions = ActionGroup.make(
       scopes: Schema.Array(Schema.String),
       expiresAt: Schema.NullOr(Schema.String),
     }),
-    error: errors,
     mcp: false,
   }),
 );
@@ -182,71 +190,61 @@ export const ClientListResult = Schema.Struct({
 });
 
 export const Administration = ActionGroup.make(
+  { name: "administration", errors, schemaError },
   Action.make("listClients", {
     description: "List clients, resources and access grants.",
     success: ClientListResult,
-    error: errors,
     mcp: { readOnly: true },
   }),
   Action.make("createClient", {
     description: "Register a first-party OAuth client. Returns its secret once when confidential.",
     input: ClientInput,
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
-    error: errors,
   }),
   Action.make("deleteClient", {
     description: "Delete an OAuth client.",
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
-    error: errors,
   }),
   Action.make("revokeClient", {
     description: "Revoke a client’s authorization grants.",
     input: ClientId,
     success: Schema.Struct({ revoked: Schema.Boolean }),
-    error: errors,
   }),
   Action.make("blockClient", {
     description: "Block or unblock OAuth authorization for a client.",
     input: ClientBlockInput,
     success: Schema.Struct({ blocked: Schema.Boolean }),
-    error: errors,
   }),
   Action.make("rotateClientSecret", {
     description: "Rotate a confidential client secret. Returns the new secret once.",
     input: ClientId,
     success: ClientCredentials,
-    error: errors,
   }),
   Action.make("setClientAccess", {
     description: "Set the resources a managed client may access.",
     input: ClientAccessInput,
     success: ClientAccessResult,
-    error: errors,
   }),
   Action.make("createResource", {
     description: "Create an OAuth resource and its scopes.",
     input: Resource,
     success: Resource.pipe(HttpApiSchema.status(201)),
-    error: errors,
   }),
   Action.make("updateResource", {
     description: "Update an OAuth resource and its scopes.",
     input: Resource,
     success: Resource,
-    error: errors,
   }),
   Action.make("deleteResource", {
     description:
       "Delete a resource and its client-resource links. Stored authorization grants and API-key permissions are retained; recreating the resource can restore access.",
     input: ResourceId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
-    error: errors,
   }),
   Action.make("listApiKeys", {
     description: "List API key metadata without secret values.",
     success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
-    error: errors,
     mcp: { readOnly: true },
   }),
   Action.make("createApiKey", {
@@ -256,33 +254,18 @@ export const Administration = ActionGroup.make(
       Schema.fieldsAssign({ key: Schema.String }),
       HttpApiSchema.status(201),
     ),
-    error: errors,
   }),
   Action.make("updateApiKey", {
     description: "Update an API key’s name, permissions or enabled state.",
     input: ApiKeyUpdate,
     success: MachineKey,
-    error: errors,
   }),
   Action.make("deleteApiKey", {
     description: "Delete an API key.",
     input: ApiKeyId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
-    error: errors,
   }),
 );
 
-export const Actions = ActionGroup.make(...Administration.actions, ...IssuerActions.actions);
-export const schemaError = {
-  errors: [BadRequest, InternalServerError],
-  map: (failure) =>
-    failure.phase === "output"
-      ? new InternalServerError({ error: "Request could not be completed" })
-      : new BadRequest({ error: "Invalid request" }),
-} satisfies Action.SchemaErrorPolicy<readonly [typeof BadRequest, typeof InternalServerError]>;
-export const Http = ActionHttp.configure({
-  apiPath: "/api",
-  openapiPath: false,
-  schemaError,
-});
-export const Api = Http.api(Actions);
+export const Http = ActionHttp.make({ apiPath: "/api" }, Administration, IssuerActions);
+export const Api = Http.api;

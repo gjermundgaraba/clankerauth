@@ -59,17 +59,17 @@ describe("API integration", () => {
     async (confidential) => {
       await Effect.gen(function* () {
         const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
-        expect(yield* api.actions.setupStatus({ payload: {} })).toEqual({ required: true });
-        expect(yield* api.actions.setupOwner({ payload: { email, password } })).toEqual({
+        expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: true });
+        expect(yield* api.issuer.setupOwner({ payload: { email, password } })).toEqual({
           created: true,
         });
-        expect(yield* api.actions.setupStatus({ payload: {} })).toEqual({ required: false });
+        expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: false });
         const repeatedSetup = yield* Effect.flip(
-          api.actions.setupOwner({ payload: { email, password } }),
+          api.issuer.setupOwner({ payload: { email, password } }),
         );
         expect(repeatedSetup._tag).toBe("Conflict");
 
-        const anonymous = yield* Effect.flip(api.actions.listClients({ payload: {} }));
+        const anonymous = yield* Effect.flip(api.administration.listClients({ payload: {} }));
         expect(anonymous._tag).toBe("Unauthorized");
 
         const login = yield* Effect.promise(() =>
@@ -91,11 +91,11 @@ describe("API integration", () => {
           name: "Example MCP",
           scopes: ["example:read"],
         };
-        expect((yield* api.actions.listClients({ payload: {} })).resources).toEqual([
+        expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
           administrationResource(settings.baseURL),
         ]);
-        yield* api.actions.createResource({ payload: resourceInput });
-        const created = yield* api.actions.createClient({
+        yield* api.administration.createResource({ payload: resourceInput });
+        const created = yield* api.administration.createClient({
           payload: {
             name: "Contract test client",
             redirect: "http://127.0.0.1:9876/callback",
@@ -106,7 +106,7 @@ describe("API integration", () => {
         });
         if (confidential) expect(created.client_secret).toBeTypeOf("string");
         else expect(created.client_secret).toBeUndefined();
-        const listing = yield* api.actions.listClients({ payload: {} });
+        const listing = yield* api.administration.listClients({ payload: {} });
         expect(listing.email).toBe(email);
         expect(listing.issuer).toBe(`${settings.baseURL}/api/auth`);
         expect(listing.resources).toEqual([
@@ -122,63 +122,69 @@ describe("API integration", () => {
           name: "Renamed MCP",
           scopes: ["example:read", "example:write"],
         };
-        expect(yield* api.actions.updateResource({ payload: updatedResource })).toEqual(
+        expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
           updatedResource,
         );
         expect(
-          yield* api.actions.setClientAccess({
+          yield* api.administration.setClientAccess({
             payload: { client_id: created.client_id, resources: [] },
           }),
         ).toEqual({ clientAccess: [] });
         expect(
-          yield* api.actions.setClientAccess({
+          yield* api.administration.setClientAccess({
             payload: { client_id: created.client_id, resources: [resource] },
           }),
         ).toEqual({ clientAccess: [{ client_id: created.client_id, resource }] });
 
         if (confidential) {
-          const rotated = yield* api.actions.rotateClientSecret({
+          const rotated = yield* api.administration.rotateClientSecret({
             payload: { client_id: created.client_id },
           });
           expect(rotated.client_secret).toBeTypeOf("string");
           expect(rotated.client_secret).not.toBe(created.client_secret);
         }
         expect(
-          yield* api.actions.revokeClient({ payload: { client_id: created.client_id } }),
+          yield* api.administration.revokeClient({ payload: { client_id: created.client_id } }),
         ).toEqual({
           revoked: true,
         });
         expect(
-          yield* api.actions.blockClient({
+          yield* api.administration.blockClient({
             payload: { client_id: created.client_id, blocked: true },
           }),
         ).toEqual({ blocked: true });
-        expect((yield* api.actions.listClients({ payload: {} })).clients[0]?.blocked).toBe(true);
+        expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+          true,
+        );
         // Blocking issuance must not block the owner's provider-backed resource maintenance.
-        expect(yield* api.actions.updateResource({ payload: updatedResource })).toEqual(
+        expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
           updatedResource,
         );
         expect(
-          yield* api.actions.blockClient({
+          yield* api.administration.blockClient({
             payload: { client_id: created.client_id, blocked: false },
           }),
         ).toEqual({ blocked: false });
-        expect((yield* api.actions.listClients({ payload: {} })).clients[0]?.blocked).toBe(false);
+        expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+          false,
+        );
         // Persisted values must satisfy the outgoing contract; corrupt data is a
         // server failure, not a bad request from this correctly typed caller.
         yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
-        const invalidResponse = yield* Effect.flip(api.actions.listClients({ payload: {} }));
+        const invalidResponse = yield* Effect.flip(api.administration.listClients({ payload: {} }));
         expect(invalidResponse._tag).toBe("InternalServerError");
         expect(
-          yield* api.actions.deleteClient({ payload: { client_id: created.client_id } }),
+          yield* api.administration.deleteClient({ payload: { client_id: created.client_id } }),
         ).toEqual({
           deleted: true,
         });
-        expect((yield* api.actions.listClients({ payload: {} })).clients).toEqual([]);
-        expect(yield* api.actions.deleteResource({ payload: { identifier: resource } })).toEqual({
+        expect((yield* api.administration.listClients({ payload: {} })).clients).toEqual([]);
+        expect(
+          yield* api.administration.deleteResource({ payload: { identifier: resource } }),
+        ).toEqual({
           deleted: true,
         });
-        expect((yield* api.actions.listClients({ payload: {} })).resources).toEqual([
+        expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
           administrationResource(settings.baseURL),
         ]);
       }).pipe(
@@ -192,7 +198,7 @@ describe("API integration", () => {
   test("automatic clients are visible and manageable through the generated owner API", async () => {
     await Effect.gen(function* () {
       const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
-      yield* api.actions.setupOwner({ payload: { email, password } });
+      yield* api.issuer.setupOwner({ payload: { email, password } });
       const login = yield* Effect.promise(() =>
         appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
           method: "POST",
@@ -204,7 +210,7 @@ describe("API integration", () => {
         .getSetCookie()
         .map((value) => value.split(";")[0])
         .join("; ");
-      yield* api.actions.createResource({
+      yield* api.administration.createResource({
         payload: { identifier: resource, name: "MCP", scopes: ["example:read"] },
       });
       const registration = yield* Effect.promise(() =>
@@ -240,7 +246,7 @@ describe("API integration", () => {
       expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
       const registered = yield* Effect.promise(() => registration.json());
       const client_id = yield* Schema.decodeUnknownEffect(Schema.String)(registered.client_id);
-      const listing = yield* api.actions.listClients({ payload: {} });
+      const listing = yield* api.administration.listClients({ payload: {} });
       expect(listing.clients).toHaveLength(1);
       expect(listing.clients[0]).toMatchObject({ client_id, onboarding: "dcr", blocked: false });
       expect(listing.clients[0]).not.toHaveProperty("client_secret");
@@ -249,24 +255,35 @@ describe("API integration", () => {
         { client_id, resource },
       ]);
       expect(
-        (yield* Effect.flip(api.actions.setClientAccess({ payload: { client_id, resources: [] } })))
-          ._tag,
+        (yield* Effect.flip(
+          api.administration.setClientAccess({ payload: { client_id, resources: [] } }),
+        ))._tag,
       ).toBe("BadRequest");
-      expect(yield* api.actions.revokeClient({ payload: { client_id } })).toEqual({
+      expect(yield* api.administration.revokeClient({ payload: { client_id } })).toEqual({
         revoked: true,
       });
-      expect(yield* api.actions.blockClient({ payload: { client_id, blocked: true } })).toEqual({
+      expect(
+        yield* api.administration.blockClient({ payload: { client_id, blocked: true } }),
+      ).toEqual({
         blocked: true,
       });
-      expect((yield* api.actions.listClients({ payload: {} })).clients[0]?.blocked).toBe(true);
-      expect(yield* api.actions.blockClient({ payload: { client_id, blocked: false } })).toEqual({
+      expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+        true,
+      );
+      expect(
+        yield* api.administration.blockClient({ payload: { client_id, blocked: false } }),
+      ).toEqual({
         blocked: false,
       });
-      expect((yield* api.actions.listClients({ payload: {} })).clients[0]?.blocked).toBe(false);
-      expect(yield* api.actions.deleteResource({ payload: { identifier: resource } })).toEqual({
+      expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+        false,
+      );
+      expect(
+        yield* api.administration.deleteResource({ payload: { identifier: resource } }),
+      ).toEqual({
         deleted: true,
       });
-      expect((yield* api.actions.listClients({ payload: {} })).clientAccess).toEqual([
+      expect((yield* api.administration.listClients({ payload: {} })).clientAccess).toEqual([
         { client_id, resource: `${settings.baseURL}/mcp` },
       ]);
 
@@ -276,7 +293,7 @@ describe("API integration", () => {
       yield* service.sql`INSERT INTO clientOnboarding (clientId, source, blocked) VALUES (${retainedId}, 'cimd', 1)`;
       yield* service.sql`UPDATE clientOnboarding SET source = 'cimd' WHERE clientId = ${client_id}`;
       yield* service.sql`UPDATE oauthClient SET userId = ${yield* service.owner()}, name = NULL, tokenEndpointAuthMethod = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
-      const combined = (yield* api.actions.listClients({ payload: {} })).clients;
+      const combined = (yield* api.administration.listClients({ payload: {} })).clients;
       expect(combined).toHaveLength(2);
       expect(combined.find((client) => client.client_id === retainedId)).toEqual({
         client_id: retainedId,
@@ -292,18 +309,19 @@ describe("API integration", () => {
       });
       for (const invalidRedirects of ["null", "[42]"]) {
         yield* service.sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
-        expect((yield* Effect.flip(api.actions.listClients({ payload: {} })))._tag).toBe(
+        expect((yield* Effect.flip(api.administration.listClients({ payload: {} })))._tag).toBe(
           "InternalServerError",
         );
       }
       cookie = "";
       expect(
-        (yield* Effect.flip(api.actions.blockClient({ payload: { client_id, blocked: true } })))
-          ._tag,
+        (yield* Effect.flip(
+          api.administration.blockClient({ payload: { client_id, blocked: true } }),
+        ))._tag,
       ).toBe("Unauthorized");
-      expect((yield* Effect.flip(api.actions.revokeClient({ payload: { client_id } })))._tag).toBe(
-        "Unauthorized",
-      );
+      expect(
+        (yield* Effect.flip(api.administration.revokeClient({ payload: { client_id } })))._tag,
+      ).toBe("Unauthorized");
     }).pipe(
       Effect.provide(FetchHttpClient.layer),
       Effect.provideService(FetchHttpClient.Fetch, appFetch),
@@ -314,7 +332,7 @@ describe("API integration", () => {
   test("client administration returns 404 for missing clients and 500 for failed writes", async () => {
     await Effect.gen(function* () {
       const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
-      yield* api.actions.setupOwner({ payload: { email, password } });
+      yield* api.issuer.setupOwner({ payload: { email, password } });
       const login = yield* Effect.promise(() =>
         appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
           method: "POST",
@@ -328,15 +346,16 @@ describe("API integration", () => {
         .map((value) => value.split(";")[0])
         .join("; ");
       const missing = { client_id: "missing-client" };
-      expect((yield* Effect.flip(api.actions.revokeClient({ payload: missing })))._tag).toBe(
+      expect((yield* Effect.flip(api.administration.revokeClient({ payload: missing })))._tag).toBe(
         "NotFound",
       );
       for (const blocked of [true, false]) {
         expect(
-          (yield* Effect.flip(api.actions.blockClient({ payload: { ...missing, blocked } })))._tag,
+          (yield* Effect.flip(api.administration.blockClient({ payload: { ...missing, blocked } })))
+            ._tag,
         ).toBe("NotFound");
       }
-      const client = yield* api.actions.createClient({
+      const client = yield* api.administration.createClient({
         payload: {
           name: "Failure test",
           redirect: "http://127.0.0.1:9876/callback",
@@ -348,15 +367,18 @@ describe("API integration", () => {
       const client_id = client.client_id;
       yield* service.sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
       yield* service.sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
-      expect((yield* Effect.flip(api.actions.revokeClient({ payload: { client_id } })))._tag).toBe(
-        "InternalServerError",
-      );
       expect(
-        (yield* Effect.flip(api.actions.blockClient({ payload: { client_id, blocked: true } })))
-          ._tag,
+        (yield* Effect.flip(api.administration.revokeClient({ payload: { client_id } })))._tag,
+      ).toBe("InternalServerError");
+      expect(
+        (yield* Effect.flip(
+          api.administration.blockClient({ payload: { client_id, blocked: true } }),
+        ))._tag,
       ).toBe("InternalServerError");
       // Failed revocation also rolls back the disabled flag written by block.
-      expect((yield* api.actions.listClients({ payload: {} })).clients[0]?.blocked).toBe(false);
+      expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+        false,
+      );
       expect(yield* service.sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`).toEqual(
         [{ id: "failure-consent" }],
       );
@@ -384,7 +406,7 @@ describe("API integration", () => {
 test("generated client rejects a successful response that violates the shared schema", async () => {
   const error = await Effect.gen(function* () {
     const api = yield* HttpApiClient.make(Api, { baseUrl: "http://localhost:3000" });
-    return yield* Effect.flip(api.actions.setupStatus({ payload: {} }));
+    return yield* Effect.flip(api.issuer.setupStatus({ payload: {} }));
   }).pipe(
     Effect.provide(FetchHttpClient.layer),
     Effect.provideService(FetchHttpClient.Fetch, async () => Response.json({ required: "yes" })),

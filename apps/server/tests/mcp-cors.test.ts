@@ -1,4 +1,4 @@
-import { mcpRequest } from "@gjermundgaraba/effect-actions/testing";
+import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +35,7 @@ afterEach(async () => {
 });
 
 const list = (headers: Record<string, string> = {}) =>
-  handle(mcpRequest("tools/list", {}, { url: `${baseURL}/mcp`, headers }));
+  handle(mcpRequest({ method: "tools/list", url: `${baseURL}/mcp`, headers }));
 const preflight = (
   origin: string,
   method = "POST",

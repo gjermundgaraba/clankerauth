@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import { mcpRequest } from "@gjermundgaraba/effect-actions/testing";
-import { withMcpClient } from "@gjermundgaraba/effect-actions/testing/client";
+import { mcpRequest, type McpRequestParams } from "@gjermundgaraba/effect-actions/Testing";
+import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { Actions, Administration } from "@clankerauth/api";
+import { Administration, IssuerActions } from "@clankerauth/api";
 import { createNodeServer, nodeListener } from "../src/node-http.ts";
 import { application } from "../src/app.ts";
 import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
@@ -296,12 +296,14 @@ test("concurrent verification respects fixed-window capacity and resets at the e
 
 const mcp = async (
   method: string,
-  params: Record<string, unknown> = {},
+  params: McpRequestParams = {},
   headers: Record<string, string> = {},
 ) => {
   bearer ??= (await mcpOAuthGrant(handle, origin, cookie)).tokens.access_token;
   return handle(
-    mcpRequest(method, params, {
+    mcpRequest({
+      method,
+      params,
       url: `${origin}/mcp`,
       headers: { authorization: `Bearer ${bearer}`, ...headers },
     }),
@@ -334,7 +336,9 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
   expect(openapi.status).toBe(200);
   const document = await openapi.json();
   expect(Object.keys(document.paths).sort()).toEqual(
-    Actions.actions.map((action) => `/api/${action.name}`).sort(),
+    [...Administration.actions, ...IssuerActions.actions]
+      .map((action) => `/api/${action.name}`)
+      .sort(),
   );
   for (const name of ["setupStatus", "setupOwner", "verifyApiKey"]) {
     expect(tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
@@ -475,7 +479,13 @@ test.each(["modern", "legacy"] as const)(
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("Expected TCP listener");
       await withMcpClient(
-        (request) => fetch(request),
+        {
+          fetch: (request) => fetch(request),
+          mode,
+          path: "/mcp",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          headers: { authorization: `Bearer ${tokens.access_token}` },
+        },
         async (client) => {
           const { tools } = await client.listTools();
           expect(tools.map((tool) => tool.name).sort()).toEqual(
@@ -506,12 +516,6 @@ test.each(["modern", "legacy"] as const)(
             _tag: "BadRequest",
             error: "Invalid request",
           });
-        },
-        {
-          mode,
-          path: "/mcp",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          headers: { authorization: `Bearer ${tokens.access_token}` },
         },
       );
     } finally {
