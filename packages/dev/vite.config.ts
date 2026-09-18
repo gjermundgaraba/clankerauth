@@ -16,28 +16,40 @@ export default defineConfig({
         name: "bundled-dependency-notices",
         async generateBundle() {
           const packages = new Map<string, string>();
+
           for (const id of this.getModuleIds()) {
             if (!id.includes("/node_modules/")) continue;
             let directory = dirname(id);
+
             while (directory.includes("/node_modules/")) {
               const metadata = await readFile(join(directory, "package.json"), "utf8").catch(
                 () => undefined,
               );
+
               if (metadata) {
-                const { name, version } = JSON.parse(metadata) as { name: string; version: string };
+                // SAFETY: npm package.json declares string name/version; missing fields are rejected below.
+                const { name, version } = JSON.parse(metadata) as {
+                  name: string;
+                  version: string;
+                };
+
                 if (name && version) {
                   packages.set(`${name}@${version}`, directory);
                   break;
                 }
               }
+
               directory = dirname(directory);
             }
           }
+
           const notices = [];
+
           for (const [name, directory] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
             const files = (await readdir(directory)).filter((name) =>
               /^(licen[sc]e|notice)(\.|$)/i.test(name),
             );
+
             if (!files.length) {
               const metadata = await readFile(join(directory, "package.json"), "utf8");
               notices.push(
@@ -45,13 +57,16 @@ export default defineConfig({
               );
               continue;
             }
+
             const text = await Promise.all(
               files.map(
                 async (file) => `${file}\n${await readFile(join(directory, file), "utf8")}`,
               ),
             );
+
             notices.push(`${name}\n${text.join("\n")}\n`);
           }
+
           this.emitFile({
             type: "asset",
             fileName: "THIRD_PARTY_NOTICES.txt",

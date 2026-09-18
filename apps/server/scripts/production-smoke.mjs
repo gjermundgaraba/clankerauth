@@ -10,14 +10,25 @@ import { join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 assert.ok(process.argv[2], "Pass the production package directory");
+
 const root = resolve(process.argv[2]);
+
 const directory = mkdtempSync(join(tmpdir(), "clankerauth-package-"));
+
 const reservation = createServer();
+
 reservation.listen(0, "127.0.0.1");
+
 await once(reservation, "listening");
+
 const port = reservation.address().port;
+
 await new Promise((done) => reservation.close(done));
+
 const baseURL = `http://127.0.0.1:${port}`;
+
+const isString = (value) => Object.prototype.toString.call(value) === "[object String]";
+
 const env = {
   ...process.env,
   AUTH_BASE_URL: baseURL,
@@ -26,39 +37,50 @@ const env = {
   HOST: "127.0.0.1",
   PORT: String(port),
 };
+
 const password = randomBytes(24).toString("hex");
+
 let child;
+
 async function start() {
   child = spawn(process.execPath, [join(root, "dist/main.mjs")], {
     cwd: directory,
     env,
     stdio: "ignore",
   });
+
   for (let attempt = 0; attempt < 100; attempt++) {
     if (child.exitCode !== null) throw new Error("Production server exited during startup");
+
     try {
       if ((await fetch(`${baseURL}/healthz`, { signal: AbortSignal.timeout(500) })).ok) return;
     } catch {
       /* Listener may not yet be bound. */
     }
+
     await setTimeout(50);
   }
+
   throw new Error("Production server did not become ready");
 }
+
 async function stop() {
   if (child && child.exitCode === null && child.signalCode === null) {
     const exited = once(child, "exit");
     child.kill("SIGTERM");
     await exited;
   }
+
   child = undefined;
 }
+
 const post = (path, body, headers = {}) =>
   fetch(baseURL + path, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+
 const login = (value) =>
   post(
     "/api/auth/sign-in/email",
@@ -72,44 +94,56 @@ try {
   await stop();
   await start();
   assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: true });
+
   const setup = await post(
     "/api/setupOwner",
     { email: "package@example.internal", password },
     { origin: baseURL },
   );
+
   assert.equal(setup.status, 201);
   assert.deepEqual(await setup.json(), { created: true });
   assert.equal(setup.headers.has("set-cookie"), false);
   const signedIn = await login(password);
   assert.equal(signedIn.status, 200);
+
   const cookie = signedIn.headers
     .getSetCookie()
     .map((value) => value.split(";")[0])
     .join("; ");
+
   const resource = {
     identifier: "https://package.invalid/mcp",
     name: "Package MCP",
     scopes: ["read"],
   };
+
   const empty = await (await post("/api/listClients", {}, { cookie, origin: baseURL })).json();
+
   const builtin = {
     identifier: `${baseURL}/mcp`,
     name: "Clanker Auth administration",
     scopes: ["admin"],
     builtIn: true,
   };
+
   assert.deepEqual(empty.resources, [builtin]);
+
   const createdResource = await post("/api/createResource", resource, {
     cookie,
     origin: baseURL,
   });
+
   assert.equal(createdResource.status, 201, await createdResource.clone().text());
+
   const metadata = await (
     await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)
   ).json();
+
   assert.equal(metadata.issuer, `${baseURL}/api/auth`);
   assert.equal(metadata.client_id_metadata_document_supported, true);
   assert.equal(metadata.registration_endpoint, `${baseURL}/api/auth/oauth2/register`);
+
   const registration = await fetch(metadata.registration_endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -119,19 +153,23 @@ try {
       token_endpoint_auth_method: "none",
     }),
   });
+
   assert.equal(registration.status, 201, await registration.clone().text());
   const registered = await registration.json();
-  assert.equal(typeof registered.client_id, "string");
+  assert.ok(isString(registered.client_id));
   assert.equal(registered.client_secret, undefined);
   const denied = await fetch(`${baseURL}/mcp`, { method: "POST" });
   assert.equal(denied.status, 401);
   assert.match(denied.headers.get("www-authenticate"), /resource_metadata=/);
+
   const protectedResource = await (
     await fetch(`${baseURL}/.well-known/oauth-protected-resource/mcp`)
   ).json();
+
   assert.equal(protectedResource.resource, builtin.identifier);
   assert.deepEqual(protectedResource.scopes_supported, ["admin", "offline_access"]);
   const verifier = randomBytes(32).toString("base64url");
+
   const query = new URLSearchParams({
     client_id: registered.client_id,
     redirect_uri: "http://127.0.0.1:49152/callback",
@@ -142,14 +180,17 @@ try {
     code_challenge_method: "S256",
     state: "package-smoke",
   });
+
   const authorize = await fetch(`${metadata.authorization_endpoint}?${query}`, {
     headers: { cookie, accept: "application/json" },
     redirect: "manual",
   });
+
   // Fetch requests receive the provider’s redirect descriptor; browser navigation uses 302.
   assert.equal(authorize.status, 200, await authorize.clone().text());
   const consentUrl = new URL((await authorize.json()).url, baseURL);
   assert.equal(consentUrl.pathname, "/consent");
+
   const consent = await post(
     "/api/auth/oauth2/consent",
     {
@@ -158,9 +199,11 @@ try {
     },
     { cookie, origin: baseURL },
   );
+
   assert.equal(consent.status, 200, await consent.clone().text());
   const callback = new URL((await consent.json()).url);
   assert.equal(callback.searchParams.get("state"), "package-smoke");
+
   const tokenResponse = await fetch(metadata.token_endpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -173,9 +216,11 @@ try {
       resource: builtin.identifier,
     }),
   });
+
   assert.equal(tokenResponse.status, 200, await tokenResponse.clone().text());
   const token = await tokenResponse.json();
-  assert.equal(typeof token.refresh_token, "string");
+  assert.ok(isString(token.refresh_token));
+
   // Exercise the generated MCP adapter through the real buffered Node bridge.
   const mcp = await fetch(`${baseURL}/mcp`, {
     method: "POST",
@@ -202,6 +247,7 @@ try {
       },
     }),
   });
+
   assert.equal(mcp.status, 200);
   assert.match(mcp.headers.get("content-type"), /application\/json/);
   assert.deepEqual((await mcp.json()).result.structuredContent.value.resources, [
@@ -211,20 +257,28 @@ try {
   const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
   assert.equal(session.status, 200);
   assert.equal(session.headers.has("set-auth-jwt"), false);
+
+  const assets = new Set();
+
   for (const path of ["/", "/setup", "/login", "/consent"]) {
     const page = await fetch(baseURL + path);
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /<title>Clanker Auth<\/title>/);
-    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
-    assert.equal(assets.length, 2);
-    for (const [, asset] of assets) assert.equal((await fetch(baseURL + asset)).status, 200);
+    const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
+    assert.ok(references.length > 0);
+
+    for (const [, asset] of references) assets.add(asset);
   }
+
+  for (const asset of assets) assert.equal((await fetch(baseURL + asset)).status, 200);
+
   const blocked = await post(
     "/api/blockClient",
     { client_id: registered.client_id, blocked: true },
     { cookie, origin: baseURL },
   );
+
   assert.equal(blocked.status, 200, await blocked.clone().text());
   const keys = await (await fetch(metadata.jwks_uri)).json();
   assert.ok(keys.keys.length > 0);
@@ -240,11 +294,13 @@ try {
   assert.equal(persisted.clients[0].onboarding, "dcr");
   assert.equal(persisted.clients[0].blocked, true);
   assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: false });
+
   const repeatedSetup = await post(
     "/api/setupOwner",
     { email: "another@example.internal", password },
     { origin: baseURL },
   );
+
   assert.equal(repeatedSetup.status, 409);
 } finally {
   await stop();

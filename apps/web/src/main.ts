@@ -7,13 +7,17 @@ import {
   type MachineKey,
   type ResourceSummary,
 } from "@clankerauth/api";
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import "./style.css";
 
 type ClientView = typeof Client.Type;
+
 type ResourceView = typeof ResourceSummary.Type;
+
 type KeyView = typeof MachineKey.Type;
+
+const ErrorMessage = Schema.Struct({ error: Schema.String });
 
 const api = await Effect.runPromise(
   Http.client({ baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
@@ -25,12 +29,10 @@ function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
       Effect.mapError(
         (error) =>
           new Error(
-            typeof error === "object" &&
-              error !== null &&
-              "error" in error &&
-              typeof error.error === "string"
-              ? error.error
-              : "Request could not be completed. Please try again.",
+            Option.getOrElse(
+              Option.map(Schema.decodeUnknownOption(ErrorMessage)(error), (parsed) => parsed.error),
+              () => "Request could not be completed. Please try again.",
+            ),
           ),
       ),
     ),
@@ -38,32 +40,43 @@ function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
 }
 
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
+
 const app = document.querySelector<HTMLDivElement>("#app")!;
+
 app.innerHTML = `<header><a href="/" class="brand"><span class="mark">c.</span> clanker<span class="muted">auth</span></a><span class="tag">PRIVATE IDENTITY</span></header><main id="main"></main><footer>Local accounts. Explicit access.<span>Self-hosted authorization server</span></footer>`;
+
 const main = document.querySelector<HTMLElement>("#main")!;
+
 const escape = (text: string) =>
   text.replace(
     /[&<>"']/g,
     (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
   );
+
 function message(text: string) {
   const target = document.querySelector<HTMLElement>("#message")!;
   target.textContent = text;
+
   if (text && target.hasAttribute("tabindex")) {
     target.focus();
     target.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
+
 let submitting = false;
+
 async function submit(task: () => Promise<void>) {
   if (submitting) return;
   submitting = true;
+
   const buttons = Array.from(main.querySelectorAll("button"), (button) => ({
     button,
     disabled: button.disabled,
   }));
+
   buttons.forEach(({ button }) => (button.disabled = true));
   message("");
+
   try {
     await task();
   } catch (error) {
@@ -73,6 +86,7 @@ async function submit(task: () => Promise<void>) {
     submitting = false;
   }
 }
+
 function confirmed(prompt: string, task: () => Promise<void>) {
   if (submitting || !confirm(prompt)) return;
   void submit(task);
@@ -91,8 +105,10 @@ function setup() {
     void submit(async () => {
       const password = form.querySelector<HTMLInputElement>('[name="password"]')!.value;
       const confirmation = form.querySelector<HTMLInputElement>('[name="confirmation"]')!.value;
+
       if (password.length < 8 || password.length > 128)
         throw new Error("Use a password between 8 and 128 characters.");
+
       if (password !== confirmation) throw new Error("Passwords do not match.");
       await request(
         api
@@ -116,12 +132,14 @@ function login() {
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
     <p id="message" role="alert"></p><button>Sign in <span>→</span></button></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#login")!;
+
   if (new URLSearchParams(location.search).get("setup") === "complete") {
     const confirmation = document.createElement("p");
     confirmation.setAttribute("role", "status");
     confirmation.textContent = "Account created. Sign in to continue.";
     form.before(confirmation);
   }
+
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void submit(async () => {
@@ -129,8 +147,10 @@ function login() {
         email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
         password: form.querySelector<HTMLInputElement>('[name="password"]')!.value,
       });
+
       if (result.error)
         throw new Error("Sign-in failed. Check your credentials or try again later.");
+
       // The provider client handles OAuth redirects; a plain login returns to the dashboard.
       if (!new URLSearchParams(location.search).has("sig")) location.assign("/");
     });
@@ -140,20 +160,25 @@ function login() {
 async function consent() {
   const query = new URLSearchParams(location.search);
   const clientId = query.get("client_id");
+
   if (!clientId || !query.has("sig"))
     throw new Error("Start authorization from your application; this consent link is incomplete.");
   const client = await auth.oauth2.publicClient({ query: { client_id: clientId } });
+
   if (client.error || !client.data)
     throw new Error("Sign in through your application to continue authorization.");
   const scopes = (query.get("scope") ?? "").split(" ").filter(Boolean);
   const resources = query.getAll("resource");
   let metadataHost: string | undefined;
+
   try {
     const identifier = new URL(clientId);
+
     if (identifier.protocol === "https:") metadataHost = identifier.hostname;
   } catch {
     // Registered identifiers need not be URLs.
   }
+
   const redirect = query.get("redirect_uri");
   main.className = "center";
   main.innerHTML = `<section class="card consent"><p class="eyebrow">PERMISSION REQUEST</p><h1>Allow this connection?</h1>
@@ -170,9 +195,15 @@ async function consent() {
   const form = document.querySelector<HTMLFormElement>("#consent")!;
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const accept = (event.submitter as HTMLButtonElement).value === "allow";
+    const submitter = event.submitter;
+
+    if (!(submitter instanceof HTMLButtonElement))
+      throw new Error("Consent must be decided with the Allow or Deny button.");
+
+    const accept = submitter.value === "allow";
     void submit(async () => {
       const result = await auth.oauth2.consent({ accept });
+
       if (result.error)
         throw new Error("Authorization could not be completed. Restart from your application.");
       // Better Auth follows the redirect; a second navigation would cancel the callback.
@@ -182,7 +213,9 @@ async function consent() {
 
 function textField(fields: FormData, name: string): string {
   const value = fields.get(name);
-  if (typeof value !== "string") throw new Error(`Missing form field: ${name}`);
+
+  if (value === null || value instanceof File) throw new Error(`Missing form field: ${name}`);
+
   return value.trim();
 }
 
@@ -195,44 +228,55 @@ function selectedResources(form: HTMLFormElement): string[] {
 
 function resourceFields(fields: FormData) {
   const scopes = [...new Set(textField(fields, "scopes").split(/\s+/).filter(Boolean))];
+
   if (!scopes.length) throw new Error("Add at least one custom Scope.");
+
   return { name: textField(fields, "name"), scopes };
 }
 
 function keyGrants(form: HTMLFormElement) {
   const grants: Record<string, string[]> = {};
+
   for (const checkbox of form.querySelectorAll<HTMLInputElement>('input[name="key-scope"]:checked'))
     (grants[checkbox.dataset.resource!] ??= []).push(checkbox.value);
+
   return grants;
 }
 
 // One-time credentials stay in memory until the owner dismisses them.
 // A later rotation replaces the now-invalid secret for the same Client.
 const pendingKeys = new Map<string, string>();
+
 const pendingCredentials = new Map<string, typeof ClientCredentials.Type>();
+
 function renderCredentials() {
   const box = document.querySelector<HTMLElement>("#credentials")!;
   box.classList.toggle("hidden", pendingCredentials.size === 0 && pendingKeys.size === 0);
   box.replaceChildren();
+
   if (!pendingCredentials.size && !pendingKeys.size) return;
   box.innerHTML = `<h2>Save these credentials now</h2><p>API keys and client secrets are shown only once.</p><button class="secondary">Saved — dismiss credentials</button>`;
   const button = box.querySelector("button")!;
+
   for (const value of pendingCredentials.values()) {
     const pre = document.createElement("pre");
     pre.textContent = JSON.stringify(value, null, 2);
     button.before(pre);
   }
+
   for (const value of pendingKeys.values()) {
     const pre = document.createElement("pre");
     pre.textContent = value;
     button.before(pre);
   }
+
   button.addEventListener("click", () => {
     pendingKeys.clear();
     pendingCredentials.clear();
     renderCredentials();
   });
 }
+
 function showCredentials() {
   renderCredentials();
   document.querySelector("#credentials")!.scrollIntoView({ behavior: "smooth" });
@@ -258,19 +302,24 @@ async function refreshDashboard() {
 
 const scopeHelp =
   "Separate scopes with spaces. openid, profile, email and offline_access are reserved.";
+
 const onboardingLabel = {
   managed: "Managed registration · first party, no consent screen",
   dcr: "Dynamic registration",
   cimd: "Client ID Metadata Document",
 };
+
 const isManaged = (client: ClientView) => !client.onboarding || client.onboarding === "managed";
 
 const columns = (title: string, count: number, intro: string, list: string, form: string) =>
   `<div class="columns dashboard-section"><section><h2>${title} <span class="count">${count}</span></h2><p class="muted">${intro}</p>${list}</section><section class="card registration">${form}</section></div>`;
+
 const empty = (title: string, text: string) =>
   `<div class="empty"><h3>${title}</h3><p>${text}</p></div>`;
+
 const resourceSummary = (resource: ResourceView) =>
   `<code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span>`;
+
 const resourceChoices = (resources: readonly ResourceView[], selected: readonly string[]) =>
   resources
     .map(
@@ -278,6 +327,7 @@ const resourceChoices = (resources: readonly ResourceView[], selected: readonly 
         `<label class="checkbox resource-choice"><input type="checkbox" name="resources" value="${escape(resource.identifier)}" ${selected.includes(resource.identifier) ? "checked" : ""}><span>${escape(resource.name)}${resourceSummary(resource)}</span></label>`,
     )
     .join("");
+
 const keyChoices = (
   resources: readonly ResourceView[],
   grants: Record<string, readonly string[]>,
@@ -302,6 +352,7 @@ const resourceCard = (resource: ResourceView, dependents: readonly ClientView[])
   ${resource.builtIn ? "" : `<label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p>`}
   <button>Save resource</button></form></details>
   ${resource.builtIn ? "" : `<button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`}</article>`;
+
 const resourceForm = () =>
   `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later.</p><label>Scopes<input name="scopes" required placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
 
@@ -317,6 +368,7 @@ const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
   <details><summary>Rename key</summary><form data-key-rename="${escape(key.keyId)}"><label>Name<input name="name" required maxlength="100" value="${escape(key.name)}"></label><button>Save name</button></form></details>
   <details><summary>Edit grants</summary><form data-key-grants="${escape(key.keyId)}">${keyChoices(resources, key.permissions)}<p class="help">Saving replaces all grants, including any not currently available, with the selected scopes.</p><button>Save grants</button></form></details>
   <div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`;
+
 const keyForm = (resources: readonly ResourceView[]) =>
   `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">At most one year ahead; blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
 
@@ -327,18 +379,23 @@ const clientCard = (
 ) => {
   const managed = isManaged(client);
   const id = escape(client.client_id);
+
   const eligible = managed
     ? resources
-        .filter((resource) => allowed.includes(resource.identifier))
-        .map(
-          (resource) =>
-            `<div class="allowed-resource"><strong>${escape(resource.name)}</strong>${resourceSummary(resource)}</div>`,
+        .flatMap((resource) =>
+          allowed.includes(resource.identifier)
+            ? [
+                `<div class="allowed-resource"><strong>${escape(resource.name)}</strong>${resourceSummary(resource)}</div>`,
+              ]
+            : [],
         )
         .join("") || '<p class="help">No Resource access configured.</p>'
     : '<p class="help">Any configured Resource. Each needs your consent.</p>';
+
   const access = managed
     ? `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Removing access stops new authorization and refresh; use Revoke authorization to clear issued grants.</p><button>Save access</button></form></details>`
     : "";
+
   const actions = [
     `<button class="secondary" data-revoke="${id}">Revoke authorization</button>`,
     `<button class="secondary" data-block="${id}" data-blocked="${client.blocked ? "true" : "false"}">${client.blocked ? "Unblock client" : "Block client"}</button>`,
@@ -347,9 +404,11 @@ const clientCard = (
       : "",
     managed ? `<button class="danger" data-delete="${id}">Delete client</button>` : "",
   ].join("");
+
   return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label>
   <h3>${managed ? "Allowed Resources" : "Resources eligible for consent"}</h3>${eligible}${access}<div class="actions">${actions}</div></article>`;
 };
+
 const registerForm = (resources: readonly ResourceView[]) =>
   `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
 
@@ -358,12 +417,15 @@ async function dashboard() {
     request(api.listClients()),
     request(api.listApiKeys()),
   ]);
+
   const { resources } = data;
   const keyResources = resources.filter((resource) => !resource.builtIn);
+
   const allowed = (clientId: string) =>
     data.clientAccess
       .filter((access) => access.client_id === clientId)
       .map((access) => access.resource);
+
   main.className = "dashboard";
   main.innerHTML = `
     <div class="page-title"><div><p class="eyebrow">CONTROL PLANE</p><h1>Clients and Resources</h1><p class="muted">Signed in as ${escape(data.email)}</p></div><button id="logout" class="secondary">Sign out</button></div>
@@ -417,11 +479,13 @@ async function dashboard() {
   renderCredentials();
 
   const form = (id: string) => document.querySelector<HTMLFormElement>(id)!;
+
   const onSubmit = (target: HTMLFormElement, task: (form: HTMLFormElement) => Promise<void>) =>
     target.addEventListener("submit", (event) => {
       event.preventDefault();
       void submit(() => task(target));
     });
+
   const onClick = (selector: string, handler: (button: HTMLButtonElement) => void) => {
     for (const button of main.querySelectorAll<HTMLButtonElement>(selector))
       button.addEventListener("click", () => handler(button));
@@ -435,6 +499,7 @@ async function dashboard() {
   });
   onSubmit(form("#register"), async (target) => {
     const fields = new FormData(target);
+
     const result = await request(
       api.createClient({
         name: textField(fields, "name"),
@@ -444,6 +509,7 @@ async function dashboard() {
         confidential: fields.has("confidential"),
       }),
     );
+
     target.reset();
     pendingCredentials.set(result.client_id, result);
     showCredentials();
@@ -452,6 +518,7 @@ async function dashboard() {
   onSubmit(form("#key-create"), async (target) => {
     const fields = new FormData(target);
     const expiry = textField(fields, "expiry");
+
     const result = await request(
       api.createApiKey({
         name: textField(fields, "name"),
@@ -459,6 +526,7 @@ async function dashboard() {
         expiresAt: expiry ? new Date(expiry).toISOString() : null,
       }),
     );
+
     pendingKeys.set(result.keyId, `${result.name}\n${result.key}`);
     target.reset();
     showCredentials();
@@ -475,6 +543,7 @@ async function dashboard() {
     target.reset();
     await refreshDashboard();
   });
+
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-rename]"))
     onSubmit(edit, async (target) => {
       await request(
@@ -485,6 +554,7 @@ async function dashboard() {
       );
       await refreshDashboard();
     });
+
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-grants]"))
     onSubmit(edit, async (target) => {
       await request(
@@ -495,11 +565,13 @@ async function dashboard() {
       );
       await refreshDashboard();
     });
+
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]"))
     onSubmit(edit, async (target) => {
       const resource = resources.find(
         (resource) => resource.identifier === target.dataset.resourceEdit,
       )!;
+
       await request(
         api.updateResource({
           identifier: target.dataset.resourceEdit!,
@@ -509,16 +581,19 @@ async function dashboard() {
       );
       await refreshDashboard();
     });
+
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-client-access]"))
     edit.addEventListener("submit", (event) => {
       event.preventDefault();
       const client_id = edit.dataset.clientAccess!;
       const selected = selectedResources(edit);
       const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
+
       const save = async () => {
         await request(api.setClientAccess({ client_id, resources: selected }));
         await refreshDashboard();
       };
+
       if (removed.length)
         confirmed(
           `Remove access to ${removed.join(", ")}? Stored consent remains until revoked.`,
@@ -595,6 +670,7 @@ async function dashboard() {
 
 try {
   const state = await request(api.setupStatus());
+
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");
     else setup();
@@ -604,6 +680,7 @@ try {
   } else if (location.pathname === "/consent") await consent();
   else {
     const session = await auth.getSession();
+
     if (!session.data || location.pathname === "/login") login();
     else await dashboard();
   }

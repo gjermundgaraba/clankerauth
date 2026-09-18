@@ -9,13 +9,16 @@ import { makeSql, openDatabase, transaction } from "../src/database.ts";
 
 test("native SQLite queries share Kysely transactions and rollbacks", async () => {
   const database = await openDatabase(":memory:");
+
   try {
     await Effect.runPromise(
       database.sql`CREATE TABLE example (id INTEGER PRIMARY KEY, value TEXT)`,
     );
+
     const inserted = await query`INSERT INTO example (value) VALUES (${"first"})`.execute(
       database.kysely,
     );
+
     expect(inserted.numAffectedRows).toBe(1n);
     expect(inserted.insertId).toBe(1n);
     expect(await Effect.runPromise(database.sql`SELECT value FROM example`)).toEqual([
@@ -33,6 +36,7 @@ test("native SQLite queries share Kysely transactions and rollbacks", async () =
         ).toEqual([{ value: "first" }, { value: "rolled back" }]);
         reader = Effect.runPromise(database.sql`SELECT value FROM example`).then((rows) => {
           readerCompleted = true;
+
           return rows;
         });
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -59,8 +63,10 @@ test("native SQLite queries share Kysely transactions and rollbacks", async () =
 test("native SQLite enables WAL, foreign keys, busy timeout and persists rows", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-database-"));
   const filename = join(directory, "auth.sqlite");
+
   try {
     const database = await openDatabase(filename);
+
     try {
       expect(await Effect.runPromise(database.sql`PRAGMA journal_mode`)).toEqual([
         { journal_mode: "wal" },
@@ -83,9 +89,11 @@ test("native SQLite enables WAL, foreign keys, busy timeout and persists rows", 
     } finally {
       await database.close();
     }
+
     await expect(Effect.runPromise(database.sql`SELECT 1`)).rejects.toThrow();
 
     const reopened = await openDatabase(filename);
+
     try {
       expect(await Effect.runPromise(reopened.sql`SELECT * FROM child`)).toEqual([
         { id: 1, parentId: 99 },
@@ -100,6 +108,7 @@ test("native SQLite enables WAL, foreign keys, busy timeout and persists rows", 
 
 test("local transactions preserve domain failures and roll back failed commits", async () => {
   const database = await openDatabase(":memory:");
+
   try {
     await Effect.runPromise(database.sql`CREATE TABLE parent (id INTEGER PRIMARY KEY)`);
     await Effect.runPromise(
@@ -111,6 +120,7 @@ test("local transactions preserve domain failures and roll back failed commits",
         transaction(database.kysely, (sql) =>
           Effect.gen(function* () {
             yield* sql`INSERT INTO parent VALUES (1)`;
+
             return yield* Effect.fail(error);
           }),
         ),

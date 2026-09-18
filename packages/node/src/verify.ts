@@ -1,7 +1,16 @@
-import { createRemoteJWKSet, errors, jwtVerify } from "jose";
-import { AuthError, IssuerResponseError, type AuthErrorCode } from "./errors.ts";
+import { Clock, Effect, Exit, Schema, Semaphore } from "effect";
+import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify } from "jose";
+import type { JWSHeaderParameters } from "jose";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import {
+  ConfigurationError,
+  Forbidden,
+  ProviderUnavailable,
+  RateLimited,
+  Unauthorized,
+} from "./errors.ts";
+import { execute } from "./transport.ts";
 
-/** Who a request acts as. The subject is always the issuer's owner; the actor is the credential that acted. */
 export interface Principal {
   readonly subject: string;
   readonly scopes: readonly string[];
@@ -10,25 +19,49 @@ export interface Principal {
     | { readonly kind: "key"; readonly keyId: string };
 }
 
-export interface VerifierOptions {
-  /** Issuer identifier, for example `https://auth.internal/api/auth`. */
+export interface Options {
   readonly issuer: string;
-  /** Exact audience URL of this resource, for example `https://notes.internal/api`. */
   readonly resource: string;
-  /** Scopes every credential needs before a request is authenticated at all. */
   readonly requiredScopes?: readonly string[];
-  /** Observes failures that are not credential outcomes: outages, malformed issuer responses. */
-  readonly onFailure?: (operation: string, error: unknown) => void | Promise<void>;
 }
 
 export interface Verifier {
-  /** Verify an `Authorization` header value: a JWT access token or a `ca_` API key. */
-  readonly verify: (authorization: string | null | undefined) => Promise<Principal>;
-  /** Verify a bare access token or API key. */
-  readonly verifyToken: (token: string) => Promise<Principal>;
+  readonly verify: (
+    authorization: string | null | undefined,
+  ) => Effect.Effect<Principal, VerificationError>;
+  readonly verifyToken: (token: string) => Effect.Effect<Principal, VerificationError>;
 }
 
-const timeout = 5000;
+export type VerificationError = Unauthorized | Forbidden | RateLimited | ProviderUnavailable;
+
+const Jwks = Schema.Struct({
+  keys: Schema.Array(
+    Schema.Struct({
+      kty: Schema.String,
+      crv: Schema.optionalKey(Schema.String),
+      x: Schema.optionalKey(Schema.String),
+      kid: Schema.optionalKey(Schema.String),
+      alg: Schema.optionalKey(Schema.String),
+      use: Schema.optionalKey(Schema.String),
+      key_ops: Schema.optionalKey(Schema.Array(Schema.String)),
+    }),
+  ),
+});
+
+const Claims = Schema.Struct({
+  sub: Schema.NonEmptyString,
+  client_id: Schema.NonEmptyString,
+  scope: Schema.String,
+});
+
+const KeyResponse = Schema.Struct({
+  keyId: Schema.NonEmptyString,
+  ownerId: Schema.NonEmptyString,
+  resource: Schema.String,
+  scopes: Schema.Array(Schema.NonEmptyString),
+  expiresAt: Schema.NullOr(Schema.String),
+});
+
 const credentialErrors = [
   errors.JWTExpired,
   errors.JWTClaimValidationFailed,
@@ -39,112 +72,200 @@ const credentialErrors = [
   errors.JOSEAlgNotAllowed,
   errors.JWKSNoMatchingKey,
 ];
-/** Verification statuses that are credential outcomes rather than outages. */
-const outcomes: Record<number, AuthErrorCode | undefined> = {
-  401: "unauthorized",
-  403: "forbidden",
-  429: "rate_limited",
-};
-const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
-const scopeList = (value: unknown): readonly string[] | undefined =>
-  Array.isArray(value) && value.every(nonEmpty) ? value : undefined;
 
-export function createVerifier(options: VerifierOptions): Verifier {
-  const { issuer, resource, requiredScopes = [] } = options;
-  const report = async (operation: string, error: unknown) => {
-    await options.onFailure?.(operation, error);
-  };
-  const jwks = createRemoteJWKSet(new URL(`${issuer}/jwks`), { timeoutDuration: timeout });
-  const verifyJwt = async (token: string): Promise<Principal> => {
-    let payload;
-    try {
-      ({ payload } = await jwtVerify(token, jwks, {
-        issuer,
-        audience: resource,
-        algorithms: ["EdDSA"],
-        typ: "at+jwt",
-        requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
-      }));
-    } catch (error) {
-      if (credentialErrors.some((kind) => error instanceof kind))
-        throw new AuthError("unauthorized");
-      await report("jwt.verify", error);
-      throw new AuthError("unavailable");
-    }
-    // Sender-constrained tokens need proof this verifier does not check.
-    if (payload.cnf !== undefined) throw new AuthError("unauthorized");
-    if (!nonEmpty(payload.sub) || !nonEmpty(payload.client_id) || typeof payload.scope !== "string")
-      throw new AuthError("unauthorized");
-    return {
-      subject: payload.sub,
-      scopes: payload.scope.split(" ").filter(Boolean),
-      actor: { kind: "client", clientId: payload.client_id },
-    };
-  };
-  const verifyKey = async (key: string): Promise<Principal> => {
-    let response: Response;
-    try {
-      response = await fetch(new URL("/api/verifyApiKey", issuer), {
-        method: "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(timeout),
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ resource }),
+const unauthorized = () => new Unauthorized({ message: "Authentication required" });
+
+/** Acquire once per resource; transport is selected by the application, not the SDK. */
+export const make = Effect.fn("Verifier.make")(function* (options: Options) {
+  const client = yield* HttpClient.HttpClient;
+
+  const endpoints = yield* Effect.try({
+    try: () => ({
+      jwks: new URL(`${options.issuer}/jwks`).href,
+      apiKey: new URL("/api/verifyApiKey", options.issuer).href,
+    }),
+    catch: () => new ConfigurationError({ message: "Invalid issuer URL" }),
+  });
+
+  const refreshLock = yield* Semaphore.make(1);
+  let refreshAfter = 0;
+  let refreshFailure: ProviderUnavailable | undefined;
+
+  const makeCachedKeys = Effect.cachedWithTTL(
+    Effect.gen(function* () {
+      const response = yield* execute(client, HttpClientRequest.get(endpoints.jwks));
+
+      if (response.status !== 200)
+        return yield* new ProviderUnavailable({
+          operation: "jwks.fetch",
+          cause: { status: response.status },
+        });
+
+      const document = yield* HttpClientResponse.schemaBodyJson(Jwks)(response).pipe(
+        Effect.mapError((cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })),
+      );
+
+      refreshAfter = (yield* Clock.currentTimeMillis) + 30_000;
+      refreshFailure = undefined;
+
+      return createLocalJWKSet({
+        keys: document.keys.map(({ key_ops, ...key }) =>
+          key_ops ? { ...key, key_ops: [...key_ops] } : key,
+        ),
       });
-    } catch (error) {
-      await report("api-key.verify", error);
-      throw new AuthError("unavailable");
-    }
-    if (!response.ok) {
-      await response.body?.cancel();
-      const code = outcomes[response.status];
-      if (code) throw new AuthError(code);
-      await report("api-key.verify", new IssuerResponseError(response.status));
-      throw new AuthError("unavailable");
-    }
-    let verified: unknown;
-    try {
-      verified = await response.json();
-    } catch (error) {
-      await report("api-key.response", error);
-      throw new AuthError("unavailable");
-    }
-    const record = typeof verified === "object" && verified !== null ? verified : {};
-    const {
-      keyId,
-      ownerId,
-      resource: echoed,
-      scopes,
-      expiresAt,
-    } = record as Record<string, unknown>;
-    const expiry =
-      expiresAt === null ? null : typeof expiresAt === "string" ? Date.parse(expiresAt) : NaN;
-    const verifiedScopes = scopeList(scopes);
-    if (
-      !nonEmpty(keyId) ||
-      !nonEmpty(ownerId) ||
-      echoed !== resource ||
-      !verifiedScopes ||
-      (expiry !== null && !Number.isFinite(expiry))
-    ) {
-      await report("api-key.response", new Error("Verification response is malformed"));
-      throw new AuthError("unavailable");
-    }
-    if (expiry !== null && expiry <= Date.now()) throw new AuthError("unauthorized");
-    return { subject: ownerId, scopes: verifiedScopes, actor: { kind: "key", keyId } };
-  };
-  const verifyToken = async (token: string): Promise<Principal> => {
-    const principal = await (token.startsWith("ca_") ? verifyKey(token) : verifyJwt(token));
-    if (requiredScopes.some((scope) => !principal.scopes.includes(scope)))
-      throw new AuthError("forbidden");
-    return principal;
-  };
+    }).pipe(Effect.scoped),
+    (exit) => (Exit.isSuccess(exit) ? "10 minutes" : 0),
+  );
+
+  let keys = yield* makeCachedKeys;
+
+  const resolveKey = (resolve: ReturnType<typeof createLocalJWKSet>, header: JWSHeaderParameters) =>
+    Effect.tryPromise({
+      try: () => resolve(header),
+      catch: (cause) =>
+        cause instanceof errors.JWKSNoMatchingKey
+          ? unauthorized()
+          : new ProviderUnavailable({ operation: "jwks.resolve", cause }),
+    });
+
+  const signingKey = Effect.fn("Verifier.signingKey")(function* (header: JWSHeaderParameters) {
+    const resolve = yield* keys;
+
+    return yield* resolveKey(resolve, header).pipe(
+      Effect.catchTag("Unauthorized", () =>
+        refreshLock.withPermit(
+          Effect.gen(function* () {
+            const current = yield* keys;
+
+            // Another request may have refreshed while this one waited for admission.
+            if (current !== resolve) return yield* resolveKey(current, header);
+            const now = yield* Clock.currentTimeMillis;
+
+            // Cool down failed or interrupted refreshes too, without discarding still-valid cached keys.
+            if (now < refreshAfter) return yield* refreshFailure ?? unauthorized();
+            refreshAfter = now + 30_000;
+            refreshFailure = new ProviderUnavailable({ operation: "jwks.refresh" });
+            const next = yield* makeCachedKeys;
+
+            const refreshed = yield* next.pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  refreshFailure = error;
+                }),
+              ),
+            );
+
+            keys = next;
+
+            return yield* resolveKey(refreshed, header);
+          }),
+        ),
+      ),
+    );
+  });
+
+  const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
+    const header = yield* Effect.try({
+      try: () => decodeProtectedHeader(token),
+      catch: unauthorized,
+    });
+
+    // Reject unsupported algorithms before doing provider I/O; JOSE still enforces its allowlist.
+    if (header.alg !== "EdDSA") return yield* unauthorized();
+    const key = yield* signingKey(header);
+    const now = yield* Clock.currentTimeMillis;
+
+    const { payload } = yield* Effect.tryPromise({
+      try: () =>
+        jwtVerify(token, key, {
+          issuer: options.issuer,
+          audience: options.resource,
+          algorithms: ["EdDSA"],
+          typ: "at+jwt",
+          requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
+          currentDate: new Date(now),
+        }),
+      catch: (cause) =>
+        credentialErrors.some((kind) => cause instanceof kind)
+          ? unauthorized()
+          : new ProviderUnavailable({ operation: "jwt.verify", cause }),
+    });
+
+    if (payload.cnf !== undefined) return yield* unauthorized();
+
+    const claims = yield* Schema.decodeUnknownEffect(Claims)(payload).pipe(
+      Effect.mapError(unauthorized),
+    );
+
+    return {
+      subject: claims.sub,
+      scopes: claims.scope.split(" ").filter(Boolean),
+      actor: { kind: "client", clientId: claims.client_id },
+    } satisfies Principal;
+  });
+
+  const verifyKey = Effect.fn("Verifier.apiKey")(function* (key: string) {
+    const request = HttpClientRequest.post(endpoints.apiKey).pipe(
+      HttpClientRequest.setHeader("authorization", `Bearer ${key}`),
+      HttpClientRequest.bodyJsonUnsafe({ resource: options.resource }),
+    );
+
+    const response = yield* execute(client, request);
+
+    if (response.status === 401) return yield* unauthorized();
+
+    if (response.status === 403) return yield* new Forbidden({ message: "Insufficient scope" });
+
+    if (response.status === 429)
+      return yield* new RateLimited({ message: "Authentication rate exceeded" });
+
+    if (response.status !== 200)
+      return yield* new ProviderUnavailable({
+        operation: "api-key.verify",
+        cause: { status: response.status },
+      });
+
+    const body = yield* HttpClientResponse.schemaBodyJson(KeyResponse)(response).pipe(
+      Effect.mapError((cause) => new ProviderUnavailable({ operation: "api-key.response", cause })),
+    );
+
+    const expiry = body.expiresAt === null ? null : Date.parse(body.expiresAt);
+
+    if (body.resource !== options.resource || (expiry !== null && !Number.isFinite(expiry)))
+      return yield* new ProviderUnavailable({ operation: "api-key.response" });
+
+    if (expiry !== null && expiry <= (yield* Clock.currentTimeMillis)) return yield* unauthorized();
+
+    return {
+      subject: body.ownerId,
+      scopes: body.scopes,
+      actor: { kind: "key", keyId: body.keyId },
+    } satisfies Principal;
+  }, Effect.scoped);
+
+  const verifyToken = Effect.fn("Verifier.verifyToken")(
+    function* (token: string) {
+      const principal = yield* token.startsWith("ca_") ? verifyKey(token) : verifyJwt(token);
+
+      if (options.requiredScopes?.some((scope) => !principal.scopes.includes(scope)))
+        return yield* new Forbidden({ message: "Insufficient scope" });
+
+      return principal;
+    },
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
+    }),
+  );
+
   return {
     verifyToken,
-    verify: async (authorization) => {
+    verify: Effect.fn("Verifier.verify")(function* (authorization: string | null | undefined) {
       const token = /^Bearer ([^\s,]+)$/iu.exec(authorization ?? "")?.[1];
-      if (!token) throw new AuthError("unauthorized");
-      return verifyToken(token);
-    },
-  };
-}
+
+      if (!token) return yield* unauthorized();
+
+      return yield* verifyToken(token);
+    }),
+  } satisfies Verifier;
+});

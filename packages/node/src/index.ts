@@ -1,15 +1,21 @@
-export { AuthError, IssuerResponseError, type AuthErrorCode } from "./errors.ts";
-export { createVerifier, type Principal, type Verifier, type VerifierOptions } from "./verify.ts";
+export * as Verifier from "./verify.ts";
+
+export * as BrowserSession from "./browser.ts";
+
+export * as BrowserHttp from "./browser-http.ts";
+
+export { SessionStore, type Row } from "./store.ts";
+
+export type { Principal } from "./verify.ts";
+
 export {
-  challenge,
-  failureResponse,
-  metadataUrl,
-  protectedResourceMetadata,
-  type ResourceOptions,
-} from "./resource.ts";
-export {
-  createBrowserSession,
-  type BrowserSession,
-  type BrowserSessionOptions,
-  type BrowserSessionStore,
-} from "./browser.ts";
+  Unauthorized,
+  Forbidden,
+  RateLimited,
+  ProviderUnavailable,
+  StoreError,
+  InvalidRequest,
+  RequestTooLarge,
+  ConfigurationError,
+  type AuthenticationError,
+} from "./errors.ts";

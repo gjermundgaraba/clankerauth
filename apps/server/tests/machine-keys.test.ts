@@ -1,3 +1,4 @@
+import { nodeHandler } from "../src/app.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest, type McpRequestParams } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
@@ -6,21 +7,38 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
-import { Administration, IssuerActions } from "@clankerauth/api";
-import { createNodeServer, nodeListener } from "../src/node-http.ts";
-import { application } from "../src/app.ts";
+import { Effect, Exit, Scope, Schema } from "effect";
+import { Administration, BadRequest, InternalServerError, IssuerActions } from "@clankerauth/api";
+import { createNodeServer } from "../src/node-http.ts";
+import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
 import { validateSettings } from "../src/config.ts";
 
 const origin = "http://localhost:3000";
+
 const resource = "https://example.internal/api";
+
+const ListenAddress = Schema.Struct({ port: Schema.Number });
+
+const CreatedApiKey = Schema.Struct({ key: Schema.String, keyId: Schema.String });
+
+type JsonPrimitive = string | number | boolean | null;
+
+type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+type TestRequestBody = { readonly [key: string]: JsonValue };
+
 let directory: string;
+
 let service: Service;
+
 let handle: ReturnType<typeof application>;
+
 let cookie: string;
+
 let bearer: string | undefined;
-const call = (path: string, body?: unknown, headers: Record<string, string> = {}) =>
+
+const call = (path: string, body?: TestRequestBody, headers: Record<string, string> = {}) =>
   handle(
     new Request(`${origin}${path}`, {
       method: body === undefined ? "GET" : "POST",
@@ -28,8 +46,10 @@ const call = (path: string, body?: unknown, headers: Record<string, string> = {}
       body: body === undefined ? undefined : JSON.stringify(body),
     }),
   );
+
 const verify = (key: string, target = resource) =>
   call("/api/verifyApiKey", { resource: target }, { authorization: `Bearer ${key}`, cookie: "" });
+
 beforeEach(async () => {
   bearer = undefined;
   directory = mkdtempSync(join(tmpdir(), "clankerauth-keys-"));
@@ -48,10 +68,12 @@ beforeEach(async () => {
     email: "owner@example.internal",
     password: "test-only password123",
   });
+
   const login = await call("/api/auth/sign-in/email", {
     email: "owner@example.internal",
     password: "test-only password123",
   });
+
   cookie = login.headers
     .getSetCookie()
     .map((part) => part.split(";")[0])
@@ -66,28 +88,34 @@ beforeEach(async () => {
     ).status,
   ).toBe(201);
 });
+
 afterEach(async () => {
   vi.useRealTimers();
   await handle.dispose();
   await service.close();
   rmSync(directory, { recursive: true, force: true });
 });
+
 const create = async () => {
   const response = await call("/api/createApiKey", {
     name: "Automation",
     permissions: { [resource]: ["example:read"] },
     expiresAt: null,
   });
+
   expect(response.status).toBe(201);
-  return (await response.json()) as { key: string; keyId: string };
+
+  return Schema.decodeUnknownSync(CreatedApiKey)(await response.json());
 };
 
 test("hash-only storage, explicit scopes, one-time display and next-request disable/delete", async () => {
   const key = await create();
   expect(key.key.startsWith("ca_")).toBe(true);
+
   const stored = await Effect.runPromise(
     service.sql`SELECT key, rateLimitMax, rateLimitTimeWindow FROM apikey WHERE id = ${key.keyId}`,
   );
+
   expect(stored[0]?.key).not.toBe(key.key);
   expect(stored[0]?.rateLimitMax).toBe(1000);
   expect(stored[0]?.rateLimitTimeWindow).toBe(60000);
@@ -175,15 +203,14 @@ test("expired keys and per-key rate limits are enforced", async () => {
 });
 
 test("creation rejects implicit, unknown and invalid expiry grants", async () => {
-  for (const permissions of [
-    {},
-    { [resource]: [] },
-    { [resource]: ["example:unknown"] },
-    { "https://unknown.internal": ["example:read"] },
-  ])
-    expect(
-      (await call("/api/createApiKey", { name: "Bad", permissions, expiresAt: null })).status,
-    ).toBe(400);
+  const rejected: TestRequestBody[] = [
+    { name: "Bad", permissions: {}, expiresAt: null },
+    { name: "Bad", permissions: { [resource]: [] }, expiresAt: null },
+    { name: "Bad", permissions: { [resource]: ["example:unknown"] }, expiresAt: null },
+    { name: "Bad", permissions: { "https://unknown.internal": ["example:read"] }, expiresAt: null },
+  ];
+
+  for (const body of rejected) expect((await call("/api/createApiKey", body)).status).toBe(400);
   expect(
     (
       await call("/api/createApiKey", {
@@ -197,6 +224,7 @@ test("creation rejects implicit, unknown and invalid expiry grants", async () =>
 
 test("listing includes every key beyond the provider database page and preserves pagination", async () => {
   const created = [];
+
   for (let index = 0; index < 101; index++) created.push(await create());
   const response = await call("/api/listApiKeys", {});
   expect(response.status).toBe(200);
@@ -205,24 +233,30 @@ test("listing includes every key beyond the provider database page and preserves
   expect(new Set(body.keys.map((key: { keyId: string }) => key.keyId))).toEqual(
     new Set(created.map((key) => key.keyId)),
   );
+
   for (const key of created) expect(JSON.stringify(body)).not.toContain(key.key);
   const headers = new Headers({ cookie });
+
   const all = await service.auth.api.listApiKeys({
     headers,
     query: { limit: 1000, sortBy: "id", sortDirection: "asc" },
   });
+
   expect(all.apiKeys).toHaveLength(101);
   expect(all.total).toBe(101);
+
   const last = await service.auth.api.listApiKeys({
     headers,
     query: { limit: 1, offset: 100, sortBy: "id", sortDirection: "asc" },
   });
+
   expect(last.apiKeys.map((key) => key.id)).toEqual([all.apiKeys[100]!.id]);
   expect(last.total).toBe(101);
 });
 
 test("key writes reuse middleware owner authorization", async () => {
   const sessions = vi.spyOn(service.auth.api, "getSession");
+
   try {
     const key = await create();
     expect(sessions).toHaveBeenCalledTimes(1);
@@ -253,15 +287,23 @@ test("sustained verification below the per-minute limit never accumulates across
   const key = await create();
   const start = Date.now();
   vi.useFakeTimers({ toFake: ["Date"] });
-  for (let second = 0; second <= 1200; second++) {
+
+  await service.auth.api.updateApiKey({
+    body: { keyId: key.keyId, rateLimitMax: 3, userId: await Effect.runPromise(service.owner()) },
+  });
+
+  // Continuous activity must reset from the window start, not the last request.
+  for (const second of [0, 20, 40, 60, 80, 100, 120]) {
     vi.setSystemTime(start + second * 1000);
     expect((await verify(key.key)).status, `request ${second + 1}`).toBe(200);
   }
+
   const rows = await Effect.runPromise(
     service.sql`SELECT requestCount, lastRequest, rateLimitWindowStart FROM apikey WHERE id = ${key.keyId}`,
   );
+
   expect(rows[0]?.requestCount).toBe(1);
-  expect(new Date(String(rows[0]?.rateLimitWindowStart)).getTime()).toBe(start + 1200000);
+  expect(new Date(String(rows[0]?.rateLimitWindowStart)).getTime()).toBe(start + 120000);
   expect(rows[0]?.lastRequest).toEqual(rows[0]?.rateLimitWindowStart);
 });
 
@@ -273,11 +315,13 @@ test("concurrent verification respects fixed-window capacity and resets at the e
   const start = Date.now();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(start);
+
   const burst = async () => {
     const responses = await Promise.all(Array.from({ length: 20 }, () => verify(key.key)));
     expect(responses.filter((response) => response.status === 200)).toHaveLength(3);
     expect(responses.filter((response) => response.status === 429)).toHaveLength(17);
   };
+
   await burst();
   vi.setSystemTime(start + 59999);
   expect((await verify(key.key)).status).toBe(429);
@@ -300,6 +344,7 @@ const mcp = async (
   headers: Record<string, string> = {},
 ) => {
   bearer ??= (await mcpOAuthGrant(handle, origin, cookie)).tokens.access_token;
+
   return handle(
     mcpRequest({
       method,
@@ -314,9 +359,11 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
   const discovery = await mcp("tools/list");
   expect(discovery.status).toBe(200);
   expect(discovery.headers.get("cache-control")).toBe("no-store");
+
   const {
     result: { tools },
   } = await discovery.json();
+
   expect(tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
     Administration.actions.map((action) => action.name).sort(),
   );
@@ -340,9 +387,11 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
       .map((action) => `/api/${action.name}`)
       .sort(),
   );
+
   for (const name of ["setupStatus", "setupOwner", "verifyApiKey"]) {
     expect(tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
   }
+
   expect(document.paths["/api/createApiKey"].post.responses).toHaveProperty("201");
 
   const created = await mcp("tools/call", {
@@ -353,6 +402,7 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
       expiresAt: null,
     },
   });
+
   expect(created.status).toBe(200);
   const { result } = await created.json();
   expect(result.isError).toBe(false);
@@ -371,12 +421,14 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
   );
   const renamed = await (await mcp("tools/call", { name: "listApiKeys", arguments: {} })).json();
   expect(renamed.result.structuredContent.value.keys[0].name).toBe("HTTP rename");
+
   const disabled = await (
     await mcp("tools/call", {
       name: "updateApiKey",
       arguments: { keyId: key.keyId, enabled: false },
     })
   ).json();
+
   expect(disabled.result.structuredContent.value.enabled).toBe(false);
   expect((await verify(key.key)).status).toBe(401);
 
@@ -390,19 +442,23 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
       },
     })
   ).json();
+
   expect(invalid.result.isError).toBe(true);
   expect(invalid.result.structuredContent._tag).toBe("BadRequest");
+
   const malformed = await (
     await mcp("tools/call", { name: "updateApiKey", arguments: { keyId: 42 } })
   ).json();
+
   expect(malformed.result.isError).toBe(true);
-  expect(malformed.result.structuredContent).toEqual({
-    _tag: "BadRequest",
-    error: "Invalid request",
-  });
+  expect(malformed.result.structuredContent).toEqual(
+    Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
+  );
   const malformedHttp = await call("/api/updateApiKey", { keyId: 42 });
   expect(malformedHttp.status).toBe(400);
-  expect(await malformedHttp.json()).toEqual(malformed.result.structuredContent);
+  expect(await malformedHttp.json()).toEqual(
+    Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
+  );
 });
 
 test("HTTP and MCP sanitize invalid managed-client output", async () => {
@@ -413,6 +469,7 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
     native: true,
     confidential: true,
   });
+
   expect(created.status).toBe(201);
   const { client_id } = await created.json();
   await Effect.runPromise(
@@ -421,7 +478,11 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
 
   const listing = await call("/api/listClients", {});
   expect(listing.status).toBe(500);
-  const expected = { _tag: "InternalServerError", error: "Request could not be completed" };
+
+  const expected = Schema.encodeSync(InternalServerError)(
+    new InternalServerError({ error: "Request could not be completed" }),
+  );
+
   expect(await listing.json()).toEqual(expected);
 
   const tool = await mcp("tools/call", { name: "listClients", arguments: {} });
@@ -432,7 +493,10 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
 });
 
 test("HTTP administration requires owner session and Origin; MCP requires bearer authorization", async () => {
-  const spoofedOwner = { userId: await Effect.runPromise(service.owner()), cookie };
+  const userId = await Effect.runPromise(service.owner());
+
+  if (userId === undefined) throw new Error("Expected an owner for spoofed-session checks");
+  const spoofedOwner = { userId, cookie };
   expect((await call("/api/listClients", spoofedOwner, { cookie: "" })).status).toBe(401);
   expect(
     (
@@ -443,16 +507,20 @@ test("HTTP administration requires owner session and Origin; MCP requires bearer
       )
     ).status,
   ).toBe(401);
+
   const rejectedHeaders: Array<Record<string, string>> = [
     { cookie: "" },
     { origin: "https://evil.example" },
     { origin: "" },
   ];
+
   for (const headers of rejectedHeaders) {
     const status = headers.cookie === "" ? 401 : 403;
+
     if (headers.origin !== "") {
       expect((await mcp("tools/list", {}, headers)).status).toBe(headers.cookie === "" ? 200 : 403);
     }
+
     expect((await call("/api/listClients", {}, headers)).status).toBe(status);
     expect(
       (
@@ -462,6 +530,7 @@ test("HTTP administration requires owner session and Origin; MCP requires bearer
       ).status,
     ).toBe(headers.cookie === "" ? 401 : 200);
   }
+
   const key = await create();
   expect(
     (await mcp("tools/list", {}, { cookie: "", authorization: `Bearer ${key.key}` })).status,
@@ -470,20 +539,26 @@ test("HTTP administration requires owner session and Origin; MCP requires bearer
 });
 
 test.each(["modern", "legacy"] as const)(
-  "official %s MCP client uses OAuth bearer authentication through the Node bridge",
+  "official %s MCP client uses OAuth bearer authentication through native Effect HTTP",
   async (mode) => {
     const { tokens } = await mcpOAuthGrant(handle, origin, cookie);
-    const server = createNodeServer(nodeListener(handle, origin));
+    const scope = Scope.makeUnsafe();
+
+    const listener = await Effect.runPromise(
+      nodeHandler(service).pipe(Effect.provideService(Scope.Scope, scope)),
+    );
+
+    const server = createNodeServer(listener);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected TCP listener");
+      const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
       await withMcpClient(
         {
           fetch: (request) => fetch(request),
           mode,
           path: "/mcp",
-          baseUrl: `http://127.0.0.1:${address.port}`,
+          baseUrl: `http://127.0.0.1:${port}`,
           headers: { authorization: `Bearer ${tokens.access_token}` },
         },
         async (client) => {
@@ -507,32 +582,36 @@ test.each(["modern", "legacy"] as const)(
               ],
             },
           });
+
           const malformed = await client.callTool({
             name: "updateApiKey",
             arguments: { keyId: 42 },
           });
+
           expect(malformed.isError).toBe(true);
-          expect(malformed.structuredContent).toEqual({
-            _tag: "BadRequest",
-            error: "Invalid request",
-          });
+          expect(malformed.structuredContent).toEqual(
+            Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
+          );
         },
       );
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
+      await Effect.runPromise(Scope.close(scope, Exit.void));
     }
   },
 );
 
 test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
   const permissions = { [`${origin}/mcp`]: ["admin"] };
+
   const created = await call("/api/createApiKey", {
     name: "Invalid administration key",
     permissions,
     expiresAt: null,
   });
+
   expect(created.status).toBe(400);
   const key = await create();
   expect((await call("/api/updateApiKey", { keyId: key.keyId, permissions })).status).toBe(400);

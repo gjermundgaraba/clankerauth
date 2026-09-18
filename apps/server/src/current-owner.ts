@@ -21,15 +21,19 @@ export const ownerAuthentication = (service: Service) =>
     authenticate: Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const headers = new Headers(request.headers);
+
       const session = yield* Effect.tryPromise({
         try: () => service.auth.api.getSession({ headers }),
         catch: apiError,
       });
+
       if (!session)
         return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
+
       // Browser navigation to OpenAPI can omit Origin. Mutating HTTP actions cannot.
       if (request.method !== "GET" && request.headers.origin !== service.settings.baseURL)
         return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
+
       return {
         providerHeaders: Effect.succeed(headers),
         userId: session.user.id,

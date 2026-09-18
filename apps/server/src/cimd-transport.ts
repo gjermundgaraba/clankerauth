@@ -9,31 +9,41 @@ export function createAbortAwareTransport(
   maximumPending = 8,
 ): ClientMetadataResourceFetch {
   let pending = 0;
+
   return (input, init) => {
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+
     if (signal?.aborted) return Promise.reject(signal.reason);
+
     if (pending >= maximumPending)
       return Promise.reject(new Error("CIMD transport capacity reached"));
     pending++;
+
     return new Promise<Response>((resolve, reject) => {
       let aborted = false;
+
       const onAbort = () => {
         aborted = true;
         reject(signal?.reason);
       };
+
       signal?.addEventListener("abort", onAbort, { once: true });
+
       const release = () => {
         pending--;
         signal?.removeEventListener("abort", onAbort);
       };
+
       void Promise.resolve()
         .then(() => {
           signal?.throwIfAborted();
+
           return transport(input, init);
         })
         .then(
           (response) => {
             release();
+
             if (aborted) {
               // A transport may finish after the caller has gone away. Dispose
               // of its body and consume cancellation errors without an orphaned
@@ -41,9 +51,9 @@ export function createAbortAwareTransport(
               void response.body?.cancel().catch(() => {});
             } else resolve(response);
           },
-          (error: unknown) => {
+          (cause: unknown) => {
             release();
-            reject(error);
+            reject(cause);
           },
         );
     });

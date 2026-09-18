@@ -1,12 +1,20 @@
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
+import { NodeHttpServer } from "@effect/platform-node";
+import {
+  HttpPlatform,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import { APIError } from "better-auth/api";
 import type { Service } from "./auth.ts";
-import { actionApi } from "./action-api.ts";
+import { actionRoutes } from "./action-api.ts";
+import { requestPolicy } from "./node-http.ts";
 
 const ResourceRequest = Schema.Struct({ resource: Schema.String });
+
 const publicPaths = new Set([
   "/sign-in/email",
   "/sign-out",
@@ -25,6 +33,7 @@ const publicPaths = new Set([
   "/.well-known/openid-configuration",
   "/.well-known/oauth-authorization-server",
 ]);
+
 const corsPaths = new Set([
   "/.well-known/oauth-protected-resource/mcp",
   "/jwks",
@@ -37,8 +46,12 @@ const corsPaths = new Set([
   "/.well-known/oauth-authorization-server/api/auth",
   "/.well-known/openid-configuration",
 ]);
-const json = (body: unknown, status = 200) => Response.json(body, { status });
+
+const json = (body: typeof Schema.Json.Type, status = 200) =>
+  HttpServerResponse.jsonUnsafe(body, { status });
+
 const mcpMethods = ["GET", "POST", "DELETE"];
+
 const mcpRequestHeaders = [
   "Authorization",
   "Content-Type",
@@ -49,8 +62,26 @@ const mcpRequestHeaders = [
   "Mcp-Name",
   "Last-Event-ID",
 ];
+
 const mcpRequestHeaderNames = new Set(mcpRequestHeaders.map((header) => header.toLowerCase()));
 
+const errorResponse = (error: Error) => {
+  const status =
+    error instanceof APIError
+      ? error.statusCode
+      : Schema.isSchemaError(error) || error instanceof SyntaxError
+        ? 400
+        : 500;
+
+  return Effect.succeed(
+    json(
+      { error: status === 401 ? "Authentication required" : "Request could not be completed" },
+      status,
+    ),
+  );
+};
+
+/** All routes remain native Effect HTTP, except the Better Auth adapter. */
 export function application(
   service: Service,
   staticRoot = fileURLToPath(
@@ -58,144 +89,239 @@ export function application(
   ),
 ) {
   const { auth, settings } = service;
-  // The same exact allowlist governs CORS and native MCP Origin admission.
   const mcpAllowedOrigins = [...new Set([settings.baseURL, ...(settings.mcpAllowedOrigins ?? [])])];
-  const api = actionApi(service, mcpAllowedOrigins);
-  async function dispatch(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    if (url.pathname === "/healthz" && req.method === "GET") {
-      await Effect.runPromise(service.sql`SELECT 1`);
-      return json({ status: "ok" });
-    }
-    // Custom actions are POST /api/<name>. OAuth remains under /api/auth.
-    if (
-      (url.pathname.startsWith("/api/") &&
-        url.pathname !== "/api/auth" &&
-        !url.pathname.startsWith("/api/auth/")) ||
-      url.pathname === "/openapi.json" ||
-      url.pathname === "/mcp" ||
-      url.pathname === "/.well-known/oauth-protected-resource/mcp"
-    )
-      return api.handler(req);
-    if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
-      const path = url.pathname.replace(/^\/api\/auth/, "");
-      if (!publicPaths.has(path) && path !== "/.well-known/oauth-authorization-server/api/auth")
-        return json({ error: "Not found" }, 404);
-      // This service intentionally issues one-resource access tokens. Never fall back to opaque/unbound tokens.
-      if (path === "/oauth2/authorize" || path === "/oauth2/token") {
-        let resources: string[];
-        if (req.method === "GET") resources = url.searchParams.getAll("resource");
-        else if (req.headers.get("content-type")?.includes("application/json")) {
-          const body = Schema.decodeUnknownOption(ResourceRequest)(await req.clone().json());
-          resources = body._tag === "Some" ? [body.value.resource] : [];
-        } else resources = new URLSearchParams(await req.clone().text()).getAll("resource");
-        if (
-          resources.length !== 1 ||
-          !(await Effect.runPromise(service.resources.get(resources[0] ?? "")))
-        ) {
-          return json(
-            {
-              error: "invalid_target",
-              error_description: "Exactly one configured resource is required",
-            },
-            400,
-          );
-        }
-      }
-      return auth.handler(req);
-    }
-    if (req.method !== "GET" && req.method !== "HEAD") return json({ error: "Not found" }, 404);
-    let file: string;
-    if (["/", "/login", "/consent", "/setup"].includes(url.pathname)) file = "index.html";
-    else if (/^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(url.pathname))
-      file = url.pathname.slice(1);
-    else return json({ error: "Not found" }, 404);
-    const content = await readFile(resolve(staticRoot, file));
-    return new Response(req.method === "HEAD" ? null : content, {
-      headers: {
-        "content-type": file.endsWith(".js")
-          ? "text/javascript"
-          : file.endsWith(".css")
-            ? "text/css"
-            : "text/html; charset=utf-8",
-      },
-    });
-  }
-  const handle = async (req: Request) => {
-    const pathname = new URL(req.url).pathname;
-    const path = pathname.replace(/^\/api\/auth/, "");
-    const isMcp = pathname === "/mcp";
-    const origin = req.headers.get("origin");
-    const mcpOriginAllowed = origin !== null && mcpAllowedOrigins.includes(origin);
-    const publicCors = corsPaths.has(path);
-    let response: Response;
-    try {
-      if (isMcp && origin !== null && !mcpOriginAllowed) {
-        response = json({ error: "Invalid origin" }, 403);
-      } else if (isMcp && req.method === "OPTIONS") {
-        const method = req.headers.get("access-control-request-method");
-        const headers = (req.headers.get("access-control-request-headers") ?? "")
-          .split(",")
-          .map((header) => header.trim().toLowerCase())
-          .filter(Boolean);
-        response =
-          mcpOriginAllowed &&
-          method !== null &&
-          mcpMethods.includes(method) &&
-          headers.every((header) => mcpRequestHeaderNames.has(header))
-            ? new Response(null, { status: 204 })
-            : json({ error: "MCP preflight rejected" }, 403);
-      } else {
-        response =
-          publicCors && req.method === "OPTIONS"
-            ? new Response(null, { status: 204 })
-            : await service.run(() => dispatch(req));
-      }
-    } catch (error) {
-      const status =
-        error instanceof APIError
-          ? error.statusCode
-          : Schema.isSchemaError(error) || error instanceof SyntaxError
-            ? 400
-            : 500;
-      response = json(
-        { error: status === 401 ? "Authentication required" : "Request could not be completed" },
-        status,
-      );
-    }
-    if (publicCors) {
-      response.headers.set("access-control-allow-origin", "*");
-      response.headers.set("access-control-allow-methods", "GET, POST, OPTIONS");
-      response.headers.set("access-control-allow-headers", "Authorization, Content-Type, DPoP");
-      response.headers.set("access-control-expose-headers", "WWW-Authenticate, DPoP-Nonce");
-      response.headers.delete("access-control-allow-credentials");
-    }
-    if (isMcp) {
-      response.headers.append("vary", "Origin");
-      response.headers.delete("access-control-allow-credentials");
-      if (mcpOriginAllowed && origin !== null) {
-        response.headers.set("access-control-allow-origin", origin);
-        response.headers.set(
-          "access-control-expose-headers",
-          "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version",
+
+  const provider = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = new URL(request.url, settings.baseURL);
+    const path = url.pathname.replace(/^\/api\/auth/, "");
+
+    if (!publicPaths.has(path) && path !== "/.well-known/oauth-authorization-server/api/auth")
+      return json({ error: "Not found" }, 404);
+
+    // Our one-resource policy is enforced before entering the OAuth provider.
+    if (path === "/oauth2/authorize" || path === "/oauth2/token") {
+      let resources: string[];
+
+      if (request.method === "GET") resources = url.searchParams.getAll("resource");
+      else if (request.headers["content-type"]?.includes("application/json")) {
+        const body = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+          yield* request.text,
         );
-        if (req.method === "OPTIONS" && response.ok) {
-          response.headers.set("access-control-allow-methods", mcpMethods.join(", "));
-          response.headers.set("access-control-allow-headers", mcpRequestHeaders.join(", "));
-        }
-      }
+
+        const resource = Schema.decodeUnknownOption(ResourceRequest)(body);
+        resources = Option.isSome(resource) ? [resource.value.resource] : [];
+      } else resources = new URLSearchParams(yield* request.text).getAll("resource");
+
+      if (
+        resources.length !== 1 ||
+        !(yield* service.resources.get(resources[0] ?? "").pipe(Effect.uninterruptible))
+      )
+        return json(
+          {
+            error: "invalid_target",
+            error_description: "Exactly one configured resource is required",
+          },
+          400,
+        );
     }
-    response.headers.set("cache-control", "no-store");
-    response.headers.set("referrer-policy", "no-referrer");
-    response.headers.set("x-content-type-options", "nosniff");
-    response.headers.set("x-frame-options", "DENY");
-    response.headers.set(
-      "content-security-policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-    );
-    if (settings.baseURL.startsWith("https:"))
-      response.headers.set("strict-transport-security", "max-age=31536000");
-    return response;
-  };
-  return Object.assign(handle, { dispose: api.dispose });
+
+    // Pass disconnect cancellation into the Web request, but track the actual
+    // provider Promise until settlement even when the Effect caller is interrupted.
+    const body =
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : yield* request.arrayBuffer;
+
+    const response = yield* Effect.tryPromise({
+      try: (signal) =>
+        service.run(async () => {
+          const response = await auth.handler(
+            new Request(url, {
+              method: request.method,
+              headers: request.headers,
+              body,
+              signal,
+            }),
+          );
+
+          // A provider can settle after its caller disconnects. Release that body too.
+          if (signal.aborted) await response.body?.cancel();
+
+          return response;
+        }),
+      catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+    });
+
+    return HttpServerResponse.fromWeb(response);
+  }).pipe(Effect.catch(errorResponse));
+
+  const staticRoutes = HttpRouter.use((router) =>
+    Effect.gen(function* () {
+      const platform = yield* HttpPlatform.HttpPlatform;
+      yield* router.add(
+        "*",
+        "/*",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+
+          if (request.method !== "GET" && request.method !== "HEAD")
+            return json({ error: "Not found" }, 404);
+          const path = new URL(request.url, settings.baseURL).pathname;
+
+          const file = ["/", "/login", "/consent", "/setup"].includes(path)
+            ? "index.html"
+            : /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(path)
+              ? path.slice(1)
+              : undefined;
+
+          if (!file) return json({ error: "Not found" }, 404);
+
+          return yield* platform.fileResponse(resolve(staticRoot, file), {
+            contentType: file.endsWith(".js")
+              ? "text/javascript"
+              : file.endsWith(".css")
+                ? "text/css"
+                : "text/html; charset=utf-8",
+          });
+        }).pipe(Effect.catch(errorResponse)),
+      );
+    }),
+  );
+
+  const policy = HttpRouter.middleware(
+    (handler) =>
+      requestPolicy(settings.baseURL)(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const pathname = new URL(request.url, settings.baseURL).pathname;
+          const path = pathname.replace(/^\/api\/auth/, "");
+          const isMcp = pathname === "/mcp";
+          const origin = request.headers.origin;
+          const mcpOriginAllowed = origin !== undefined && mcpAllowedOrigins.includes(origin);
+          const publicCors = corsPaths.has(path);
+          let response: HttpServerResponse.HttpServerResponse;
+
+          if (isMcp && origin !== undefined && !mcpOriginAllowed) {
+            response = json({ error: "Invalid origin" }, 403);
+          } else if (isMcp && request.method === "OPTIONS") {
+            const method = request.headers["access-control-request-method"];
+
+            const headers = (request.headers["access-control-request-headers"] ?? "")
+              .split(",")
+              .map((header) => header.trim().toLowerCase())
+              .filter(Boolean);
+
+            response =
+              mcpOriginAllowed &&
+              method !== undefined &&
+              mcpMethods.includes(method) &&
+              headers.every((header) => mcpRequestHeaderNames.has(header))
+                ? HttpServerResponse.empty({ status: 204 })
+                : json({ error: "MCP preflight rejected" }, 403);
+          } else if (publicCors && request.method === "OPTIONS") {
+            response = HttpServerResponse.empty({ status: 204 });
+          } else {
+            // Request scopes include response streaming and asynchronous provider finalizers.
+            const admitted = yield* Effect.acquireRelease(
+              Effect.try({ try: service.retain, catch: (cause) => cause }),
+              (release) => Effect.sync(release),
+            ).pipe(Effect.result);
+
+            response = Result.isFailure(admitted)
+              ? json({ error: "Request could not be completed" }, 503)
+              : yield* handler;
+          }
+
+          if (publicCors)
+            response = response.pipe(
+              HttpServerResponse.setHeaders({
+                "access-control-allow-origin": "*",
+                "access-control-allow-methods": "GET, POST, OPTIONS",
+                "access-control-allow-headers": "Authorization, Content-Type, DPoP",
+                "access-control-expose-headers": "WWW-Authenticate, DPoP-Nonce",
+              }),
+              HttpServerResponse.removeHeader("access-control-allow-credentials"),
+            );
+
+          if (isMcp) {
+            response = response.pipe(
+              HttpServerResponse.setHeader(
+                "vary",
+                response.headers.vary ? `${response.headers.vary}, Origin` : "Origin",
+              ),
+              HttpServerResponse.removeHeader("access-control-allow-credentials"),
+            );
+
+            if (mcpOriginAllowed && origin !== undefined) {
+              response = response.pipe(
+                HttpServerResponse.setHeaders({
+                  "access-control-allow-origin": origin,
+                  "access-control-expose-headers":
+                    "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version",
+                }),
+              );
+
+              if (request.method === "OPTIONS" && response.status >= 200 && response.status < 300)
+                response = response.pipe(
+                  HttpServerResponse.setHeaders({
+                    "access-control-allow-methods": mcpMethods.join(", "),
+                    "access-control-allow-headers": mcpRequestHeaders.join(", "),
+                  }),
+                );
+            }
+          }
+
+          response = response.pipe(
+            HttpServerResponse.setHeaders({
+              "cache-control": "no-store",
+              "referrer-policy": "no-referrer",
+              "x-content-type-options": "nosniff",
+              "x-frame-options": "DENY",
+              "content-security-policy":
+                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            }),
+          );
+
+          if (settings.baseURL.startsWith("https:"))
+            response = response.pipe(
+              HttpServerResponse.setHeader("strict-transport-security", "max-age=31536000"),
+            );
+
+          return response;
+        }),
+      ),
+    { global: true },
+  );
+
+  return Layer.mergeAll(
+    actionRoutes(service, mcpAllowedOrigins),
+    HttpRouter.add(
+      "GET",
+      "/healthz",
+      service.sql`SELECT 1`.pipe(
+        Effect.as(json({ status: "ok" })),
+        Effect.uninterruptible,
+        Effect.catch(errorResponse),
+      ),
+    ),
+    HttpRouter.add("*", "/api/auth/*", provider),
+    HttpRouter.add("*", "/.well-known/*", provider),
+    staticRoutes,
+  ).pipe(
+    // Register the outer policy first: discovery is itself short-circuiting global
+    // middleware and must not bypass input limits, CORS, or security headers.
+    Layer.provide(policy),
+    Layer.provide(NodeHttpServer.layerHttpServices),
+  );
 }
+
+/** Attach the same native routes to an already-bound development/test server. */
+export const nodeHandler = Effect.fn("Http.nodeHandler")(function* (
+  service: Service,
+  staticRoot?: string,
+) {
+  const handler = yield* HttpRouter.toHttpEffect(application(service, staticRoot));
+
+  return yield* NodeHttpServer.makeHandler(handler, { scope: yield* Effect.scope });
+});

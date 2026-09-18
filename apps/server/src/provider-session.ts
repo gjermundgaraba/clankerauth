@@ -18,6 +18,7 @@ export const providerSession = Effect.fn("Mcp.providerSession")(function* (
     Effect.sync(release),
   );
   const context = yield* Effect.tryPromise({ try: () => service.auth.$context, catch: apiError });
+
   const session = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () =>
@@ -33,6 +34,7 @@ export const providerSession = Effect.fn("Mcp.providerSession")(function* (
     }),
     (session) => Effect.promise(() => context.internalAdapter.deleteSession(session.token)),
   );
+
   const cookie = yield* Effect.tryPromise({
     try: async () =>
       (
@@ -50,5 +52,6 @@ export const providerSession = Effect.fn("Mcp.providerSession")(function* (
         .join("; "),
     catch: apiError,
   });
+
   return new Headers({ origin: service.settings.baseURL, cookie });
 });

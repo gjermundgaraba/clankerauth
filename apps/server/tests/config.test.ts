@@ -9,16 +9,24 @@ const settings = {
   host: "127.0.0.1",
   port: 3000,
 };
+
 const load = (origins?: string) =>
   Effect.runPromise(
     loadSettings.pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromUnknown({
-            AUTH_BASE_URL: settings.baseURL,
-            BETTER_AUTH_SECRET: settings.secret,
-            ...(origins === undefined ? {} : { MCP_ALLOWED_ORIGINS: origins }),
-          }),
+          ConfigProvider.fromUnknown(
+            origins === undefined
+              ? {
+                  AUTH_BASE_URL: settings.baseURL,
+                  BETTER_AUTH_SECRET: settings.secret,
+                }
+              : {
+                  AUTH_BASE_URL: settings.baseURL,
+                  BETTER_AUTH_SECRET: settings.secret,
+                  MCP_ALLOWED_ORIGINS: origins,
+                },
+          ),
         ),
       ),
     ),
@@ -37,6 +45,7 @@ test("MCP browser origins accept exact HTTPS and loopback origins and deduplicat
     "http://127.0.0.1:9876",
     "http://[::1]:9876",
   ];
+
   expect(
     validateSettings({
       ...settings,
@@ -75,4 +84,20 @@ test("MCP browser environment configuration rejects empty entries and invalid or
   ]) {
     await expect(load(origins)).rejects.toThrow();
   }
+});
+
+test("configuration rejects insecure issuers and empty secrets", () => {
+  for (const baseURL of [
+    "http://auth.internal",
+    "https://auth.internal/",
+    "https://auth.internal/path",
+    "https://user:pass@auth.internal",
+  ]) {
+    expect(() => validateSettings({ ...settings, baseURL })).toThrow();
+  }
+
+  expect(() => validateSettings({ ...settings, secret: "" })).toThrow();
+  expect(validateSettings({ ...settings, baseURL: "https://auth.internal" }).baseURL).toBe(
+    "https://auth.internal",
+  );
 });

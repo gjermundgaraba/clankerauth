@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { request } from "node:http";
+import { once } from "node:events";
 import { startDisposableIssuer } from "../dist/index.mjs";
 
 const resource = {
@@ -9,6 +13,7 @@ const resource = {
   name: "Example development API",
   scopes: ["example:read", "example:write"],
 };
+
 const options = {
   resources: [resource],
   client: {
@@ -17,6 +22,7 @@ const options = {
     resources: [resource.identifier],
   },
 };
+
 const login = (issuer, owner = issuer.owner) =>
   fetch(`${issuer.url}/api/auth/sign-in/email`, {
     method: "POST",
@@ -26,11 +32,14 @@ const login = (issuer, owner = issuer.owner) =>
 
 await test("real HTTP issuer provisions resources and a confidential native client, and closes idempotently", async () => {
   const issuer = await startDisposableIssuer(options);
+
   try {
     assert.equal(new URL(issuer.url).hostname, "127.0.0.1");
+
     const discovery = await (
       await fetch(`${issuer.issuer}/.well-known/openid-configuration`)
     ).json();
+
     assert.equal(discovery.issuer, issuer.issuer);
     const page = await fetch(issuer.url);
     assert.equal(page.status, 200);
@@ -59,11 +68,14 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     );
     const session = await login(issuer);
     assert.equal(session.status, 200);
+
     const cookie = session.headers
       .getSetCookie()
       .map((part) => part.split(";")[0])
       .join("; ");
+
     await session.body.cancel();
+
     const state = await (
       await fetch(`${issuer.url}/api/listClients`, {
         method: "POST",
@@ -71,6 +83,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
         body: "{}",
       })
     ).json();
+
     assert.equal(state.email, issuer.owner.email);
     assert.equal(state.resources.length, 2);
     assert.deepEqual(
@@ -96,6 +109,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
   } finally {
     await Promise.all([issuer.close(), issuer.close()]);
   }
+
   await assert.rejects(access(issuer.directory), { code: "ENOENT" });
   await assert.rejects(fetch(`${issuer.url}/healthz`));
 });
@@ -104,6 +118,7 @@ await test("new runs have independent credentials and identity databases", async
   const first = await startDisposableIssuer(options);
   await first.close();
   const second = await startDisposableIssuer(options);
+
   try {
     assert.notEqual(second.directory, first.directory);
     assert.notEqual(second.clientId, first.clientId);
@@ -118,12 +133,14 @@ await test("new runs have independent credentials and identity databases", async
   } finally {
     await second.close();
   }
+
   await assert.rejects(access(second.directory), { code: "ENOENT" });
 });
 
 await test("failed provisioning removes its temporary directory and listening server", async () => {
   const directories = async () =>
     (await readdir(tmpdir())).filter((name) => name.startsWith("clankerauth-disposable-")).sort();
+
   const before = await directories();
   await assert.rejects(
     startDisposableIssuer({ ...options, resources: [{ ...resource, identifier: "invalid" }] }),
@@ -134,16 +151,20 @@ await test("failed provisioning removes its temporary directory and listening se
 
 await test("bundled provider preserves complete key listings and fixed verification windows", async (context) => {
   const issuer = await startDisposableIssuer(options);
+
   try {
     const session = await login(issuer);
     assert.equal(session.status, 200);
+
     const cookie = session.headers
       .getSetCookie()
       .map((part) => part.split(";")[0])
       .join("; ");
+
     await session.body.cancel();
     const headers = { cookie, origin: issuer.url, "content-type": "application/json" };
     let first;
+
     for (let index = 0; index < 101; index++) {
       const response = await fetch(`${issuer.url}/api/createApiKey`, {
         method: "POST",
@@ -154,30 +175,44 @@ await test("bundled provider preserves complete key listings and fixed verificat
           expiresAt: null,
         }),
       });
+
       assert.equal(response.status, 201);
       const key = await response.json();
       first ??= key;
     }
+
     const listing = await (
       await fetch(`${issuer.url}/api/listApiKeys`, { method: "POST", headers, body: "{}" })
     ).json();
+
     assert.equal(listing.keys.length, 101);
     assert.ok(listing.keys.some((key) => key.name === "Development key 100"));
     assert.ok(!JSON.stringify(listing).includes(first.key));
+    // Keep the bundled-provider regression small without changing production defaults.
+    const database = new DatabaseSync(join(issuer.directory, "issuer.sqlite"));
+
+    try {
+      database.prepare("UPDATE apikey SET rateLimitMax = 3 WHERE id = ?").run(first.keyId);
+    } finally {
+      database.close();
+    }
+
     context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-    for (let index = 0; index < 1100; index++) {
+
+    for (let index = 0; index < 7; index++) {
       const response = await fetch(`${issuer.url}/api/verifyApiKey`, {
         method: "POST",
         headers: { authorization: `Bearer ${first.key}`, "content-type": "application/json" },
         body: JSON.stringify({ resource: resource.identifier }),
       });
+
       assert.equal(
         response.status,
         200,
         `steady verification ${index + 1} must remain below the per-minute limit`,
       );
       await response.body.cancel();
-      context.mock.timers.tick(1000);
+      context.mock.timers.tick(20000);
     }
   } finally {
     context.mock.timers.reset();
@@ -190,6 +225,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   const metadataRequests = [];
   const clientId = "https://fixture.example/oauth/client.json";
   const redirect = "http://127.0.0.1:8765/callback";
+
   const issuer = await startDisposableIssuer({
     ...options,
     onRequest(request) {
@@ -199,6 +235,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
     },
     cimdTransport(input, init) {
       metadataRequests.push(new Request(input, init));
+
       return Response.json({
         client_id: clientId,
         client_name: "Fixture metadata client",
@@ -209,6 +246,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
       });
     },
   });
+
   try {
     assert.ok(requests.some((request) => request.url === `${issuer.url}/api/setupOwner`));
     requests.length = 0;
@@ -219,6 +257,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
     const keys = await fetch(discovery.jwks_uri);
     assert.equal(keys.status, 200);
     assert.ok(Array.isArray((await keys.json()).keys));
+
     const registration = await fetch(discovery.registration_endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -230,8 +269,10 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
         response_types: ["code"],
       }),
     });
+
     assert.equal(registration.status, 201);
     const registered = await registration.json();
+
     const tokens = await fetch(discovery.token_endpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -243,6 +284,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
         redirect_uri: redirect,
       }),
     });
+
     assert.equal(tokens.status, 400);
     await tokens.body.cancel();
     assert.deepEqual(requests, [
@@ -274,3 +316,32 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
     await issuer.close();
   }
 });
+
+await test(
+  "close interrupts an unfinished HTTP request and removes its database",
+  { timeout: 10000 },
+  async () => {
+    const issuer = await startDisposableIssuer(options);
+
+    const pending = request(`${issuer.url}/healthz`, {
+      headers: { Expect: "100-continue", "Content-Length": "1" },
+    });
+
+    const disconnected = new Promise((resolve) => {
+      pending.on("error", resolve);
+      pending.on("close", resolve);
+    });
+
+    try {
+      const continued = once(pending, "continue");
+      pending.flushHeaders();
+      await continued;
+      await issuer.close();
+      await disconnected;
+      await assert.rejects(access(issuer.directory), { code: "ENOENT" });
+    } finally {
+      pending.destroy();
+      await issuer.close();
+    }
+  },
+);

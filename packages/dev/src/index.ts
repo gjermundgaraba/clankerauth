@@ -1,14 +1,26 @@
 import { randomBytes } from "node:crypto";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { application } from "../../../apps/server/src/app.ts";
+import { ClientCredentials } from "@clankerauth/api";
+import { Effect, Exit, Schema, Scope } from "effect";
+import { nodeHandler } from "../../../apps/server/src/app.ts";
 import { initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
-import { createNodeServer, nodeListener } from "../../../apps/server/src/node-http.ts";
+import { createNodeServer } from "../../../apps/server/src/node-http.ts";
 import type { DisposableIssuer, DisposableIssuerOptions } from "./types.d.ts";
+
+type OwnerAccount = { email: string; password: string };
+
+type ResourceSeed = DisposableIssuerOptions["resources"][number];
+
+type ClientSeed = DisposableIssuerOptions["client"] & {
+  confidential: true;
+  native: true;
+};
+
+type ProvisioningBody = OwnerAccount | ResourceSeed | ClientSeed;
 
 /** Start a fresh issuer on a random loopback port. The caller owns signals and must await close(). */
 export async function startDisposableIssuer({
@@ -25,53 +37,54 @@ export async function startDisposableIssuer({
   });
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-disposable-"));
   let service: Service | undefined;
-  let handler: ReturnType<typeof application> | undefined;
+  let httpScope: Scope.Closeable | undefined;
   let closing: Promise<void> | undefined;
-  const active = new Set<Promise<void>>();
+
   // Listen first to discover the port; reject requests until initialization completes.
-  let serve = async (_incoming: IncomingMessage, outgoing: ServerResponse) => {
+  let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();
   };
+
   const server = createNodeServer((incoming, outgoing) => {
-    const request = (async () => {
-      try {
-        onRequest?.({
-          method: incoming.method ?? "GET",
-          url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
-        });
-        await serve(incoming, outgoing);
-      } catch {
-        if (outgoing.headersSent) outgoing.destroy();
-        else outgoing.writeHead(500).end("Request failed");
-      }
-    })();
-    active.add(request);
-    void request.finally(() => active.delete(request));
+    try {
+      onRequest?.({
+        method: incoming.method ?? "GET",
+        url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
+      });
+      serve(incoming, outgoing);
+    } catch {
+      if (outgoing.headersSent) outgoing.destroy();
+      else outgoing.writeHead(500).end("Request failed");
+    }
   });
+
   const close = () =>
     (closing ??= (async () => {
       try {
-        await new Promise<void>((resolve, reject) => {
+        const stopped = new Promise<void>((resolve, reject) => {
           server.close((error) =>
-            error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING"
+            error && (!("code" in error) || error.code !== "ERR_SERVER_NOT_RUNNING")
               ? reject(error)
               : resolve(),
           );
-          server.closeIdleConnections();
+          // Also release incomplete uploads and connections without a request fiber.
+          server.closeAllConnections();
         });
-        await Promise.allSettled(active);
+
+        // Interrupt response delivery without abandoning tracked provider work.
+        await Promise.all([
+          stopped,
+          httpScope ? Effect.runPromise(Scope.close(httpScope, Exit.void)) : Promise.resolve(),
+        ]);
       } finally {
         try {
-          await handler?.dispose();
+          await service?.close();
         } finally {
-          try {
-            await service?.close();
-          } finally {
-            await rm(directory, { recursive: true, force: true });
-          }
+          await rm(directory, { recursive: true, force: true });
         }
       }
     })());
+
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -80,7 +93,12 @@ export async function startDisposableIssuer({
         resolve();
       });
     });
-    const { port } = server.address() as AddressInfo;
+    const address = server.address();
+
+    if (!(address instanceof Object))
+      throw new Error("Disposable issuer failed to bind a TCP port");
+
+    const { port } = address;
     const url = `http://127.0.0.1:${port}`;
     service = await openAuth(
       {
@@ -93,14 +111,23 @@ export async function startDisposableIssuer({
       { cimdTransport },
     );
     await initialize(service);
-    handler = application(service, staticRoot);
-    serve = nodeListener(handler, url);
-    const owner = {
+    httpScope = Scope.makeUnsafe();
+    serve = await Effect.runPromise(
+      nodeHandler(service, staticRoot).pipe(Effect.provideService(Scope.Scope, httpScope)),
+    );
+
+    const owner: OwnerAccount = {
       email: "owner@example.internal",
       password: randomBytes(24).toString("base64url"),
     };
+
     const cookies = new Map<string, string>();
-    const post = async (path: string, body: unknown, status: number): Promise<unknown> => {
+
+    const exchange = async (
+      path: string,
+      body: ProvisioningBody,
+      status: number,
+    ): Promise<Response> => {
       const response = await fetch(new URL(path, url), {
         method: "POST",
         redirect: "manual",
@@ -112,27 +139,39 @@ export async function startDisposableIssuer({
         },
         body: JSON.stringify(body),
       });
+
       if (response.status !== status) {
         await response.body?.cancel();
         throw new Error(`Disposable issuer provisioning failed at ${path} (${response.status})`);
       }
+
       for (const cookie of response.headers.getSetCookie()) {
         const pair = cookie.split(";")[0]!;
         const separator = pair.indexOf("=");
         cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
       }
-      return response.json();
+
+      return response;
     };
+
+    const post = async (path: string, body: ProvisioningBody, status: number): Promise<void> => {
+      await (await exchange(path, body, status)).body?.cancel();
+    };
+
     await post("/api/setupOwner", owner, 201);
     await post("/api/auth/sign-in/email", owner, 200);
+
     for (const resource of resources) await post("/api/createResource", resource, 201);
-    const registration = (await post(
-      "/api/createClient",
-      { ...client, confidential: true, native: true },
-      201,
-    )) as { client_id: string; client_secret?: string };
-    if (!registration.client_secret)
+
+    const clientBody: ClientSeed = { ...client, confidential: true, native: true };
+
+    const registration = Schema.decodeUnknownSync(ClientCredentials)(
+      await (await exchange("/api/createClient", clientBody, 201)).json(),
+    );
+
+    if (registration.client_secret === undefined)
       throw new Error("Disposable issuer did not return client credentials");
+
     return {
       issuer: `${url}/api/auth`,
       clientId: registration.client_id,

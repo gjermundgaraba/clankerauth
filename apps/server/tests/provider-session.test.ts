@@ -11,6 +11,7 @@ test.each([false, true])(
   "shutdown waits for provider session cleanup (failure: %s)",
   async (failCleanup) => {
     const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-session-"));
+
     const service = await openAuth({
       baseURL: "https://auth.example.internal",
       database: join(directory, "auth.sqlite"),
@@ -18,12 +19,15 @@ test.each([false, true])(
       host: "127.0.0.1",
       port: 3000,
     });
+
     const allowDeletion = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
+
     try {
       await initialize(service);
       await createOwner(service, { email: "owner@example.internal", password: "test password123" });
       const owner = await Effect.runPromise(service.owner());
+
       if (!owner) throw new Error("Missing test owner");
       const context = await service.auth.$context;
       const startedDeletion = Promise.withResolvers<void>();
@@ -31,13 +35,17 @@ test.each([false, true])(
       vi.spyOn(context.internalAdapter, "deleteSession").mockImplementation(async (token) => {
         startedDeletion.resolve();
         await allowDeletion.promise;
+
         if (failCleanup) throw new Error("Test cleanup failure");
+
         return originalDelete(token);
       });
       const destroy = vi.spyOn(service.database, "destroy");
+
       const request = Effect.runPromiseExit(
         Effect.scoped(providerSession(service, owner, Math.floor(Date.now() / 1000) + 300)),
       );
+
       await startedDeletion.promise;
       closing = service.close();
       await expect(service.run(async () => undefined)).rejects.toThrow("Service stopping");
@@ -57,6 +65,7 @@ test.each([false, true])(
 
 test("cancellation releases a provider session whose lifetime is bounded by token expiry", async () => {
   const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-cancellation-"));
+
   const service = await openAuth({
     baseURL: "https://auth.example.internal",
     database: join(directory, "auth.sqlite"),
@@ -64,11 +73,14 @@ test("cancellation releases a provider session whose lifetime is bounded by toke
     host: "127.0.0.1",
     port: 3000,
   });
+
   let request: Fiber.Fiber<never, unknown> | undefined;
+
   try {
     await initialize(service);
     await createOwner(service, { email: "owner@example.internal", password: "test password123" });
     const owner = await Effect.runPromise(service.owner());
+
     if (!owner) throw new Error("Missing test owner");
     const context = await service.auth.$context;
     const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
@@ -80,6 +92,7 @@ test("cancellation releases a provider session whose lifetime is bounded by toke
         Effect.gen(function* () {
           yield* providerSession(service, owner, expiry);
           acquired.resolve();
+
           return yield* Effect.never;
         }),
       ),

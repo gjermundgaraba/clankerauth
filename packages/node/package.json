@@ -1,7 +1,7 @@
 {
   "name": "@gjermundgaraba/clankerauth-node",
   "version": "0.3.0",
-  "description": "Clankerauth integration for Node services: token and API-key verification, protected-resource metadata, and browser login with server-held tokens",
+  "description": "Effect-native Clanker Auth verification and browser sessions, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,6 +16,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./effect-actions": {
+      "types": "./dist/effect-actions.d.ts",
+      "import": "./dist/effect-actions.js"
     }
   },
   "publishConfig": {
@@ -25,15 +29,25 @@
     "test": "vp test && node scripts/package-smoke.mjs"
   },
   "dependencies": {
+    "effect": "catalog:",
     "jose": "catalog:",
     "oauth4webapi": "catalog:"
   },
   "devDependencies": {
     "@clankerauth/server": "workspace:*",
+    "@gjermundgaraba/effect-actions": "0.1.0-rc.1",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@gjermundgaraba/effect-actions": "0.1.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@gjermundgaraba/effect-actions": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=26"

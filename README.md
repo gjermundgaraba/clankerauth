@@ -15,7 +15,7 @@ docker run --name clankerauth --env-file clankerauth.env -v clankerauth-data:/da
   -p 127.0.0.1:3000:3000 --restart unless-stopped clankerauth
 ```
 
-Without Docker: `pnpm install --frozen-lockfile && pnpm build && pnpm start`, which reads `.env` from the working directory. See `.env.example`.
+Without Docker: `vp install --frozen-lockfile && vp run build && vp run start`, which reads `.env` from the working directory. See `.env.example`.
 
 Open the configured origin, create the owner account, sign in, and add a resource. Do this on the private network before exposing the service.
 
@@ -28,6 +28,8 @@ Open the configured origin, create the owner account, sign in, and add a resourc
 | `HOST`, `PORT`        | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                              |
 
 Run it behind a reverse proxy with TLS. The server uses `AUTH_BASE_URL` as its canonical origin, never forwarding headers, and rate-limits by direct peer address, so enforce per-client limits at the proxy. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
+
+Shutdown disconnects HTTP clients, including active streams, without waiting for response delivery. Already-running provider operations must settle before SQLite closes; an uncancellable operation that never settles can still delay shutdown.
 
 ## Connect a client
 
@@ -73,15 +75,16 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one.
 
-[`@gjermundgaraba/clankerauth-node`](packages/node/README.md) does both halves for a Node service: it verifies access tokens and API keys, publishes the protected-resource metadata, and runs the browser login as a confidential client with server-held tokens. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
+[`@gjermundgaraba/clankerauth-node`](packages/node/README.md) provides Effect-native access-token and API-key verification and browser login with server-held tokens. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only; see its README for the breaking replacement of the Promise SDK. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
 
 ## Develop
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm --filter @clankerauth/web exec playwright install chromium
-pnpm dev      # dashboard on :3000, API on :3001, state in .dev/
-pnpm ready    # format, lint, types, builds, all tests
+vp install --frozen-lockfile
+vp -C apps/web exec playwright install chromium
+vp run dev      # dashboard on :3000, API on :3001, state in .dev/
+vp run ready    # format, lint, types, builds, all tests
+vp run test:lint # lint-policy regression fixtures
 ```
 
 - `packages/api`: custom API contracts defined with effect-actions, shared by server and dashboard.
@@ -155,9 +158,9 @@ Offline refresh grants survive dashboard sign-out; use **Revoke authorization** 
 Other resource servers that verify JWTs locally may accept issued tokens until expiry.
 
 MCP supports **2026-07-28**, **2025-11-25**, **2025-06-18**, and **2025-03-26**
-transport revisions. OAuth clients must support resource indicators. Unary JSON
-responses work through the buffered Node bridge; historical two-endpoint SSE
-and long-lived streaming are not supported.
+transport revisions. OAuth clients must support resource indicators. Effect's native
+HTTP server streams responses instead of buffering them; historical two-endpoint
+SSE remains unsupported. Requests are still limited to 64 KiB before route execution.
 
 HTTP administration continues to require the owner session and configured Origin.
 The combined `GET /openapi.json` document requires the owner cookie and permits

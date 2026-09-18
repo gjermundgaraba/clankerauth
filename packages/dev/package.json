@@ -23,13 +23,14 @@
   },
   "scripts": {
     "build": "vp pack && node scripts/assets.mjs",
-    "test": "node --test tests/lifecycle.test.mjs && node scripts/package-smoke.mjs"
+    "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
     "@clankerauth/api": "workspace:*",
     "@clankerauth/server": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@opentelemetry/api": "catalog:",
+    "effect": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },

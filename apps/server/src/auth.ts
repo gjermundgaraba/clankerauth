@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { getCurrentAuthEndpointContext } from "@better-auth/core/context";
 import { transaction, openDatabase } from "./database.ts";
 import { mkdirSync } from "node:fs";
@@ -20,6 +20,12 @@ import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 import { mcpResource, protocolScopes, resourceReference, resourceStore } from "./resources.ts";
 
+const ClientIdCarrier = Schema.Struct({ client_id: Schema.String });
+
+const OAuthQueryCarrier = Schema.Struct({ oauth_query: Schema.String });
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
 export async function openAuth(
   settings: Settings,
   integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
@@ -28,12 +34,16 @@ export async function openAuth(
   const database = await openDatabase(settings.database);
   const { sql } = database;
   const onboarding = onboardingStore(database.kysely);
+
   const owner = Effect.fn("Auth.owner")(function* () {
     const rows = yield* sql`SELECT userId FROM serviceOwner WHERE id = 1`;
+
     if (!rows.length) return undefined;
+
     return (yield* Schema.decodeUnknownEffect(Schema.Struct({ userId: Schema.String }))(rows[0]))
       .userId;
   });
+
   const provider = oauthProvider({
     loginPage: "/login",
     consentPage: "/consent",
@@ -45,23 +55,27 @@ export async function openAuth(
         const state = await getOAuthProviderState();
         const query = new URLSearchParams(state?.query);
         const identifiers = query.getAll("resource");
+
         if (identifiers.length !== 1 || !(await Effect.runPromise(resources.get(identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Choose exactly one Resource",
           });
         const clientId = query.get("client_id");
+
         if (!clientId || !(await Effect.runPromise(resources.hasAccess(clientId, identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
           });
         const allowed = await Effect.runPromise(resources.scopesFor(identifiers));
+
         if (scopes.some((scope) => !allowed.includes(scope)))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_scope",
             error_description: "Resource scopes changed; start authorization again",
           });
+
         return resourceReference(identifiers[0]);
       },
     },
@@ -84,6 +98,7 @@ export async function openAuth(
       !!user && action !== "configure-client-credentials-scopes",
     resourcePrivileges: async ({ user }) => !!user,
   });
+
   const resources = resourceStore(
     sql,
     () => serviceAuth(),
@@ -93,6 +108,7 @@ export async function openAuth(
     },
     mcpResource(settings.baseURL),
   );
+
   const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
@@ -109,14 +125,26 @@ export async function openAuth(
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
-        const clientId =
-          typeof ctx.body?.client_id === "string"
-            ? ctx.body.client_id
-            : typeof ctx.query?.client_id === "string"
-              ? ctx.query.client_id
-              : typeof ctx.body?.oauth_query === "string"
-                ? new URLSearchParams(ctx.body.oauth_query).get("client_id")
-                : undefined;
+        const clientId = Option.getOrElse(
+          Option.map(
+            Schema.decodeUnknownOption(ClientIdCarrier)(ctx.body),
+            (value) => value.client_id,
+          ),
+          () =>
+            Option.getOrElse(
+              Option.map(
+                Schema.decodeUnknownOption(ClientIdCarrier)(ctx.query),
+                (value) => value.client_id,
+              ),
+              () =>
+                Option.match(Schema.decodeUnknownOption(OAuthQueryCarrier)(ctx.body), {
+                  onNone: () => undefined,
+                  onSome: ({ oauth_query }) =>
+                    new URLSearchParams(oauth_query).get("client_id") ?? undefined,
+                }),
+            ),
+        );
+
         if (
           clientId &&
           ["/oauth2/authorize", "/oauth2/consent", "/oauth2/continue"].includes(ctx.path) &&
@@ -126,6 +154,7 @@ export async function openAuth(
             error: "invalid_client",
             error_description: "Client is blocked",
           });
+
         if (ctx.path === "/oauth2/register") {
           if (!(await Effect.runPromise(onboarding.admit())))
             throw new APIError("TOO_MANY_REQUESTS", {
@@ -133,11 +162,13 @@ export async function openAuth(
               error_description: "Client registration capacity reached",
             });
           const redirects = ctx.body.redirect_uris;
+
           if (
             !ctx.body.application_type &&
             Array.isArray(redirects) &&
             redirects.some((uri) => {
-              if (typeof uri !== "string") return false;
+              if (!isString(uri)) return false;
+
               try {
                 return new URL(uri).protocol !== "https:";
               } catch {
@@ -179,6 +210,7 @@ export async function openAuth(
         fetchClientMetadataResource: async (input, init) => {
           // Reclaim abandoned registrations during discovery without an admission gate.
           await Effect.runPromise(onboarding.cleanup());
+
           return (integrations.cimdTransport ?? fetchClientMetadataResource)(input, init);
         },
         metadataProfile: "mcp-2026-07-28",
@@ -193,6 +225,7 @@ export async function openAuth(
       }),
     ],
   } satisfies BetterAuthOptions;
+
   // Defer provider initialization until migrations finish.
   const makeAuth = () => betterAuth(options);
   let auth: ReturnType<typeof makeAuth> | undefined;
@@ -200,6 +233,7 @@ export async function openAuth(
   // Track work for shutdown without serializing independent requests.
   const active = new Set<Promise<unknown>>();
   let closing = false;
+
   const run = <T>(operation: () => Promise<T>) => {
     if (closing)
       return Promise.reject(new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" }));
@@ -209,24 +243,29 @@ export async function openAuth(
       () => active.delete(result),
       () => active.delete(result),
     );
+
     return result;
   };
+
   // Request scopes may finish asynchronous finalizers after their HTTP response.
   // Keep those lifetimes admitted until all provider cleanup has completed.
   const retain = () => {
     if (closing) throw new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" });
     const lifetime = Promise.withResolvers<void>();
     active.add(lifetime.promise);
+
     return () => {
       active.delete(lifetime.promise);
       lifetime.resolve();
     };
   };
+
   const close = async () => {
     closing = true;
     await Promise.allSettled(active);
     await database.close();
   };
+
   return {
     get auth() {
       return serviceAuth();
@@ -243,10 +282,12 @@ export async function openAuth(
     close,
   };
 }
+
 export type Service = Awaited<ReturnType<typeof openAuth>>;
 
 export async function initialize(service: Service) {
   const plan = await getMigrations(service.options);
+
   if (plan.schemaProblems.length) throw new Error("Database schema requires manual repair");
   await plan.runMigrations();
   await Effect.runPromise(sqlInitialize(service));
@@ -256,6 +297,7 @@ export async function initialize(service: Service) {
 const sqlInitialize = (service: Service) =>
   Effect.gen(function* () {
     yield* service.sql`CREATE TABLE IF NOT EXISTS serviceOwner (id INTEGER PRIMARY KEY CHECK(id = 1), userId TEXT NOT NULL UNIQUE REFERENCES user(id))`;
+
     if (!(yield* service.owner()) && (yield* service.sql`SELECT id FROM user LIMIT 1`).length)
       return yield* Effect.fail(new Error("Database contains accounts without an owner marker"));
     yield* service.sql`CREATE TABLE IF NOT EXISTS clientOnboarding (clientId TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('dcr', 'cimd')), blocked INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)))`;
@@ -300,6 +342,7 @@ export async function createOwner(service: Service, input: { email: string; pass
     throw new APIError("CONFLICT", { message: "Setup already completed" });
   const email = input.email.trim().toLowerCase();
   const context = await service.auth.$context;
+
   // Match the pinned provider's email validator: setup must produce a usable login.
   if (
     email.length > 254 ||

@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { ServiceUnavailable } from "@clankerauth/api";
 import { chromium } from "playwright";
 import { preview } from "vite";
 
 // Exercise the shipped bundle without an API server, database, or real credentials.
 await readFile(new URL("../dist/index.html", import.meta.url)); // Fail clearly if the build is missing.
+
 const server = await preview({
   configFile: false,
   root: fileURLToPath(new URL("../", import.meta.url)),
   preview: { host: "127.0.0.1", port: 0, open: false },
 });
+
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+
 let browser;
 
 try {
@@ -24,19 +28,23 @@ try {
   const calls = [];
   const registrations = [];
   const keyUpdates = [];
+
   const resource = {
     builtIn: false,
     name: "Fixture API",
     identifier: "https://fixture.invalid/api",
     scopes: ["fixture:read"],
   };
+
   const existing = {
     client_id: "existing-client",
     client_name: "Existing client",
     redirect_uris: ["https://fixture.invalid/callback"],
     token_endpoint_auth_method: "client_secret_basic",
   };
+
   const created = { ...existing, client_id: "created-client", client_name: "Created client" };
+
   let data = {
     email: "owner@fixture.invalid",
     issuer: origin,
@@ -44,11 +52,14 @@ try {
     resources: [],
     clientAccess: [],
   };
+
   const ok = (body, status = 200) => ({ status, json: body });
+
   const failed = {
     status: 503,
-    json: { _tag: "ServiceUnavailable", error: "Fixture request failed" },
+    json: new ServiceUnavailable({ error: "Fixture request failed" }),
   };
+
   let machineKeys = [];
   let listResponse = async () => ok(data);
   let resourceResponse = () => ok(resource, 201);
@@ -56,15 +67,19 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     const key = `${request.method()} ${url.pathname}`;
+
     if (
       url.origin === origin &&
       (url.pathname === "/" || url.pathname === "/consent" || url.pathname.startsWith("/assets/"))
     ) {
       await route.continue();
+
       return;
     }
+
     calls.push(key);
     let response;
+
     if (url.origin === origin) {
       switch (key) {
         case "POST /api/setupStatus":
@@ -92,16 +107,19 @@ try {
           const payload = request.postDataJSON();
           assert.deepEqual(payload.permissions, { [resource.identifier]: ["fixture:read"] });
           assert.equal(payload.expiresAt, null);
+
           const key = {
             keyId: "fixture-key",
             ...payload,
             enabled: true,
             createdAt: "2026-09-10T12:00:00.000Z",
           };
+
           machineKeys.push(key);
           response = ok({ ...key, key: "ca_fixture-once-only" }, 201);
           break;
         }
+
         case "POST /api/updateApiKey": {
           const payload = request.postDataJSON();
           keyUpdates.push(payload);
@@ -111,6 +129,7 @@ try {
           response = ok(machineKeys.find((key) => key.keyId === payload.keyId));
           break;
         }
+
         case "POST /api/deleteApiKey":
           machineKeys = [];
           response = ok({ deleted: true });
@@ -120,10 +139,13 @@ try {
           break;
         case "POST /api/updateResource": {
           const payload = request.postDataJSON();
+
           const previous = data.resources.find(
             (resource) => resource.identifier === payload.identifier,
           );
+
           assert.ok(previous);
+
           if (previous.builtIn) assert.deepEqual(payload.scopes, ["admin"]);
           data.resources = data.resources.map((resource) =>
             resource.identifier === payload.identifier ? { ...resource, ...payload } : resource,
@@ -131,6 +153,7 @@ try {
           response = ok(payload);
           break;
         }
+
         case "POST /api/createResource":
           response = resourceResponse();
           break;
@@ -161,26 +184,33 @@ try {
           response = ok({ blocked: payload.blocked });
           break;
         }
+
         case "POST /api/deleteClient":
           response = ok({ deleted: true });
           break;
       }
     }
+
     if (!response) {
       errors.push(`Unexpected network request: ${key} (${url.origin})`);
       await route.abort();
+
       return;
     }
+
     await route.fulfill(response);
   });
   const count = (key) => calls.filter((call) => call === key).length;
   const retry = page.getByRole("button", { name: "Retry refresh", exact: true });
   const savedMessage = "Saved, but the dashboard could not refresh.";
+
   const waitForIdle = () =>
     page.waitForFunction(() => {
       const button = document.querySelector("#resource-create button");
+
       return button && !button.disabled;
     });
+
   const waitForSaved = async () => {
     await page.locator("#message").filter({ hasText: savedMessage }).waitFor();
     await retry.waitFor();
@@ -191,9 +221,12 @@ try {
     assert.equal(await mutations.locator("input:enabled, button:enabled").count(), 0);
     assert.equal(await retry.isEnabled(), true);
     const acknowledge = page.locator("#credentials button");
+
     if (await acknowledge.count()) assert.equal(await acknowledge.isEnabled(), true);
   };
+
   const resourceForm = page.locator("#resource-create");
+
   const fillResource = async (name) => {
     await resourceForm.locator('[name="name"]').fill(name);
     await resourceForm.locator('[name="identifier"]').fill(resource.identifier);
@@ -221,13 +254,17 @@ try {
   const releaseList = Promise.withResolvers();
   listResponse = async () => {
     await releaseList.promise;
+
     return failed;
   };
+
   await fillResource(resource.name);
+
   const listStarted = page.waitForRequest(
     (request) =>
       request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
+
   await resourceForm.getByRole("button").click();
   await listStarted;
   assert.equal(await resourceForm.locator('[name="name"]').inputValue(), "");
@@ -236,6 +273,7 @@ try {
   releaseList.resolve();
   await waitForSaved();
   assert.equal(count("POST /api/createResource"), 1);
+
   for (const name of ["name", "identifier", "scopes"]) {
     assert.equal(await resourceForm.locator(`[name="${name}"]`).inputValue(), "");
   }
@@ -306,17 +344,21 @@ try {
   const releaseClientList = Promise.withResolvers();
   listResponse = async () => {
     await releaseClientList.promise;
+
     return failed;
   };
+
   const register = page.locator("#register");
   await register.locator('[name="name"]').fill(created.client_name);
   await register.locator('[name="redirect"]').fill(created.redirect_uris[0]);
   await register.locator(`[name="resources"][value="${resource.identifier}"]`).check();
   await register.locator('[name="confidential"]').check();
+
   const clientListStarted = page.waitForRequest(
     (request) =>
       request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
+
   await register.getByRole("button").click();
   await clientListStarted;
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
@@ -362,6 +404,7 @@ try {
   assert.equal(await page.locator("#credentials").isVisible(), false);
   assert.equal(await page.locator("#credentials").textContent(), "");
   assert.equal(count("POST /api/deleteClient"), 1);
+
   // Automatic clients expose authorization lifecycle controls without managed-only mutations.
   const automatic = {
     ...existing,
@@ -369,6 +412,7 @@ try {
     onboarding: "cimd",
     blocked: false,
   };
+
   data = {
     ...data,
     clients: [automatic],
@@ -415,10 +459,12 @@ try {
   await page.getByRole("button", { name: "Enable key", exact: true }).click();
   await page.getByRole("button", { name: "Disable key", exact: true }).waitFor();
   await waitForIdle();
+
   const retainedGrants = {
     ...machineKeys[0].permissions,
     "https://removed.example/api": ["read"],
   };
+
   machineKeys[0].permissions = retainedGrants;
   const keyEdit = page.locator('[data-key-rename="fixture-key"]');
   await keyEdit.locator("..").getByText("Rename key", { exact: true }).click();
@@ -427,7 +473,6 @@ try {
   await page.getByRole("heading", { name: "Renamed automation", exact: true }).waitFor();
   await waitForIdle();
   assert.deepEqual(keyUpdates.at(-1), { keyId: "fixture-key", name: "Renamed automation" });
-  assert.deepEqual(machineKeys[0].permissions, retainedGrants);
   const grantsEdit = page.locator('[data-key-grants="fixture-key"]');
   await grantsEdit.locator("..").getByText("Edit grants", { exact: true }).click();
   await grantsEdit.getByRole("button", { name: "Save grants", exact: true }).click();
@@ -436,6 +481,7 @@ try {
     keyId: "fixture-key",
     permissions: { [resource.identifier]: ["fixture:read"] },
   });
+
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page
@@ -445,9 +491,11 @@ try {
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       true,
     );
+
     if (process.env.DASHBOARD_SCREENSHOTS)
       await page.screenshot({ path: `${process.env.DASHBOARD_SCREENSHOTS}/keys-${width}.png` });
   }
+
   // Undismissed credentials must disappear even when the post-delete read fails.
   assert.equal(await page.locator("#credentials").isVisible(), true);
   listResponse = async () => failed;

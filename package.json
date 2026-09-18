@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "vp run @clankerauth/api#build && vp run --no-cache --parallel -r dev",
     "build": "vp run -r build",
-    "check": "vp run @clankerauth/api#build && vp check",
+    "check": "vp run @clankerauth/api#build && vp check && vp run test:lint",
     "test": "vp run -r test",
-    "ready": "pnpm check && vp run -r build && vp run -r test",
+    "ready": "vp run check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
-    "test:package": "node apps/server/scripts/production-smoke.mjs"
+    "test:package": "node apps/server/scripts/production-smoke.mjs",
+    "test:lint": "node --test tools/oxlint/anti-slop/tests/policy.test.mjs"
   },
   "devDependencies": {
+    "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

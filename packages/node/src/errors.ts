@@ -1,36 +1,85 @@
-export type AuthErrorCode = "unauthorized" | "forbidden" | "rate_limited" | "unavailable";
+import { Schema } from "effect";
 
-const statuses = {
-  unauthorized: 401,
-  forbidden: 403,
-  rate_limited: 429,
-  unavailable: 503,
-} as const;
-const messages = {
-  unauthorized: "Authentication required",
-  forbidden: "Insufficient scope",
-  rate_limited: "Authentication rate exceeded",
-  unavailable: "Authentication unavailable",
-} as const;
+/** Schemas define public responses. Diagnostic causes are internal, non-enumerable fields. */
+export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
+  "Unauthorized",
+  { message: Schema.String },
+  { httpApiStatus: 401 },
+) {
+  declare readonly cause?: unknown;
 
-/** Outcome of failed authentication. `status` is the HTTP status a resource server answers with. */
-export class AuthError extends Error {
-  readonly code: AuthErrorCode;
-  readonly status: (typeof statuses)[AuthErrorCode];
-  constructor(code: AuthErrorCode, message: string = messages[code]) {
-    super(message);
-    this.name = "AuthError";
-    this.code = code;
-    this.status = statuses[code];
+  constructor(options: { readonly message: string; readonly cause?: unknown }) {
+    super({ message: options.message });
+    Object.defineProperty(this, "cause", { value: options.cause });
   }
 }
 
-/** The issuer answered a verification request with an unexpected status. Reported to `onFailure`, never thrown. */
-export class IssuerResponseError extends Error {
-  readonly status: number;
-  constructor(status: number) {
-    super(`Issuer responded ${status}`);
-    this.name = "IssuerResponseError";
-    this.status = status;
+export class Forbidden extends Schema.TaggedError<Forbidden>()(
+  "Forbidden",
+  { message: Schema.String },
+  { httpApiStatus: 403 },
+) {}
+
+export class RateLimited extends Schema.TaggedError<RateLimited>()(
+  "RateLimited",
+  { message: Schema.String },
+  { httpApiStatus: 429 },
+) {}
+
+export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
+  "ProviderUnavailable",
+  { operation: Schema.String },
+  { httpApiStatus: 503 },
+) {
+  declare readonly cause?: unknown;
+
+  constructor(options: { readonly operation: string; readonly cause?: unknown }) {
+    super({ operation: options.operation });
+    Object.defineProperty(this, "cause", { value: options.cause });
   }
 }
+
+export class StoreError extends Schema.TaggedError<StoreError>()(
+  "StoreError",
+  { operation: Schema.String },
+  { httpApiStatus: 503 },
+) {
+  declare readonly cause?: unknown;
+
+  constructor(options: { readonly operation: string; readonly cause?: unknown }) {
+    super({ operation: options.operation });
+    Object.defineProperty(this, "cause", { value: options.cause });
+  }
+}
+
+export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()(
+  "InvalidRequest",
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
+export class RequestTooLarge extends Schema.TaggedError<RequestTooLarge>()(
+  "RequestTooLarge",
+  { message: Schema.String },
+  { httpApiStatus: 413 },
+) {}
+
+export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
+  "ConfigurationError",
+  { message: Schema.String },
+) {}
+
+export const authenticationErrors = [
+  Unauthorized,
+  Forbidden,
+  RateLimited,
+  ProviderUnavailable,
+  StoreError,
+] as const;
+
+export type AuthenticationError =
+  | Unauthorized
+  | Forbidden
+  | RateLimited
+  | ProviderUnavailable
+  | StoreError;

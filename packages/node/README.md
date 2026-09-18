@@ -1,74 +1,179 @@
 # @gjermundgaraba/clankerauth-node
 
-Everything a Node service needs to authenticate against a [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) issuer: verification of access tokens and API keys, RFC 9728 protected-resource metadata with discovery challenges, and browser login as a confidential client that keeps tokens on the server behind an HttpOnly cookie. Plain Promises over Web `Request` and `Response`; no framework.
+Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification and browser sessions. Verifies JWT access tokens and API keys and runs browser login with encrypted server-held credentials. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
 
-It is published to GitHub Packages, which needs a GitHub token with the `read:packages` scope even for public packages. Map the scope in the project `.npmrc` and keep the credential in your user-level `~/.npmrc`:
+This is a breaking replacement for the Promise SDK. There is no legacy API or framework-neutral HTTP adapter. It requires the repository's Effect snapshot `9ad9891`, not the nominally same-version registry RC. Node 26 or later.
+
+## Install
+
+Published to GitHub Packages. Configure the scope and keep the credential in your user-level `~/.npmrc`:
 
 ```sh
 echo '@gjermundgaraba:registry=https://npm.pkg.github.com' >> .npmrc
 echo '//npm.pkg.github.com/:_authToken=${GH_TOKEN}' >> ~/.npmrc
-npm install @gjermundgaraba/clankerauth-node
+vp add @gjermundgaraba/clankerauth-node
 ```
 
-## Verify requests
+Use the same Effect snapshot in the application:
 
-Register one **Resource** per protected target in the dashboard, for example `https://notes.internal/api` and `https://notes.internal/mcp`. A verifier is bound to one resource and accepts either an EdDSA access token whose audience is that resource or a `ca_` API key with scopes on it. Access tokens verify offline through the issuer's JWKS; API keys verify online on every request, so disabling a key takes effect on the next one.
+```sh
+vp add 'effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891'
+```
+
+## Verify tokens directly
+
+Core consumers do not need effect-actions or `skipLibCheck`.
 
 ```ts
-import {
-  AuthError,
-  createVerifier,
-  failureResponse,
-  protectedResourceMetadata,
-} from "@gjermundgaraba/clankerauth-node";
+import { Effect } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { Verifier } from "@gjermundgaraba/clankerauth-node";
 
-const api = { resource: "https://notes.internal/api", scopes: ["notes:read", "notes:write"] };
-const verifier = createVerifier({
+const makeVerifier = Verifier.make({
   issuer: "https://auth.internal/api/auth",
-  resource: api.resource,
+  resource: "https://notes.internal/api",
   requiredScopes: ["notes:read"],
-});
-
-// GET /.well-known/oauth-protected-resource/api
-protectedResourceMetadata({ ...api, issuer: "https://auth.internal/api/auth" });
-
-// Any protected route
-try {
-  const principal = await verifier.verify(request.headers.get("authorization"));
-  // principal.subject is the owner; principal.actor is the client or key that acted
-  if (!principal.scopes.includes("notes:write")) throw new AuthError("forbidden");
-} catch (error) {
-  if (error instanceof AuthError)
-    return failureResponse(error, { ...api, scopes: ["notes:write"] });
-  throw error;
-}
+}).pipe(Effect.provide(FetchHttpClient.layer));
+// Acquire once, then use verifier.verify(authorization) or verifier.verifyToken(token).
 ```
 
-`AuthError.code` is `unauthorized`, `forbidden`, `rate_limited` or `unavailable`, and `status` is the matching HTTP status. `failureResponse` adds the `WWW-Authenticate` challenge that points clients at the resource metadata, which is how MCP clients find the issuer.
+## Protect effect-actions routes
 
-## Browser login
+Install the optional peer dependency and import the integration subpath:
 
-Register a confidential client whose redirect URI is `<origin>/auth/callback`. The browser session runs authorization code with PKCE against the issuer, stores the sealed tokens through your store, and sets `<name>_session` as an HttpOnly cookie for 30 days. Because owner-registered clients are first party, a signed-in owner is redirected straight back with no consent screen: sign-in at one application is sign-in at all of them.
+```sh
+vp add @gjermundgaraba/effect-actions@0.1.0-rc.1
+```
+
+Only integration consumers currently need `skipLibCheck: true`: effect-actions' preview declarations contain an unresolved `__exportAll` name. Consumer code is still type-checked.
+
+Register a resource in the Clanker Auth dashboard. Its identifier is the exact audience URL, not just an origin. Acquire one resource capability per protected audience at application construction, not per request.
 
 ```ts
-import { createBrowserSession } from "@gjermundgaraba/clankerauth-node";
+import { Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 
-const browser = createBrowserSession({
-  issuer: "https://auth.internal/api/auth",
-  clientId: process.env.AUTH_CLIENT_ID,
-  clientSecret: process.env.AUTH_CLIENT_SECRET,
-  origin: "https://notes.internal",
-  resource: api.resource,
-  scopes: api.scopes,
-  secret: process.env.SESSION_SECRET, // at least 32 characters
-  store, // get, put, delete, sweep over { payload, expires } rows keyed by id
-  cookie: { name: "notes" },
-  verifyToken: verifier.verifyToken,
+// Http and app are your effect-actions HTTP binding and implemented group.
+const routes = Layer.unwrap(
+  Effect.gen(function* () {
+    const api = yield* Resource.make({
+      issuer: "https://auth.internal/api/auth",
+      resource: "https://notes.internal/api",
+      scopes: ["notes:read", "notes:write"],
+      requiredScopes: ["notes:read"],
+    });
+    const mcp = yield* Resource.make({
+      issuer: "https://auth.internal/api/auth",
+      resource: "https://notes.internal/mcp",
+      scopes: ["notes:read", "notes:write"],
+      requiredScopes: ["notes:read"],
+    });
+    return Layer.mergeAll(
+      api.discovery.layer,
+      mcp.discovery.layer,
+      Http.layer(app).pipe(Layer.provide(api.middleware.layer)),
+      ActionMcp.layer({ name: "notes", version: "1.0.0", path: "/mcp" }, app).pipe(
+        Layer.provide(mcp.middleware.layer),
+      ),
+    );
+  }),
+).pipe(Layer.provide(FetchHttpClient.layer));
+```
+
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891` snapshot. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Authentication responses use `Cache-Control: no-store`.
+
+The supplied `HttpClient` must not retry credential exchanges or follow redirects. The SDK overrides only FetchHttpClient's redirect policy to reject redirects, preserves other caller-provided fetch defaults, and never installs retry middleware.
+
+An action reads identity from `CurrentPrincipal` and enforces its own permissions:
+
+```ts
+import { Effect } from "effect";
+import { Forbidden } from "@gjermundgaraba/clankerauth-node";
+import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-node/effect-actions";
+
+const write = Effect.gen(function* () {
+  const principal = yield* CurrentPrincipal;
+  if (!principal.scopes.includes("notes:write")) {
+    return yield* new Forbidden({ message: "Write permission required" });
+  }
+  return principal.subject;
 });
 ```
 
-Route `POST /auth/login`, `GET /auth/callback`, `GET /auth/session` and `POST /auth/logout` to the handlers of the same name. The login handler takes `{ "returnTo": "/path" }` and answers `{ "url": … }` for the browser to navigate to; the callback redirects to `returnTo`, or to `/?auth_error=login_failed` or `/?auth_error=unavailable`. For cookie-bearing requests to your API, call `accessToken(request)` and pass the result to `verifyToken`; it refreshes serialized per session and throws `AuthError` when the user must sign in again. Mutations authenticated by cookie should also check that `Origin` matches your origin. Logout revokes the refresh token at the issuer and clears the cookie.
+Declare `Forbidden` in that action/group's error schemas. Middleware authenticates the request; it does not infer per-action policy or filter MCP tool discovery.
 
-The store owns persistence and nothing else: payloads are sealed with AES-256-GCM under a key derived from `secret`, and ids are hashes of cookie values. Run one process per store.
+A principal contains `subject`, `scopes`, and `actor`: either `{ kind: "client", clientId }` or `{ kind: "key", keyId }`. The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects.
+
+JWTs are checked against issuer, audience, EdDSA signature, token type, required claims, expiry and scopes. Sender-constrained tokens are rejected. JWKS lookups are cached for ten minutes. Unknown keys trigger one refresh and resolution retry, with a thirty-second cooldown to bound provider traffic. Failed miss-triggered refreshes also cool down and return 503; still-valid cached keys remain usable. Initial lookup failures are not retained. Removed keys can remain trusted until cache expiry. API keys are checked online on **every request**, so revocation is effective immediately. Verification has a five-second deadline.
+
+The bundled issuer does not configure automatic signing-key rotation. Immediate-use rotation is supported, but tokens signed by a new key can be rejected during the thirty-second cooldown after a successful lookup. Publish-before-use avoids that short window; it is not mandatory.
+
+## Browser sessions
+
+Register a confidential client with the exact `callbackUrl` supplied to the session. It must be an absolute HTTP(S) URL without credentials or a fragment; query parameters are allowed. The session derives its browser origin and secure-cookie policy from this URL.
+
+Provide a `SessionStore` layer implementing Effect operations:
+
+- `get(id)` → `{ payload, expires } | undefined`
+- `put(id, payload, expires)`
+- `delete(id)`
+- `sweep(now)`: remove rows expiring at or before `now`
+
+Map expected database failures to `StoreError({ operation, cause })` at your persistence adapter. Do not put SQL, secrets, credentials or provider payloads in public errors. The store owns persistence, not encryption or session policy. **Run one process per store and acquire one shared browser-session capability per cookie/store configuration.**
+
+```ts
+import { Effect, Layer, Redacted } from "effect";
+import { BrowserHttp, BrowserSession } from "@gjermundgaraba/clankerauth-node";
+import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+
+// Inside application construction, with HttpClient and SessionStore provided:
+const browser =
+  yield *
+  BrowserSession.make({
+    issuer: "https://auth.internal/api/auth",
+    resource: "https://notes.internal/api",
+    callbackUrl: "https://notes.internal/workspace/auth/callback",
+    clientId,
+    clientSecret: Redacted.make(clientSecret),
+    secret: Redacted.make(sessionSecret), // at least 32 characters; retain across restarts
+    scopes: ["notes:read", "notes:write"],
+    cookie: { name: "notes" },
+    verifyToken: api.verifier.verifyToken,
+  });
+
+const browserRoutes = Layer.mergeAll(
+  BrowserHttp.layer(browser),
+  Http.layer(app).pipe(Layer.provide(Resource.browserMiddleware(api, browser).layer)),
+);
+```
+
+This example's construction fragment belongs inside `Effect.gen`. Supply configuration and secrets at your composition root; the SDK does not read environment variables or start its own runtime.
+
+`BrowserHttp.layer` registers:
+
+- `POST /auth/login`: accepts `{ returnTo: "/path" }`, returns `{ url }`.
+- `GET <callback pathname>`: consumes the one-time transaction and redirects (`/workspace/auth/callback` above).
+- `GET /auth/session`: returns authenticated subject, scopes and issuer.
+- `POST /auth/logout`: ends the local session and attempts provider revocation.
+
+These are ordinary Effect HTTP routes, **not actions**. `BrowserHttp.handlers(browser)` exposes the same handlers when explicit route composition is needed. Mount its callback at the configured public pathname, exposed as `browser.callbackPath`; authorization and code exchange always use the exact configured URL. The other convenience routes remain under `/auth`. Use explicit routing and distinct cookie names for multiple browser configurations on one origin. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback instead returns the sanitized HTTP error to avoid a redirect loop. Login return destinations must be same-origin paths other than the callback pathname; `/auth/` is not reserved as a whole. Login bodies are bounded at 16 KiB. Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
+
+Use browser middleware only for cookie-authenticated HTTP routes. It checks Origin on unsafe methods. Bearer middleware ignores cookies; browser middleware requires a session cookie. Choose the policy per route/group—there is no fallback between the two. **Never attach browser middleware to MCP.**
+
+The session capability does not accept incoming HTTP requests: `login(returnTo)`, `callback(url, transactionCookie)`, `session(sessionCookie)`, `accessToken(sessionCookie)`, and `logout(sessionCookie)` are Effects. HTTP handlers own cookie extraction and presentation.
+
+Cookies are HttpOnly, SameSite=Lax and Secure on HTTPS. Login uses S256 PKCE, state, nonce, exact issuer validation and signed ID-token checks. Stored payloads remain AES-256-GCM sealed under the configured secret with hashed cookie identifiers. The previous SDK's persisted format is unchanged.
+
+Refreshes and logout serialize per session. A durable no-replay marker is written before refresh; interruptions, ambiguous outcomes and restarts cannot reuse that refresh token. Discovery failure before the marker remains retryable. Operational refresh failures return 503 and invalidate the session; subsequent access requires login. Local logout remains authoritative if provider revocation fails, with a sanitized Effect warning.
+
+## Errors and observability
+
+Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429), `ProviderUnavailable` and `StoreError` (503). Browser input errors use `InvalidRequest` (400) and `RequestTooLarge` (413). Invalid construction fails with `ConfigurationError`.
+
+effect-actions owns authentication error encoding and challenge headers. Browser HTTP handlers handle their own typed outcomes. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
+
+Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable`, `StoreError`, and `Unauthorized` keep this diagnostic field outside their public schemas; BrowserHttp and effect-actions serialize only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
 
 MIT licensed.

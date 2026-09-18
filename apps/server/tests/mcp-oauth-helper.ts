@@ -22,6 +22,7 @@ export async function mcpOAuthCode(
   const resource = options.resource ?? `${baseURL}/mcp`;
   const callback = "http://127.0.0.1:9876/callback";
   let client_id = options.clientId;
+
   if (!client_id) {
     const registration = await handle(
       new Request(`${baseURL}/api/auth/oauth2/register`, {
@@ -36,10 +37,13 @@ export async function mcpOAuthCode(
         }),
       }),
     );
+
     expect(registration.status, await registration.clone().text()).toBe(201);
     client_id = String((await registration.json()).client_id);
   }
+
   const verifier = randomBytes(32).toString("base64url");
+
   const authorization = await handle(
     new Request(
       `${baseURL}/api/auth/oauth2/authorize?${new URLSearchParams({
@@ -55,9 +59,11 @@ export async function mcpOAuthCode(
       { headers: { cookie } },
     ),
   );
+
   expect(authorization.status, await authorization.clone().text()).toBe(302);
   const location = new URL(authorization.headers.get("location") ?? "", baseURL);
   expect(location.pathname).toBe("/consent");
+
   const consent = await handle(
     new Request(`${baseURL}/api/auth/oauth2/consent`, {
       method: "POST",
@@ -65,10 +71,12 @@ export async function mcpOAuthCode(
       body: JSON.stringify({ accept: true, oauth_query: location.search.slice(1) }),
     }),
   );
+
   expect(consent.status, await consent.clone().text()).toBe(200);
   const redirect = new URL((await consent.json()).url);
   expect(redirect.searchParams.get("state")).toBe("mcp-oauth-test");
   expect(redirect.searchParams.get("iss")).toBe(`${baseURL}/api/auth`);
+
   return {
     grant_type: "authorization_code",
     client_id,
@@ -90,6 +98,7 @@ export async function mcpOAuthGrant(
   expect(token.status, await token.clone().text()).toBe(200);
   const tokens = await token.json();
   expect(tokens.access_token).toBeTypeOf("string");
+
   return { client_id: form.client_id, tokens };
 }
 

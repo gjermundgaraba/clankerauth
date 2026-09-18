@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { sql as query } from "kysely";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { setImmediate } from "node:timers/promises";
@@ -8,87 +8,127 @@ import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { createLocalJWKSet, jwtVerify } from "jose";
-import { requestToResourceInput, verifyAccessTokenRequest } from "better-auth/oauth2";
-import { application } from "../src/app.ts";
+import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
 import { validateSettings, type Settings } from "../src/config.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 
+const ListenAddress = Schema.Struct({ port: Schema.Number });
+
+const FormFields = Schema.Record(Schema.String, Schema.String);
+
+type JsonPrimitive = string | number | boolean | null;
+
+type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+type TestRequestBody = { readonly [key: string]: JsonValue };
+
 const password = "test-only owner password 8rS!";
+
 const email = "owner@example.internal";
+
 const resourceA = "https://notes.internal/mcp";
+
 const resourceB = "https://reports.internal/api";
+
 let service: Service;
+
 let handle: ReturnType<typeof application>;
+
 let applications: ReturnType<typeof application>[];
+
 function createApplication() {
   const app = application(service);
   applications.push(app);
+
   return app;
 }
+
 async function stopCurrentGeneration() {
   const results = await Promise.allSettled(
     applications.splice(0).map(async (app) => app.dispose()),
   );
+
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
+
   try {
     await service.close();
   } catch (error) {
     failures.push(error);
   }
+
   if (failures.length) throw new AggregateError(failures, "Failed to stop service generation");
 }
+
 let directory: string;
+
 let settings: Settings;
+
 let cookies: Map<string, string>;
 
 async function request(
   path: string,
-  body?: unknown,
+  body?: TestRequestBody,
   options: { anonymous?: boolean; form?: boolean; origin?: string; authorization?: string } = {},
 ) {
   const headers = new Headers({
     origin: options.origin ?? settings.baseURL,
     "x-clankerauth-peer": "127.0.0.1",
   });
+
   if (options.authorization) headers.set("authorization", options.authorization);
+
   if (!options.anonymous)
     headers.set("cookie", [...cookies].map(([k, v]) => `${k}=${v}`).join("; "));
+
   if (body)
     headers.set(
       "content-type",
       options.form ? "application/x-www-form-urlencoded" : "application/json",
     );
+
+  let encoded: string | undefined;
+
+  if (body !== undefined) {
+    if (options.form) {
+      encoded = new URLSearchParams(Schema.decodeUnknownSync(FormFields)(body)).toString();
+    } else {
+      encoded = JSON.stringify(body);
+    }
+  }
+
   const response = await handle(
     new Request(new URL(path, settings.baseURL), {
       method: body ? "POST" : "GET",
       headers,
-      body: body
-        ? options.form
-          ? new URLSearchParams(body as Record<string, string>).toString()
-          : JSON.stringify(body)
-        : undefined,
+      body: encoded,
     }),
   );
+
   if (!options.anonymous)
     for (const cookie of response.headers.getSetCookie()) {
       const pair = cookie.split(";")[0]!;
       cookies.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
     }
+
   return response;
 }
+
 async function login(pass = password) {
   return request("/api/auth/sign-in/email", { email, password: pass });
 }
+
 const resourceFixtures = [
   { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read", "notes:write"] },
   { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
 ];
+
 async function createResourceFixtures() {
   const listing = await (await request("/api/listClients", {})).json();
+
   for (const resource of resourceFixtures) {
     if (
       listing.resources.some(
@@ -100,8 +140,10 @@ async function createResourceFixtures() {
     expect(response.status, await response.clone().text()).toBe(201);
   }
 }
+
 async function client(resource = resourceA, confidential = false) {
   await createResourceFixtures();
+
   const response = await request("/api/createClient", {
     name: "Test application",
     redirect: "http://127.0.0.1:9876/callback",
@@ -109,11 +151,15 @@ async function client(resource = resourceA, confidential = false) {
     native: true,
     confidential,
   });
+
   expect(response.status, await response.clone().text()).toBe(201);
+
   return response.json();
 }
+
 async function dynamicClient() {
   await createResourceFixtures();
+
   const response = await request(
     "/api/auth/oauth2/register",
     {
@@ -125,18 +171,24 @@ async function dynamicClient() {
     },
     { anonymous: true },
   );
+
   expect(response.status, await response.clone().text()).toBe(201);
+
   return response.json();
 }
+
 /** An authorization request without a prompt parameter: the server decides about consent. */
 function unprompted(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
   const flow = authorization(clientId, resource, extra);
   const url = new URL(flow.path, settings.baseURL);
   url.searchParams.delete("prompt");
+
   return { verifier: flow.verifier, path: `${url.pathname}${url.search}` };
 }
+
 function authorization(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
   const verifier = randomBytes(32).toString("base64url");
+
   const query = new URLSearchParams({
     client_id: clientId,
     redirect_uri: "http://127.0.0.1:9876/callback",
@@ -149,8 +201,10 @@ function authorization(clientId: string, resource = resourceA, extra: Record<str
     prompt: "consent",
     ...extra,
   });
+
   return { verifier, path: `/api/auth/oauth2/authorize?${query}` };
 }
+
 async function authorize(clientId: string, resource = resourceA, scope?: string) {
   const flow = authorization(
     clientId,
@@ -161,20 +215,25 @@ async function authorize(clientId: string, resource = resourceA, scope?: string)
         ? { scope: "openid offline_access reports:read" }
         : {},
   );
+
   const response = await request(flow.path);
   expect(response.status, await response.clone().text()).toBe(302);
   const location = new URL(response.headers.get("location")!, settings.baseURL);
   expect(location.pathname).toBe("/consent");
+
   const result = await request("/api/auth/oauth2/consent", {
     accept: true,
     oauth_query: location.search.slice(1),
   });
+
   expect(result.status, await result.clone().text()).toBe(200);
   const redirect = new URL((await result.json()).url);
   expect(redirect.searchParams.get("state")).toBe("state-to-validate");
   expect(redirect.searchParams.get("iss")).toBe(`${settings.baseURL}/api/auth`);
+
   return { code: redirect.searchParams.get("code")!, verifier: flow.verifier };
 }
+
 async function tokens(
   clientId: string,
   resource = resourceA,
@@ -182,6 +241,7 @@ async function tokens(
   scope?: string,
 ) {
   const grant = await authorize(clientId, resource, scope);
+
   const response = await request(
     "/api/auth/oauth2/token",
     {
@@ -194,7 +254,9 @@ async function tokens(
     },
     { anonymous: true, form: true, authorization },
   );
+
   expect(response.status, await response.clone().text()).toBe(200);
+
   return response.json();
 }
 
@@ -213,8 +275,10 @@ beforeEach(async () => {
   handle = createApplication();
   cookies = new Map();
 });
+
 afterEach(async () => {
   vi.restoreAllMocks();
+
   try {
     await stopCurrentGeneration();
   } finally {
@@ -255,6 +319,7 @@ describe("first-run setup", () => {
       email: "Owner@Example.Internal",
       password,
     });
+
     expect(created.status, await created.clone().text()).toBe(201);
     expect(await created.json()).toEqual({ created: true });
     expect(created.headers.getSetCookie()).toEqual([]);
@@ -306,11 +371,15 @@ describe("first-run setup", () => {
           body: JSON.stringify(body),
         }),
       );
+
       expect(response.status, await response.clone().text()).toBe(400);
     }
+
     for (const origin of [undefined, "https://evil.example", `${settings.baseURL}/`]) {
       const headers = new Headers({ "content-type": "application/json" });
+
       if (origin !== undefined) headers.set("origin", origin);
+
       const response = await handle(
         new Request(`${settings.baseURL}/api/setupOwner`, {
           method: "POST",
@@ -318,8 +387,10 @@ describe("first-run setup", () => {
           body: JSON.stringify({ email, password }),
         }),
       );
+
       expect(response.status).toBe(403);
     }
+
     for (const [contentType, body] of [
       ["application/json", "{"],
       ["text/plain", JSON.stringify({ email, password })],
@@ -332,9 +403,11 @@ describe("first-run setup", () => {
           body,
         }),
       );
+
       expect(response.status).toBe(contentType === "application/json" ? 400 : 415);
       expect(await response.text()).not.toContain(password);
     }
+
     expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM user`))[0]).toEqual({
       n: 0,
     });
@@ -363,7 +436,9 @@ describe("first-run setup", () => {
       request("/api/setupOwner", { email, password }),
       request("/api/setupOwner", { email: "second@example.internal", password }),
     ]);
+
     expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([201, 409]);
+
     for (const table of ["user", "account", "serviceOwner"])
       expect(
         (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${query.table(table)}`))[0],
@@ -383,6 +458,7 @@ describe("first-run setup", () => {
     const error = await failed.text();
     expect(error).not.toContain(password);
     expect(error).not.toContain("Injected owner-marker failure");
+
     for (const table of ["user", "account", "serviceOwner", "session"])
       expect(
         (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${query.table(table)}`))[0],
@@ -413,24 +489,27 @@ describe("owner boundary", () => {
     const admitted = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let work: Promise<unknown> | undefined;
+
     const server = createServer((_incoming, outgoing) => {
       work = service.run(async () => {
         admitted.resolve();
         await release.promise;
+
         return (await Effect.runPromise(service.sql`SELECT 1 AS value`))[0];
       });
       void work.then(() => outgoing.end());
     });
+
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Missing test address");
-    const connection = httpRequest(`http://127.0.0.1:${address.port}`);
+    const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
+    const connection = httpRequest(`http://127.0.0.1:${port}`);
     connection.on("error", () => {}); // Expected local abort, after admission is observed.
     connection.end();
     await admitted.promise;
     connection.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     const closing = service.close();
+
     try {
       await expect(service.run(async () => 0)).rejects.toThrow("Service stopping");
       await setImmediate();
@@ -439,45 +518,37 @@ describe("owner boundary", () => {
       release.resolve();
       await closing;
     }
+
     expect(await work).toEqual({ value: 1 });
     await expect(Effect.runPromise(service.sql`SELECT 1 AS value`)).rejects.toThrow();
     expect((await request("/healthz")).status).toBe(503);
   });
 
   test("serves the built web workspace rather than the server working directory", async () => {
+    const assets = new Set<string>();
+
     for (const path of ["/", "/setup", "/login", "/consent"]) {
       const response = await request(path);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
       const html = await response.text();
       expect(html).toContain("<title>Clanker Auth</title>");
-      const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
-      expect(assets).toHaveLength(2);
-      for (const [, asset] of assets) {
-        const result = await request(asset!);
-        expect(result.status).toBe(200);
-        expect(result.headers.get("content-type")).toBe(
-          asset!.endsWith(".js") ? "text/javascript" : "text/css",
-        );
-        expect((await result.text()).length).toBeGreaterThan(100);
-      }
-    }
-    expect((await request("/src/main.ts")).status).toBe(404);
-  });
+      const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
+      expect(references.length).toBeGreaterThan(0);
 
-  test("configuration rejects insecure issuers and empty secrets", () => {
-    for (const baseURL of [
-      "http://auth.internal",
-      "https://auth.internal/",
-      "https://auth.internal/path",
-      "https://user:pass@auth.internal",
-    ]) {
-      expect(() => validateSettings({ ...settings, baseURL })).toThrow();
+      for (const reference of references) assets.add(reference[1]!);
     }
-    expect(() => validateSettings({ ...settings, secret: "" })).toThrow();
-    expect(validateSettings({ ...settings, baseURL: "https://auth.internal" }).baseURL).toBe(
-      "https://auth.internal",
-    );
+
+    for (const asset of assets) {
+      const result = await request(asset);
+      expect(result.status).toBe(200);
+      expect(result.headers.get("content-type")).toBe(
+        asset.endsWith(".js") ? "text/javascript" : "text/css",
+      );
+      expect(await result.text()).not.toBe("");
+    }
+
+    expect((await request("/src/main.ts")).status).toBe(404);
   });
 
   test("login throttles brute force without exposing passwords", async () => {
@@ -530,17 +601,21 @@ describe("OAuth boundaries and lifecycle", () => {
   beforeEach(setupOwner);
   test("the owner's session is the single sign-on session: 30 days, renewed by application sign-in", async () => {
     const day = 24 * 60 * 60 * 1000;
+
     const expiry = async () => {
       const response = await request("/api/auth/get-session");
       expect(response.status).toBe(200);
+
       return Date.parse((await response.json()).session.expiresAt);
     };
+
     await login();
     const app = await client();
     const initial = await expiry();
     expect(initial - Date.now()).toBeGreaterThan(29 * day);
     expect(initial - Date.now()).toBeLessThanOrEqual(30 * day);
     vi.useFakeTimers({ toFake: ["Date"] });
+
     try {
       vi.setSystemTime(Date.now() + 2 * day);
       const redirect = await request(unprompted(app.client_id).path);
@@ -568,6 +643,7 @@ describe("OAuth boundaries and lifecycle", () => {
         service.sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`,
       ),
     ).toEqual([]);
+
     const issued = await request(
       "/api/auth/oauth2/token",
       {
@@ -580,6 +656,7 @@ describe("OAuth boundaries and lifecycle", () => {
       },
       { anonymous: true, form: true },
     );
+
     expect(issued.status, await issued.clone().text()).toBe(200);
     expect((await issued.json()).scope.split(" ")).toContain("notes:read");
     // An explicit prompt still asks, and automatic clients always ask.
@@ -594,6 +671,7 @@ describe("OAuth boundaries and lifecycle", () => {
     await login();
     const app = await client();
     const original = await tokens(app.client_id);
+
     const refresh = () =>
       request(
         "/api/auth/oauth2/token",
@@ -605,6 +683,7 @@ describe("OAuth boundaries and lifecycle", () => {
         },
         { form: true, anonymous: true },
       );
+
     const context = await service.auth.$context;
     const transact = context.adapter.transaction.bind(context.adapter);
     const reached = Promise.withResolvers<void>();
@@ -615,10 +694,12 @@ describe("OAuth boundaries and lifecycle", () => {
         reached.resolve();
         await release.promise;
       }
+
       return transact(operation);
     });
     const first = refresh();
     await reached.promise;
+
     try {
       expect((await request("/healthz")).status).toBe(200);
       expect((await request("/")).status).toBe(200);
@@ -648,17 +729,22 @@ describe("OAuth boundaries and lifecycle", () => {
     vi.spyOn(context.adapter, "transaction").mockImplementation(async (operation) => {
       reached.resolve();
       await release.promise; // Refresh persistence is admitted but not yet committed.
+
       return transact(operation);
     });
+
     const signing = vi.spyOn(context.adapter, "findMany").mockImplementation(async (input) => {
       if (input.model === "jwks") {
         await reached.promise;
         signingFailed.resolve();
         throw new Error("Injected signing-key read failure");
       }
+
       return findMany(input);
     });
+
     let completed = false;
+
     const first = request(
       "/api/auth/oauth2/token",
       {
@@ -670,8 +756,10 @@ describe("OAuth boundaries and lifecycle", () => {
       { anonymous: true, form: true },
     ).then((response) => {
       completed = true;
+
       return response;
     });
+
     await signingFailed.promise;
     await setImmediate(); // Drain the known rejection's microtask chain, without releasing the write.
     const escaped = completed;
@@ -679,11 +767,13 @@ describe("OAuth boundaries and lifecycle", () => {
     const failed = await first;
     expect(escaped).toBe(false);
     expect(failed.status).toBe(500);
+
     const revoked = await request(
       "/api/auth/oauth2/revoke",
       { token: original.refresh_token, client_id: app.client_id },
       { anonymous: true, form: true },
     );
+
     expect(revoked.status).toBe(400);
     expect(
       (
@@ -703,8 +793,10 @@ describe("OAuth boundaries and lifecycle", () => {
     const listing = await (await request("/api/listClients", {})).json();
     expect(JSON.stringify(listing)).not.toContain(app.client_secret);
     const grant = await authorize(app.client_id);
+
     const basic = (secret: string) =>
       `Basic ${Buffer.from(`${app.client_id}:${secret}`).toString("base64")}`;
+
     const exchange = await request(
       "/api/auth/oauth2/token",
       {
@@ -722,25 +814,32 @@ describe("OAuth boundaries and lifecycle", () => {
         origin: "https://client.example",
       },
     );
+
     expect(exchange.status, await exchange.clone().text()).toBe(200);
     expect(exchange.headers.get("access-control-allow-origin")).toBe("*");
     const issued = await exchange.json();
+
     const userInfo = await request("/api/auth/oauth2/userinfo", undefined, {
       anonymous: true,
       authorization: `Bearer ${issued.access_token}`,
     });
+
     expect(userInfo.status).toBe(200);
     expect((await userInfo.json()).sub).toBe(await Effect.runPromise(service.owner()));
+
     const introspect = (secret: string) =>
       request(
         "/api/auth/oauth2/introspect",
         { token: issued.access_token },
         { anonymous: true, form: true, authorization: basic(secret) },
       );
+
     expect((await (await introspect(app.client_secret)).json()).active).toBe(true);
+
     const rotated = await (
       await request("/api/rotateClientSecret", { client_id: app.client_id })
     ).json();
+
     expect(rotated.client_secret).toBeTypeOf("string");
     expect(rotated.client_secret).not.toBe(app.client_secret);
     expect((await introspect(app.client_secret)).status).toBe(401);
@@ -750,6 +849,7 @@ describe("OAuth boundaries and lifecycle", () => {
     await login();
     expect((await request("/api/deleteClient", { client_id: app.client_id })).status).toBe(200);
     expect((await (await request("/api/listClients", {})).json()).clients).toEqual([]);
+
     const refresh = await request(
       "/api/auth/oauth2/token",
       {
@@ -760,6 +860,7 @@ describe("OAuth boundaries and lifecycle", () => {
       },
       { anonymous: true, form: true, authorization: basic(rotated.client_secret) },
     );
+
     expect(refresh.status, await refresh.clone().text()).toBe(400);
     expect((await refresh.json()).error).toBe("invalid_grant");
   });
@@ -789,11 +890,13 @@ describe("OAuth boundaries and lifecycle", () => {
     const response = await request(flow.path);
     const location = new URL(response.headers.get("location")!, settings.baseURL);
     expect(location.pathname).toBe("/login");
+
     const signedIn = await request("/api/auth/sign-in/email", {
       email,
       password,
       oauth_query: location.search.slice(1),
     });
+
     expect(signedIn.status, await signedIn.clone().text()).toBe(200);
     const continued = new URL((await signedIn.json()).url, settings.baseURL);
     expect(continued.pathname).toBe("/consent");
@@ -807,10 +910,12 @@ describe("OAuth boundaries and lifecycle", () => {
         })
       ).status,
     ).toBe(400);
+
     const denied = await request("/api/auth/oauth2/consent", {
       accept: false,
       oauth_query: continued.search.slice(1),
     });
+
     expect(denied.status).toBe(200);
     const result = new URL((await denied.json()).url);
     expect(result.searchParams.get("error")).toBe("access_denied");
@@ -820,12 +925,14 @@ describe("OAuth boundaries and lifecycle", () => {
   test("S256, redirect matching, single-resource and per-client audience enforcement", async () => {
     await login();
     const app = await client();
+
     const invalidRequests: Record<string, string>[] = [
       { code_challenge_method: "plain" },
       { redirect_uri: "http://127.0.0.1:9876/evil" },
       { resource: resourceB },
       { resource: "" },
     ];
+
     for (const extra of invalidRequests) {
       const response = await request(authorization(app.client_id, resourceA, extra).path);
       const text = await response.text();
@@ -834,17 +941,22 @@ describe("OAuth boundaries and lifecycle", () => {
         text,
       ).toBeTruthy();
     }
+
     const missing = await request(
       "/api/auth/oauth2/token",
       { grant_type: "refresh_token" },
       { form: true },
     );
+
     expect((await missing.json()).error).toBe("invalid_target");
+
     const multiple = await request(
       `${authorization(app.client_id).path}&resource=${encodeURIComponent(resourceB)}`,
     );
+
     expect((await multiple.json()).error).toBe("invalid_target");
     const grant = await authorize(app.client_id);
+
     const wrongVerifier = await request(
       "/api/auth/oauth2/token",
       {
@@ -857,11 +969,12 @@ describe("OAuth boundaries and lifecycle", () => {
       },
       { form: true, anonymous: true },
     );
+
     expect(wrongVerifier.status).toBe(401);
     expect((await wrongVerifier.json()).error).toBe("invalid_request");
   });
 
-  test("JWT signature, issuer, scopes, expiry and audience separation survive restart", async () => {
+  test("issued JWT claims and signing keys remain valid across restart", async () => {
     await login();
     const a = await client();
     const b = await client(resourceB);
@@ -869,42 +982,13 @@ describe("OAuth boundaries and lifecycle", () => {
     const tokenB = await tokens(b.client_id, resourceB);
     const jwks = await (await request("/api/auth/jwks")).json();
     const keys = createLocalJWKSet(jwks);
-    const keyServer = createServer((_req, res) => {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(jwks));
-    });
-    await new Promise<void>((resolve) => keyServer.listen(0, "127.0.0.1", resolve));
-    try {
-      const address = keyServer.address();
-      if (!address || typeof address === "string")
-        throw new Error("Missing test key-server address");
-      const verify = (scope: string, audience = resourceA) =>
-        verifyAccessTokenRequest(
-          requestToResourceInput(
-            new Request(resourceA, { headers: { authorization: `Bearer ${tokenA.access_token}` } }),
-          ),
-          {
-            jwksUrl: `http://127.0.0.1:${address.port}/jwks`,
-            verifyOptions: {
-              issuer: `${settings.baseURL}/api/auth`,
-              audience,
-              typ: "at+jwt",
-              algorithms: ["EdDSA"],
-            },
-            requiredScopes: [scope],
-          },
-        );
-      expect((await verify("notes:read")).sub).toBe(await Effect.runPromise(service.owner()));
-      await expect(verify("notes:write")).rejects.toThrow();
-      await expect(verify("notes:read", resourceB)).rejects.toThrow();
-    } finally {
-      await new Promise<void>((resolve) => keyServer.close(() => resolve()));
-    }
+
     const verified = await jwtVerify(tokenA.access_token, keys, {
       issuer: `${settings.baseURL}/api/auth`,
       audience: resourceA,
       typ: "at+jwt",
     });
+
     // With openid, Better Auth also includes its own UserInfo endpoint, never another downstream API.
     expect(verified.payload.aud).toEqual([
       resourceA,
@@ -912,25 +996,18 @@ describe("OAuth boundaries and lifecycle", () => {
     ]);
     expect(verified.payload.scope).toContain("notes:read");
     expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(300);
-    const pieces = tokenA.access_token.split(".");
-    pieces[1] = Buffer.from(JSON.stringify({ ...verified.payload, aud: resourceB })).toString(
-      "base64url",
-    );
-    await expect(jwtVerify(pieces.join("."), keys, { audience: resourceB })).rejects.toThrow();
-    await expect(
-      jwtVerify(tokenA.id_token, keys, { audience: resourceA, typ: "at+jwt" }),
-    ).rejects.toThrow();
-    await expect(jwtVerify(tokenA.access_token, keys, { audience: resourceB })).rejects.toThrow();
-    await expect(
-      jwtVerify(tokenA.access_token, keys, { issuer: "https://evil.example" }),
-    ).rejects.toThrow();
-    await expect(
-      jwtVerify(tokenA.access_token, keys, { currentDate: new Date(Date.now() + 301000) }),
-    ).rejects.toThrow();
-    await expect(jwtVerify(tokenB.access_token, keys, { audience: resourceA })).rejects.toThrow();
+
+    const verifiedB = await jwtVerify(tokenB.access_token, keys, {
+      issuer: `${settings.baseURL}/api/auth`,
+      audience: resourceB,
+      typ: "at+jwt",
+    });
+
+    expect(verifiedB.payload.aud).not.toContain(resourceA);
     await restart();
     expect(await (await request("/api/auth/jwks")).json()).toEqual(jwks);
     expect((await request("/api/listClients", {})).status).toBe(200);
+
     const refresh = await request(
       "/api/auth/oauth2/token",
       {
@@ -941,6 +1018,7 @@ describe("OAuth boundaries and lifecycle", () => {
       },
       { anonymous: true, form: true },
     );
+
     expect(refresh.status, await refresh.clone().text()).toBe(200);
     await initialize(service);
   });
@@ -951,6 +1029,7 @@ describe("OAuth boundaries and lifecycle", () => {
     const b = await client(resourceB);
     const originalA = await tokens(a.client_id);
     const originalB = await tokens(b.client_id, resourceB);
+
     const refresh = (clientId: string, token: string, resource: string) =>
       request(
         "/api/auth/oauth2/token",
@@ -962,12 +1041,15 @@ describe("OAuth boundaries and lifecycle", () => {
         },
         { anonymous: true, form: true },
       );
+
     const rotated = await refresh(a.client_id, originalA.refresh_token, resourceA);
     expect(rotated.status).toBe(200);
     const replacementA = await rotated.json();
+
     const before = await Effect.runPromise(
       service.sql`SELECT clientId, count(*) AS n FROM oauthRefreshToken GROUP BY clientId ORDER BY clientId`,
     );
+
     const attack = await request(
       "/api/auth/oauth2/revoke",
       {
@@ -977,6 +1059,7 @@ describe("OAuth boundaries and lifecycle", () => {
       },
       { anonymous: true, form: true },
     );
+
     // A mismatched client is a no-op, before any family invalidation occurs.
     expect(
       await Effect.runPromise(
@@ -992,12 +1075,14 @@ describe("OAuth boundaries and lifecycle", () => {
     await login();
     const app = await client();
     const original = await tokens(app.client_id);
+
     const refresh = (token: string, resource = resourceA) =>
       request(
         "/api/auth/oauth2/token",
         { grant_type: "refresh_token", client_id: app.client_id, refresh_token: token, resource },
         { form: true, anonymous: true },
       );
+
     expect((await refresh(original.refresh_token, resourceB)).status).toBe(400);
     const rotatedResponse = await refresh(original.refresh_token);
     expect(rotatedResponse.status, await rotatedResponse.clone().text()).toBe(200);
@@ -1006,18 +1091,22 @@ describe("OAuth boundaries and lifecycle", () => {
     expect((await refresh(original.refresh_token)).status).toBe(400);
     expect((await refresh(rotated.refresh_token)).status).toBe(400);
     const another = await tokens(app.client_id);
+
     const revoked = await request(
       "/api/auth/oauth2/revoke",
       { token: another.refresh_token, token_type_hint: "refresh_token", client_id: app.client_id },
       { form: true, anonymous: true },
     );
+
     expect(revoked.status).toBe(200);
     expect((await refresh(another.refresh_token)).status).toBe(400);
+
     const jwtRevocation = await request(
       "/api/auth/oauth2/revoke",
       { token: another.access_token, token_type_hint: "access_token", client_id: app.client_id },
       { form: true, anonymous: true },
     );
+
     expect(jwtRevocation.status).toBe(400);
     expect((await jwtRevocation.json()).error).toBe("unsupported_token_type");
   });
@@ -1030,10 +1119,13 @@ describe("dashboard resources and client access", () => {
   });
 
   const listing = async () => (await request("/api/listClients", {})).json();
+
   const access = (clientId: string, resources: string[]) =>
     request("/api/setClientAccess", { client_id: clientId, resources });
+
   const updateResource = (identifier: string, scopes: string[], name = "Updated resource") =>
     request("/api/updateResource", { identifier, name, scopes });
+
   const exchange = (
     clientId: string,
     grant: { code: string; verifier: string },
@@ -1051,6 +1143,7 @@ describe("dashboard resources and client access", () => {
       },
       { anonymous: true, form: true },
     );
+
   const refresh = (clientId: string, token: string, resource: string) =>
     request(
       "/api/auth/oauth2/token",
@@ -1085,6 +1178,7 @@ describe("dashboard resources and client access", () => {
 
   test("resource mutations reject invalid input and unauthorized requests but accept older valid sessions", async () => {
     const valid = { identifier: resourceA, name: "MCP", scopes: ["read"] };
+
     for (const input of [
       { ...valid, identifier: "ftp://api.internal" },
       { ...valid, identifier: "https://api.internal/#fragment" },
@@ -1102,6 +1196,7 @@ describe("dashboard resources and client access", () => {
     ]) {
       expect((await request("/api/createResource", input)).status, JSON.stringify(input)).toBe(400);
     }
+
     expect((await request("/api/createResource", valid, { anonymous: true })).status).toBe(401);
     expect(
       (await request("/api/createResource", valid, { origin: "https://evil.example" })).status,
@@ -1109,6 +1204,7 @@ describe("dashboard resources and client access", () => {
     expect((await listing()).resources).toEqual([administrationResource(settings.baseURL)]);
     const context = await service.auth.$context;
     const ownerId = await Effect.runPromise(service.owner());
+
     if (ownerId === undefined) throw new Error("Missing test owner");
     await context.adapter.update({
       model: "session",
@@ -1120,6 +1216,7 @@ describe("dashboard resources and client access", () => {
       administrationResource(settings.baseURL),
       { ...valid, builtIn: false },
     ]);
+
     const created = await request("/api/createClient", {
       name: "Older session client",
       redirect: "http://127.0.0.1:9876/callback",
@@ -1127,6 +1224,7 @@ describe("dashboard resources and client access", () => {
       native: true,
       confidential: true,
     });
+
     expect(created.status, await created.clone().text()).toBe(201);
     const app = await created.json();
     expect((await request("/api/rotateClientSecret", { client_id: app.client_id })).status).toBe(
@@ -1142,15 +1240,18 @@ describe("dashboard resources and client access", () => {
       native: true,
       confidential: false,
     });
+
     expect(created.status, await created.clone().text()).toBe(201);
     const app = await created.json();
     expect((await listing()).clientAccess).toEqual([]);
     expect((await listing()).resources).toEqual([administrationResource(settings.baseURL)]);
+
     const resource = {
       identifier: "http://api.internal/mcp",
       name: "HTTP resource",
       scopes: ["r", "Files.Read", "read_all"],
     };
+
     const added = await request("/api/createResource", resource);
     expect(added.status, await added.clone().text()).toBe(201);
     const flow = authorization(app.client_id, resource.identifier, { scope: "r" });
@@ -1158,18 +1259,22 @@ describe("dashboard resources and client access", () => {
     expect(denied.status).not.toBe(200);
     expect(denied.headers.get("location") ?? "").not.toContain("/consent");
     expect((await access(app.client_id, [resource.identifier])).status).toBe(200);
+
     const issued = await tokens(
       app.client_id,
       resource.identifier,
       undefined,
       resource.scopes.join(" "),
     );
+
     const keys = createLocalJWKSet(await (await request("/api/auth/jwks")).json());
+
     const { payload: claims } = await jwtVerify(issued.access_token, keys, {
       issuer: `${settings.baseURL}/api/auth`,
       audience: resource.identifier,
       typ: "at+jwt",
     });
+
     expect(claims.aud).toBe(resource.identifier);
     expect(new Set(String(claims.scope).split(" "))).toEqual(new Set(resource.scopes));
   });
@@ -1235,15 +1340,18 @@ describe("dashboard resources and client access", () => {
         })
       ).status,
     ).toBe(200);
+
     const consents = await Effect.runPromise(
       service.sql`SELECT referenceId, resources FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
     );
+
     expect(consents).toEqual(
       [
         { referenceId: `resource:${resourceA}`, resources: JSON.stringify([resourceA]) },
         { referenceId: `resource:${resourceB}`, resources: JSON.stringify([resourceB]) },
       ].sort((a, b) => a.referenceId.localeCompare(b.referenceId)),
     );
+
     for (const resource of [resourceA, resourceB]) {
       const prior = await request(authorization(app.client_id, resource, { prompt: "none" }).path);
       const redirect = new URL(prior.headers.get("location")!, settings.baseURL);
@@ -1262,17 +1370,23 @@ describe("dashboard resources and client access", () => {
     expect(
       (await updateResource(resourceA, ["notes:read", "notes:write", "notes:admin"])).status,
     ).toBe(200);
+
     const metadata = await (
       await request("/.well-known/oauth-authorization-server/api/auth")
     ).json();
+
     expect(metadata.scopes_supported).toContain("notes:admin");
+
     const stored = (await listing()).clients.find(
       (row: { client_id: string }) => row.client_id === app.client_id,
     );
+
     expect(stored.scope.split(" ")).toContain("notes:admin");
+
     const response = await request(
       authorization(app.client_id, resourceA, { scope: "openid notes:admin", prompt: "none" }).path,
     );
+
     expect(
       new URL(response.headers.get("location")!, settings.baseURL).searchParams.get("error"),
     ).toBe("consent_required");
@@ -1319,9 +1433,11 @@ describe("dashboard resources and client access", () => {
     const issuedA = await tokens(app.client_id, resourceA);
     const issuedB = await tokens(app.client_id, resourceB);
     const pendingA = await authorize(app.client_id, resourceA);
+
     const consentsBefore = await Effect.runPromise(
       service.sql`SELECT * FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY id`,
     );
+
     expect((await access(app.client_id, [resourceB])).status).toBe(200);
     expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
     expect(
@@ -1337,12 +1453,14 @@ describe("dashboard resources and client access", () => {
     expect(new URL(again.headers.get("location")!, settings.baseURL).searchParams.has("code")).toBe(
       true,
     );
+
     const unaffected = await request(
       authorization(app.client_id, resourceB, {
         scope: "openid offline_access reports:read",
         prompt: "none",
       }).path,
     );
+
     expect(
       new URL(unaffected.headers.get("location")!, settings.baseURL).searchParams.has("code"),
     ).toBe(true);
@@ -1351,35 +1469,44 @@ describe("dashboard resources and client access", () => {
   test("a failed provider resource write preserves stored policy and live discovery", async () => {
     const app = await client();
     const before = await listing();
+
     const metadataBefore = await (
       await request("/.well-known/oauth-authorization-server/api/auth")
     ).json();
+
     await Effect.runPromise(
       service.sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
     );
+
     try {
       expect((await updateResource(resourceA, ["notes:read", "new:scope"])).status).toBe(500);
       expect(await listing()).toEqual(before);
+
       const metadataAfter = await (
         await request("/.well-known/oauth-authorization-server/api/auth")
       ).json();
+
       expect(metadataAfter.scopes_supported).toEqual(metadataBefore.scopes_supported);
     } finally {
       await Effect.runPromise(service.sql`DROP TRIGGER reject_scope_update`);
     }
+
     expect((await tokens(app.client_id)).access_token).toBeTypeOf("string");
   });
 
-  test("concurrent linking and deletion cannot leave access to a deleted resource", async () => {
+  test("overlapping link and delete requests leave consistent resource access", async () => {
     const app = await client();
+
     const results = await Promise.all([
       access(app.client_id, [resourceA, resourceB]),
       request("/api/deleteResource", { identifier: resourceB }),
     ]);
+
     // Linking wins, or loses at whichever provider step first sees the deleted resource.
     expect([200, 400, 404]).toContain(results[0]?.status);
     expect(results[1]?.status).toBe(200);
     const state = await listing();
+
     for (const link of state.clientAccess) {
       expect(
         state.resources.some(

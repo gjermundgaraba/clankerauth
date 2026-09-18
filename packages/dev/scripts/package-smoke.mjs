@@ -8,10 +8,15 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
+
 const root = fileURLToPath(new URL("../", import.meta.url));
+
 const serverRequire = createRequire(new URL("../../../apps/server/package.json", import.meta.url));
+
 const { name, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+
 const directory = await mkdtemp(join(tmpdir(), "clankerauth-dev-install-"));
+
 try {
   await execute("npm", ["pack", "--pack-destination", directory], { cwd: root });
   const [tarball] = await readdir(directory);
@@ -37,6 +42,7 @@ try {
   assert.deepEqual(manifest.dependencies ?? {}, {});
   const notices = await readFile(join(installed, "dist/THIRD_PARTY_NOTICES.txt"), "utf8");
   const headings = new Set(notices.split("\n---\n\n").map((section) => section.split("\n")[0]));
+
   for (const provider of ["@better-auth/api-key", "@better-auth/oauth-provider"]) {
     // Providers export their dist entry, but not their package manifest.
     const manifestPath = join(dirname(serverRequire.resolve(provider)), "../package.json");
@@ -44,15 +50,19 @@ try {
     const heading = `${provider}@${version}`;
     assert.ok(headings.has(heading), `Missing bundled dependency notice: ${heading}`);
   }
+
   const test = (await readFile(join(root, "tests/lifecycle.test.mjs"), "utf8")).replace(
     '"../dist/index.mjs"',
     JSON.stringify(name),
   );
+
   await writeFile(join(directory, "installed.test.mjs"), test);
+
   const result = await execute(process.execPath, ["--test", "installed.test.mjs"], {
     cwd: directory,
     timeout: 60000,
   });
+
   process.stdout.write(result.stdout);
 } finally {
   await rm(directory, { recursive: true, force: true });

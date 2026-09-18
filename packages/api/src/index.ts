@@ -11,6 +11,7 @@ export class BadRequest extends Schema.TaggedError<BadRequest>()(
   },
   { httpApiStatus: 400 },
 ) {}
+
 export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   "Unauthorized",
   {
@@ -18,6 +19,7 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   },
   { httpApiStatus: 401 },
 ) {}
+
 export class Forbidden extends Schema.TaggedError<Forbidden>()(
   "Forbidden",
   {
@@ -25,6 +27,7 @@ export class Forbidden extends Schema.TaggedError<Forbidden>()(
   },
   { httpApiStatus: 403 },
 ) {}
+
 export class NotFound extends Schema.TaggedError<NotFound>()(
   "NotFound",
   {
@@ -32,6 +35,7 @@ export class NotFound extends Schema.TaggedError<NotFound>()(
   },
   { httpApiStatus: 404 },
 ) {}
+
 export class Conflict extends Schema.TaggedError<Conflict>()(
   "Conflict",
   {
@@ -39,6 +43,7 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
   },
   { httpApiStatus: 409 },
 ) {}
+
 export class TooManyRequests extends Schema.TaggedError<TooManyRequests>()(
   "TooManyRequests",
   {
@@ -46,6 +51,7 @@ export class TooManyRequests extends Schema.TaggedError<TooManyRequests>()(
   },
   { httpApiStatus: 429 },
 ) {}
+
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   {
@@ -53,6 +59,7 @@ export class InternalServerError extends Schema.TaggedError<InternalServerError>
   },
   { httpApiStatus: 500 },
 ) {}
+
 export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
   "ServiceUnavailable",
   {
@@ -73,6 +80,7 @@ export const errors = [
 ];
 
 export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
+
 export const ClientInput = Schema.Struct({
   name: Schema.String,
   redirect: Schema.String,
@@ -80,6 +88,7 @@ export const ClientInput = Schema.Struct({
   confidential: Schema.Boolean,
   native: Schema.Boolean,
 });
+
 export const ClientId = Schema.Struct({ client_id: Schema.String });
 
 export const ClientBlockInput = Schema.Struct({
@@ -97,42 +106,53 @@ export const Client = Schema.Struct({
   scope: Schema.optional(Schema.String),
   grant_types: Schema.optional(Schema.Array(Schema.String)),
 });
+
 export const ClientCredentials = Client.pipe(
   Schema.fieldsAssign({
     client_secret: Schema.optional(Schema.String),
     client_secret_expires_at: Schema.optional(Schema.Number),
   }),
 );
+
 export const Resource = Schema.Struct({
   identifier: Schema.String,
   name: Schema.String,
   scopes: Schema.Array(Schema.String),
 });
+
 export const ResourceSummary = Resource.pipe(Schema.fieldsAssign({ builtIn: Schema.Boolean }));
+
 export const ResourceId = Schema.Struct({ identifier: Schema.String });
+
 export const ClientAccess = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.String,
 });
+
 export const ClientAccessInput = Schema.Struct({
   client_id: Schema.String,
   resources: Schema.Array(Schema.String),
 });
+
 export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(ClientAccess) });
 
 export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
+
 export const ApiKeyInput = Schema.Struct({
   name: Schema.String,
   permissions: KeyPermissions,
   expiresAt: Schema.NullOr(Schema.String),
 });
+
 export const ApiKeyId = Schema.Struct({ keyId: Schema.String });
+
 export const ApiKeyUpdate = Schema.Struct({
   keyId: Schema.String,
   name: Schema.optional(Schema.String),
   permissions: Schema.optional(KeyPermissions),
   enabled: Schema.optional(Schema.Boolean),
 });
+
 export const MachineKey = Schema.Struct({
   keyId: Schema.String,
   name: Schema.String,
@@ -268,4 +288,5 @@ export const Administration = ActionGroup.make(
 );
 
 export const Http = ActionHttp.make({ apiPath: "/api" }, Administration, IssuerActions);
+
 export const Api = Http.api;

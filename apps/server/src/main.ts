@@ -1,51 +1,46 @@
 import { Effect } from "effect";
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
+import { HttpRouter } from "effect/unstable/http";
 import { application } from "./app.ts";
 import { initialize, openAuth } from "./auth.ts";
 import { loadSettings } from "./config.ts";
-import { createNodeServer, nodeListener } from "./node-http.ts";
+import { createNodeServer } from "./node-http.ts";
 
 process.umask(0o077);
+
 const program = Effect.scoped(
   Effect.gen(function* () {
     const settings = yield* loadSettings;
+
     const service = yield* Effect.acquireRelease(
       Effect.tryPromise(() => openAuth(settings)),
       (s) => Effect.promise(() => s.close()),
     );
-    yield* Effect.tryPromise(() => initialize(service));
-    const handler = yield* Effect.acquireRelease(
-      Effect.sync(() => application(service)),
-      (app) => Effect.promise(() => app.dispose()),
+
+    // Provider migrations cannot be cancelled; settle before database finalization.
+    yield* Effect.tryPromise(() => initialize(service)).pipe(Effect.uninterruptible);
+
+    const nodeServer = createNodeServer();
+
+    const server = yield* NodeHttpServer.make(() => nodeServer, {
+      port: settings.port,
+      host: settings.host,
+      // Request scopes interrupt immediately rather than waiting for response delivery.
+      disablePreemptiveShutdown: true,
+    });
+
+    const handler = yield* HttpRouter.toHttpEffect(application(service));
+    yield* server.serve(handler);
+    // Stop admission first, without waiting for open responses before interrupting them.
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        nodeServer.close();
+        nodeServer.closeAllConnections();
+      }),
     );
-    const server = createNodeServer(nodeListener(handler, settings.baseURL));
-    yield* Effect.acquireRelease(
-      Effect.tryPromise(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(settings.port, settings.host, resolve);
-          }),
-      ),
-      () =>
-        Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              server.close(() => resolve());
-              server.closeIdleConnections();
-            }),
-        ),
-    );
-    console.log("Clanker Auth ready");
-    yield* Effect.promise(
-      () =>
-        new Promise<void>((resolve) => {
-          process.once("SIGTERM", resolve);
-          process.once("SIGINT", resolve);
-        }),
-    );
+    yield* Effect.logInfo("Clanker Auth ready");
+    yield* Effect.never;
   }),
 );
-await Effect.runPromise(program).catch((error: unknown) => {
-  console.error("Startup failed:", error);
-  process.exitCode = 1;
-});
+
+NodeRuntime.runMain(program);

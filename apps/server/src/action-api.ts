@@ -1,5 +1,4 @@
-import { Effect, Layer } from "effect";
-import { NodeHttpServer } from "@effect/platform-node";
+import { Effect, Layer, Match } from "effect";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { McpProtocol } from "effect/unstable/ai";
@@ -20,9 +19,10 @@ import { mcpAuthentication } from "./mcp-auth.ts";
 import { mcpResource, mcpScope } from "./resources.ts";
 import type { Service } from "./auth.ts";
 
-export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]) {
+export function actionRoutes(service: Service, mcpAllowedOrigins: readonly string[]) {
   const admin = administration(service);
   const keys = machineKeys(service);
+
   const owner = Administration.implement({
     listClients: admin.list,
     createClient: admin.create,
@@ -39,6 +39,7 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
     updateApiKey: keys.update,
     deleteApiKey: keys.delete,
   });
+
   const issuer = IssuerActions.implement({
     setupStatus: () =>
       service.owner().pipe(
@@ -48,22 +49,28 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
     setupOwner: (input) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+
         if (request.headers.origin !== service.settings.baseURL)
           return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
+
         return yield* admin.setup(input);
       }),
     verifyApiKey: ({ resource }) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+
         return yield* keys.verify(new Headers(request.headers), resource);
       }),
   });
+
   const discovery = Authentication.protectedResource({
     resource: mcpResource(service.settings.baseURL),
     authorizationServers: [`${service.settings.baseURL}/api/auth`],
     scopesSupported: [mcpScope, "offline_access"],
   });
+
   const ownerSession = ownerAuthentication(service).layer;
+
   // Owner administration and the document need an owner session; issuer actions
   // have their own access rules and must work before anyone has signed in.
   const httpRoutes = Layer.mergeAll(
@@ -75,13 +82,13 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
     ).pipe(Layer.provide(ownerSession)),
     Http.layer(issuer),
   );
+
   const mcpRoutes = ActionMcp.layer(
     {
       name: "clankerauth-admin",
       version: "0.3.0",
       path: "/mcp",
-      // Unary Streamable HTTP works through the buffered Node bridge. Historical
-      // 2024 two-endpoint SSE and long-lived streaming are not supported here.
+      // Keep the existing protocol allowlist; native streaming does not expand it.
       protocols: [
         McpProtocol.v2026_07_28,
         McpProtocol.v2025_11_25,
@@ -100,24 +107,31 @@ export function actionApi(service: Service, mcpAllowedOrigins: readonly string[]
         errors,
         authenticate: mcpAuthentication(service),
         headers: (error) =>
-          error._tag === "Unauthorized" || error._tag === "Forbidden"
-            ? {
-                "www-authenticate": discovery.challenge({
-                  error:
-                    error._tag === "Forbidden"
-                      ? "insufficient_scope"
-                      : error.error === "OAuth access token required"
-                        ? undefined
-                        : "invalid_token",
-                  scope: mcpScope,
-                }),
-              }
-            : {},
+          Match.value(error).pipe(
+            Match.tag("Unauthorized", (unauthorized) => ({
+              "www-authenticate": discovery.challenge({
+                error:
+                  unauthorized.error === "OAuth access token required"
+                    ? undefined
+                    : "invalid_token",
+                scope: mcpScope,
+              }),
+            })),
+            Match.tag("Forbidden", () => ({
+              "www-authenticate": discovery.challenge({
+                error: "insufficient_scope",
+                scope: mcpScope,
+              }),
+            })),
+            Match.orElse(() => ({})),
+          ),
       }).layer,
     ),
   );
-  const routes = Layer.mergeAll(httpRoutes, mcpRoutes, discovery.layer).pipe(
-    Layer.provide(NodeHttpServer.layerHttpServices),
+
+  // Provider SDK calls do not support interruption. Finish admitted action work
+  // before its request scope releases sessions or permits database shutdown.
+  return Layer.mergeAll(httpRoutes, mcpRoutes, discovery.layer).pipe(
+    Layer.provide(HttpRouter.middleware((effect) => Effect.uninterruptible(effect)).layer),
   );
-  return HttpRouter.toWebHandler(routes, { disableLogger: true });
 }

@@ -13,6 +13,7 @@ import { createServer as createViteServer } from "vite";
 
 // Run the built application against a disposable database and a real foreign-origin browser.
 const directory = await mkdtemp(join(tmpdir(), "clankerauth-browser-oauth-"));
+
 const fixture = await createViteServer({
   configFile: false,
   root: fileURLToPath(new URL("./", import.meta.url)),
@@ -25,6 +26,7 @@ const fixture = await createViteServer({
           if (!["/", "/callback"].includes(new URL(request.url, "http://fixture").pathname)) {
             return next();
           }
+
           response.setHeader("content-type", "text/html");
           response.end(
             '<!doctype html><title>MCP browser test</title><script type="module" src="/browser-oauth-client.js"></script>',
@@ -34,15 +36,25 @@ const fixture = await createViteServer({
     },
   ],
 });
+
 await fixture.listen();
+
 const clientOrigin = `http://127.0.0.1:${fixture.httpServer.address().port}`;
+
 const reservation = createServer();
+
 reservation.listen(0, "127.0.0.1");
+
 await once(reservation, "listening");
+
 const port = reservation.address().port;
+
 await new Promise((done) => reservation.close(done));
+
 const issuer = `http://127.0.0.1:${port}`;
+
 const password = randomBytes(24).toString("hex");
+
 const child = spawn(
   process.execPath,
   [fileURLToPath(new URL("../dist/main.mjs", import.meta.url))],
@@ -60,32 +72,44 @@ const child = spawn(
     stdio: ["ignore", "pipe", "pipe"],
   },
 );
+
 let output = "";
+
 child.stdout.on("data", (chunk) => {
   output += chunk;
 });
+
 child.stderr.on("data", (chunk) => {
   output += chunk;
 });
+
 let browser;
+
 try {
   let ready = false;
+
   for (let attempt = 0; attempt < 100; attempt++) {
     if (child.exitCode !== null) throw new Error(`Server exited during startup: ${output}`);
+
     try {
       ready = (await fetch(`${issuer}/healthz`, { signal: AbortSignal.timeout(500) })).ok;
+
       if (ready) break;
     } catch {
       // Startup readiness polling; the listener may not yet be bound.
     }
+
     await setTimeout(50);
   }
+
   assert.ok(ready, `Server did not become ready: ${output}`);
+
   const setup = await fetch(`${issuer}/api/setupOwner`, {
     method: "POST",
     headers: { origin: issuer, "content-type": "application/json" },
     body: JSON.stringify({ email: "browser@example.internal", password }),
   });
+
   assert.equal(setup.status, 201, await setup.text());
 
   browser = await chromium.launch({ headless: true });
@@ -147,11 +171,13 @@ try {
   );
 } finally {
   await browser?.close();
+
   if (child.exitCode === null && child.signalCode === null) {
     const exited = once(child, "exit");
     child.kill("SIGTERM");
     await exited;
   }
+
   await fixture.close();
   await rm(directory, { recursive: true, force: true });
 }

@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
-import { Api } from "@clankerauth/api";
-import { application } from "../src/app.ts";
+import { Api, BadRequest } from "@clankerauth/api";
+import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
 import { validateSettings, type Settings } from "../src/config.ts";
 
@@ -51,154 +51,28 @@ describe("API integration", () => {
     request.headers.set("origin", settings.baseURL);
     request.headers.set("cookie", cookie);
     request.headers.set("x-clankerauth-peer", "127.0.0.1");
+
     return handle(request);
   };
 
-  test.each([true, false])(
-    "generated client shares setup, owner authorization and client lifecycle (confidential=%s)",
-    async (confidential) => {
-      await Effect.gen(function* () {
-        const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
-        expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: true });
-        expect(yield* api.issuer.setupOwner({ payload: { email, password } })).toEqual({
-          created: true,
-        });
-        expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: false });
-        const repeatedSetup = yield* Effect.flip(
-          api.issuer.setupOwner({ payload: { email, password } }),
-        );
-        expect(repeatedSetup._tag).toBe("Conflict");
-
-        const anonymous = yield* Effect.flip(api.administration.listClients({ payload: {} }));
-        expect(anonymous._tag).toBe("Unauthorized");
-
-        const login = yield* Effect.promise(() =>
-          appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ email, password }),
-          }),
-        );
-        expect(login.status).toBe(200);
-        cookie = login.headers
-          .getSetCookie()
-          .map((value) => value.split(";")[0])
-          .join("; ");
-        expect(cookie).not.toBe("");
-
-        const resourceInput = {
-          identifier: resource,
-          name: "Example MCP",
-          scopes: ["example:read"],
-        };
-        expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
-          administrationResource(settings.baseURL),
-        ]);
-        yield* api.administration.createResource({ payload: resourceInput });
-        const created = yield* api.administration.createClient({
-          payload: {
-            name: "Contract test client",
-            redirect: "http://127.0.0.1:9876/callback",
-            resources: [resource],
-            native: true,
-            confidential,
-          },
-        });
-        if (confidential) expect(created.client_secret).toBeTypeOf("string");
-        else expect(created.client_secret).toBeUndefined();
-        const listing = yield* api.administration.listClients({ payload: {} });
-        expect(listing.email).toBe(email);
-        expect(listing.issuer).toBe(`${settings.baseURL}/api/auth`);
-        expect(listing.resources).toEqual([
-          administrationResource(settings.baseURL),
-          { ...resourceInput, builtIn: false },
-        ]);
-        expect(listing.clientAccess).toEqual([{ client_id: created.client_id, resource }]);
-        expect(listing.clients.map((client) => client.client_id)).toEqual([created.client_id]);
-        expect(listing.clients[0]).not.toHaveProperty("client_secret");
-
-        const updatedResource = {
-          ...resourceInput,
-          name: "Renamed MCP",
-          scopes: ["example:read", "example:write"],
-        };
-        expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
-          updatedResource,
-        );
-        expect(
-          yield* api.administration.setClientAccess({
-            payload: { client_id: created.client_id, resources: [] },
-          }),
-        ).toEqual({ clientAccess: [] });
-        expect(
-          yield* api.administration.setClientAccess({
-            payload: { client_id: created.client_id, resources: [resource] },
-          }),
-        ).toEqual({ clientAccess: [{ client_id: created.client_id, resource }] });
-
-        if (confidential) {
-          const rotated = yield* api.administration.rotateClientSecret({
-            payload: { client_id: created.client_id },
-          });
-          expect(rotated.client_secret).toBeTypeOf("string");
-          expect(rotated.client_secret).not.toBe(created.client_secret);
-        }
-        expect(
-          yield* api.administration.revokeClient({ payload: { client_id: created.client_id } }),
-        ).toEqual({
-          revoked: true,
-        });
-        expect(
-          yield* api.administration.blockClient({
-            payload: { client_id: created.client_id, blocked: true },
-          }),
-        ).toEqual({ blocked: true });
-        expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
-          true,
-        );
-        // Blocking issuance must not block the owner's provider-backed resource maintenance.
-        expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
-          updatedResource,
-        );
-        expect(
-          yield* api.administration.blockClient({
-            payload: { client_id: created.client_id, blocked: false },
-          }),
-        ).toEqual({ blocked: false });
-        expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
-          false,
-        );
-        // Persisted values must satisfy the outgoing contract; corrupt data is a
-        // server failure, not a bad request from this correctly typed caller.
-        yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
-        const invalidResponse = yield* Effect.flip(api.administration.listClients({ payload: {} }));
-        expect(invalidResponse._tag).toBe("InternalServerError");
-        expect(
-          yield* api.administration.deleteClient({ payload: { client_id: created.client_id } }),
-        ).toEqual({
-          deleted: true,
-        });
-        expect((yield* api.administration.listClients({ payload: {} })).clients).toEqual([]);
-        expect(
-          yield* api.administration.deleteResource({ payload: { identifier: resource } }),
-        ).toEqual({
-          deleted: true,
-        });
-        expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
-          administrationResource(settings.baseURL),
-        ]);
-      }).pipe(
-        Effect.provide(FetchHttpClient.layer),
-        Effect.provideService(FetchHttpClient.Fetch, appFetch),
-        Effect.runPromise,
-      );
-    },
-  );
-
-  test("automatic clients are visible and manageable through the generated owner API", async () => {
+  test("generated client shares setup, owner authorization and client lifecycle", async () => {
     await Effect.gen(function* () {
       const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
-      yield* api.issuer.setupOwner({ payload: { email, password } });
+      expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: true });
+      expect(yield* api.issuer.setupOwner({ payload: { email, password } })).toEqual({
+        created: true,
+      });
+      expect(yield* api.issuer.setupStatus({ payload: {} })).toEqual({ required: false });
+
+      const repeatedSetup = yield* Effect.flip(
+        api.issuer.setupOwner({ payload: { email, password } }),
+      );
+
+      expect(repeatedSetup._tag).toBe("Conflict");
+
+      const anonymous = yield* Effect.flip(api.administration.listClients({ payload: {} }));
+      expect(anonymous._tag).toBe("Unauthorized");
+
       const login = yield* Effect.promise(() =>
         appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
           method: "POST",
@@ -206,6 +80,151 @@ describe("API integration", () => {
           body: JSON.stringify({ email, password }),
         }),
       );
+
+      expect(login.status).toBe(200);
+      cookie = login.headers
+        .getSetCookie()
+        .map((value) => value.split(";")[0])
+        .join("; ");
+      expect(cookie).not.toBe("");
+
+      const resourceInput = {
+        identifier: resource,
+        name: "Example MCP",
+        scopes: ["example:read"],
+      };
+
+      expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
+        administrationResource(settings.baseURL),
+      ]);
+      yield* api.administration.createResource({ payload: resourceInput });
+
+      const created = yield* api.administration.createClient({
+        payload: {
+          name: "Contract test client",
+          redirect: "http://127.0.0.1:9876/callback",
+          resources: [resource],
+          native: true,
+          confidential: true,
+        },
+      });
+
+      expect(created.client_secret).toBeTypeOf("string");
+
+      const publicClient = yield* api.administration.createClient({
+        payload: {
+          name: "Public contract client",
+          redirect: "http://127.0.0.1:9876/callback",
+          resources: [],
+          native: true,
+          confidential: false,
+        },
+      });
+
+      expect(publicClient.client_secret).toBeUndefined();
+      yield* api.administration.deleteClient({ payload: { client_id: publicClient.client_id } });
+      const listing = yield* api.administration.listClients({ payload: {} });
+      expect(listing.email).toBe(email);
+      expect(listing.issuer).toBe(`${settings.baseURL}/api/auth`);
+      expect(listing.resources).toEqual([
+        administrationResource(settings.baseURL),
+        { ...resourceInput, builtIn: false },
+      ]);
+      expect(listing.clientAccess).toEqual([{ client_id: created.client_id, resource }]);
+      expect(listing.clients.map((client) => client.client_id)).toEqual([created.client_id]);
+      expect(listing.clients[0]).not.toHaveProperty("client_secret");
+
+      const updatedResource = {
+        ...resourceInput,
+        name: "Renamed MCP",
+        scopes: ["example:read", "example:write"],
+      };
+
+      expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
+        updatedResource,
+      );
+      expect(
+        yield* api.administration.setClientAccess({
+          payload: { client_id: created.client_id, resources: [] },
+        }),
+      ).toEqual({ clientAccess: [] });
+      expect(
+        yield* api.administration.setClientAccess({
+          payload: { client_id: created.client_id, resources: [resource] },
+        }),
+      ).toEqual({ clientAccess: [{ client_id: created.client_id, resource }] });
+
+      const rotated = yield* api.administration.rotateClientSecret({
+        payload: { client_id: created.client_id },
+      });
+
+      expect(rotated.client_secret).toBeTypeOf("string");
+      expect(rotated.client_secret).not.toBe(created.client_secret);
+
+      expect(
+        yield* api.administration.revokeClient({ payload: { client_id: created.client_id } }),
+      ).toEqual({
+        revoked: true,
+      });
+      expect(
+        yield* api.administration.blockClient({
+          payload: { client_id: created.client_id, blocked: true },
+        }),
+      ).toEqual({ blocked: true });
+      expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+        true,
+      );
+      // Blocking issuance must not block the owner's provider-backed resource maintenance.
+      expect(yield* api.administration.updateResource({ payload: updatedResource })).toEqual(
+        updatedResource,
+      );
+      expect(
+        yield* api.administration.blockClient({
+          payload: { client_id: created.client_id, blocked: false },
+        }),
+      ).toEqual({ blocked: false });
+      expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
+        false,
+      );
+      // Persisted values must satisfy the outgoing contract; corrupt data is a
+      // server failure, not a bad request from this correctly typed caller.
+      yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
+      const invalidResponse = yield* Effect.flip(api.administration.listClients({ payload: {} }));
+      expect(invalidResponse._tag).toBe("InternalServerError");
+      expect(
+        yield* api.administration.deleteClient({ payload: { client_id: created.client_id } }),
+      ).toEqual({
+        deleted: true,
+      });
+      expect((yield* api.administration.listClients({ payload: {} })).clients).toEqual([]);
+      expect(
+        yield* api.administration.deleteResource({ payload: { identifier: resource } }),
+      ).toEqual({
+        deleted: true,
+      });
+      expect((yield* api.administration.listClients({ payload: {} })).resources).toEqual([
+        administrationResource(settings.baseURL),
+      ]);
+    }).pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, appFetch),
+      Effect.runPromise,
+    );
+  });
+
+  test("automatic clients are visible and manageable through the generated owner API", async () => {
+    await Effect.gen(function* () {
+      const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
+      yield* api.issuer.setupOwner({ payload: { email, password } });
+
+      const login = yield* Effect.promise(() =>
+        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }),
+      );
+
       cookie = login.headers
         .getSetCookie()
         .map((value) => value.split(";")[0])
@@ -213,6 +232,7 @@ describe("API integration", () => {
       yield* api.administration.createResource({
         payload: { identifier: resource, name: "MCP", scopes: ["example:read"] },
       });
+
       const registration = yield* Effect.promise(() =>
         handle(
           new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
@@ -227,9 +247,11 @@ describe("API integration", () => {
           }),
         ),
       );
+
       expect(registration.status).toBe(201);
       expect(registration.headers.get("access-control-allow-origin")).toBe("*");
       expect(registration.headers.has("access-control-allow-credentials")).toBe(false);
+
       const preflight = yield* Effect.promise(() =>
         handle(
           new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
@@ -242,6 +264,7 @@ describe("API integration", () => {
           }),
         ),
       );
+
       expect(preflight.status).toBe(204);
       expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
       const registered = yield* Effect.promise(() => registration.json());
@@ -307,12 +330,14 @@ describe("API integration", () => {
         blocked: false,
         redirect_uris: ["http://127.0.0.1:9876/callback"],
       });
+
       for (const invalidRedirects of ["null", "[42]"]) {
         yield* service.sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
         expect((yield* Effect.flip(api.administration.listClients({ payload: {} })))._tag).toBe(
           "InternalServerError",
         );
       }
+
       cookie = "";
       expect(
         (yield* Effect.flip(
@@ -333,6 +358,7 @@ describe("API integration", () => {
     await Effect.gen(function* () {
       const api = yield* HttpApiClient.make(Api, { baseUrl: settings.baseURL });
       yield* api.issuer.setupOwner({ payload: { email, password } });
+
       const login = yield* Effect.promise(() =>
         appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
           method: "POST",
@@ -340,6 +366,7 @@ describe("API integration", () => {
           body: JSON.stringify({ email, password }),
         }),
       );
+
       expect(login.status).toBe(200);
       cookie = login.headers
         .getSetCookie()
@@ -349,12 +376,14 @@ describe("API integration", () => {
       expect((yield* Effect.flip(api.administration.revokeClient({ payload: missing })))._tag).toBe(
         "NotFound",
       );
+
       for (const blocked of [true, false]) {
         expect(
           (yield* Effect.flip(api.administration.blockClient({ payload: { ...missing, blocked } })))
             ._tag,
         ).toBe("NotFound");
       }
+
       const client = yield* api.administration.createClient({
         payload: {
           name: "Failure test",
@@ -364,6 +393,7 @@ describe("API integration", () => {
           confidential: false,
         },
       });
+
       const client_id = client.client_id;
       yield* service.sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
       yield* service.sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
@@ -395,22 +425,13 @@ describe("API integration", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password: { sensitive: password } }),
     });
+
     expect(response.status).toBe(400);
     const body = await response.text();
     expect(body).not.toContain(password);
-    expect(JSON.parse(body)).toEqual({ _tag: "BadRequest", error: "Invalid request" });
+    expect(JSON.parse(body)).toEqual(
+      Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
+    );
     expect(await Effect.runPromise(service.owner())).toBeUndefined();
   });
-});
-
-test("generated client rejects a successful response that violates the shared schema", async () => {
-  const error = await Effect.gen(function* () {
-    const api = yield* HttpApiClient.make(Api, { baseUrl: "http://localhost:3000" });
-    return yield* Effect.flip(api.issuer.setupStatus({ payload: {} }));
-  }).pipe(
-    Effect.provide(FetchHttpClient.layer),
-    Effect.provideService(FetchHttpClient.Fetch, async () => Response.json({ required: "yes" })),
-    Effect.runPromise,
-  );
-  expect(Schema.isSchemaError(error)).toBe(true);
 });

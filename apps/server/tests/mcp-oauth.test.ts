@@ -7,7 +7,7 @@ import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { application } from "../src/app.ts";
+import { webApplication as application } from "./web-application.ts";
 import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
 import {
   administrationResource,
@@ -17,12 +17,36 @@ import {
 } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
+
+type JsonPrimitive = string | number | boolean | null;
+
+type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+type TestRequestBody = { readonly [key: string]: JsonValue };
+
+type ClientActionPayload = {
+  client_id: string;
+  blocked?: boolean;
+};
+
+type PrivateKeyRegistration = {
+  client_name: string;
+  redirect_uris: string[];
+  token_endpoint_auth_method: string;
+  grant_types: string[];
+  response_types: string[];
+  jwks?: { keys: object[] };
+};
+
 let directory: string;
+
 let service: Service;
+
 let handle: ReturnType<typeof application>;
+
 let cookie: string;
 
-const admin = (action: string, body: unknown) =>
+const admin = (action: string, body: TestRequestBody) =>
   handle(
     new Request(`${baseURL}/api/${action}`, {
       method: "POST",
@@ -30,14 +54,16 @@ const admin = (action: string, body: unknown) =>
       body: JSON.stringify(body),
     }),
   );
+
 const mcp = (token?: string, headers: Record<string, string> = {}) =>
   handle(
     mcpRequest({
       method: "tools/list",
       url: `${baseURL}/mcp`,
-      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+      headers: token === undefined ? headers : { ...headers, authorization: `Bearer ${token}` },
     }),
   );
+
 const refresh = (client_id: string, refresh_token: string) =>
   oauthToken(handle, baseURL, {
     grant_type: "refresh_token",
@@ -61,6 +87,7 @@ beforeEach(async () => {
     email: "owner@example.internal",
     password: "test-only password123",
   });
+
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {
       method: "POST",
@@ -68,12 +95,14 @@ beforeEach(async () => {
       body: JSON.stringify({ email: "owner@example.internal", password: "test-only password123" }),
     }),
   );
+
   expect(login.status).toBe(200);
   cookie = login.headers
     .getSetCookie()
     .map((part) => part.split(";")[0])
     .join("; ");
 });
+
 afterEach(async () => {
   vi.useRealTimers();
   await handle.dispose();
@@ -96,9 +125,11 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
     scopes_supported: ["admin", "offline_access"],
     bearer_methods_supported: ["header"],
   });
+
   const discovery = await handle(
     new Request(`${baseURL}/.well-known/oauth-authorization-server/api/auth`),
   );
+
   expect(discovery.status).toBe(200);
   expect(await discovery.json()).toMatchObject({
     issuer: `${baseURL}/api/auth`,
@@ -109,6 +140,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   });
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   expect((await mcp(tokens.access_token)).status).toBe(200);
+
   // The token grants MCP access only; browser administration still requires its own session.
   const http = await handle(
     new Request(`${baseURL}/api/listClients`, {
@@ -120,6 +152,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
       body: "{}",
     }),
   );
+
   expect(http.status).toBe(401);
   await withMcpClient(
     {
@@ -139,6 +172,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
           confidential: true,
         },
       });
+
       expect(created.isError).toBe(false);
       expect(created.structuredContent).toMatchObject({
         value: { client_secret: expect.any(String) },
@@ -161,11 +195,13 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
     { authorization: "Basic invalid" },
     { authorization: "Bearer invalid" },
   ];
+
   for (const headers of rejectedHeaders) {
     const response = await mcp(undefined, headers);
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
   }
+
   const target = "https://resource.example/api";
   expect(
     (
@@ -176,21 +212,27 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
       })
     ).status,
   ).toBe(201);
+
   const created = await admin("createApiKey", {
     name: "Not an OAuth token",
     permissions: { [target]: ["read"] },
     expiresAt: null,
   });
+
   expect(created.status).toBe(201);
   expect((await mcp((await created.json()).key)).status).toBe(401);
+
   const other = await mcpOAuthGrant(handle, baseURL, cookie, {
     resource: target,
     scope: "openid offline_access read",
   });
+
   expect((await mcp(other.tokens.access_token)).status).toBe(401);
+
   const insufficient = await mcpOAuthGrant(handle, baseURL, cookie, {
     scope: "openid offline_access",
   });
+
   const denied = await mcp(insufficient.tokens.access_token);
   expect(denied.status).toBe(403);
   expect(denied.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
@@ -232,17 +274,22 @@ test.each(["block", "revoke"] as const)(
   async (operation) => {
     const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
     expect((await mcp(tokens.access_token)).status).toBe(200);
-    const response = await admin(operation === "block" ? "blockClient" : "revokeClient", {
-      client_id,
-      ...(operation === "block" ? { blocked: true } : {}),
-    });
+
+    const payload: ClientActionPayload = { client_id };
+
+    if (operation === "block") payload.blocked = true;
+
+    const response = await admin(operation === "block" ? "blockClient" : "revokeClient", payload);
+
     expect(response.status).toBe(200);
     expect((await mcp(tokens.access_token)).status).toBe(401);
     expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
+
     if (operation === "block") {
       expect((await admin("blockClient", { client_id, blocked: false })).status).toBe(200);
       expect((await mcp(tokens.access_token)).status).toBe(401);
     }
+
     const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id });
     expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
     expect((await mcp(tokens.access_token)).status).toBe(401);
@@ -276,6 +323,7 @@ test("MCP protocol and owner-identity operations do not acquire provider session
       // Connecting initializes the protocol; listing tools needs no provider credentials either.
       expect((await client.listTools()).tools.length).toBeGreaterThan(0);
       expect(createSession).not.toHaveBeenCalled();
+
       const created = await client.callTool({
         name: "createApiKey",
         arguments: {
@@ -284,24 +332,33 @@ test("MCP protocol and owner-identity operations do not acquire provider session
           expiresAt: null,
         },
       });
+
       expect(created.isError).toBe(false);
       const listing = await admin("listApiKeys", {});
       const { keys } = await listing.json();
+
       const updated = await client.callTool({
         name: "updateApiKey",
         arguments: { keyId: keys[0].keyId, enabled: false },
       });
+
       expect(updated.isError).toBe(false);
+
       for (const name of ["revokeClient", "blockClient"]) {
+        const arguments_: ClientActionPayload = {
+          client_id: target.client_id,
+        };
+
+        if (name === "blockClient") arguments_.blocked = true;
+
         const result = await client.callTool({
           name,
-          arguments: {
-            client_id: target.client_id,
-            ...(name === "blockClient" ? { blocked: true } : {}),
-          },
+          arguments: arguments_,
         });
+
         expect(result.isError).toBe(false);
       }
+
       expect(createSession).not.toHaveBeenCalled();
       expect(deleteSession).not.toHaveBeenCalled();
     },
@@ -331,7 +388,9 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
           scopes: ["read"],
         },
       });
+
       expect(result.isError).toBe(false);
+
       const duplicate = await client.callTool({
         name: "createResource",
         arguments: {
@@ -340,6 +399,7 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
           scopes: ["read"],
         },
       });
+
       expect(duplicate.isError).toBe(true);
     },
   );
@@ -347,6 +407,7 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
   await expect.poll(sessions).toEqual(before);
   expect(createSession).toHaveBeenCalledTimes(2);
   expect(deleteSession).toHaveBeenCalledTimes(2);
+
   const logout = await handle(
     new Request(`${baseURL}/api/auth/sign-out`, {
       method: "POST",
@@ -354,6 +415,7 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
       body: "{}",
     }),
   );
+
   expect(logout.status).toBe(200);
   expect((await mcp(tokens.access_token)).status).toBe(200);
   const refreshed = await refresh(client_id, tokens.refresh_token);
@@ -397,33 +459,43 @@ test("offline MCP access and refresh survive browser-session expiry and cleanup"
   expect((await mcp((await afterCleanup.json()).access_token)).status).toBe(200);
 });
 
-test.each(["Basic", "basic", "bAsIc", "private_key_jwt"])(
+// Mixed case also guards case-insensitive Basic scheme parsing.
+test.each(["bAsIc", "private_key_jwt"])(
   "%s authentication without body client_id issues usable grants after revocation",
   async (method) => {
-    const { publicKey, privateKey } = await generateKeyPair("ES256");
+    const pair = method === "private_key_jwt" ? await generateKeyPair("ES256") : undefined;
+
+    const registrationBody: PrivateKeyRegistration = {
+      client_name: "Authenticated MCP client",
+      redirect_uris: ["http://127.0.0.1:9876/callback"],
+      token_endpoint_auth_method: method === "private_key_jwt" ? method : "client_secret_basic",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+    };
+
+    if (pair) {
+      registrationBody.jwks = {
+        keys: [{ ...(await exportJWK(pair.publicKey)), kid: "test-key" }],
+      };
+    }
+
     const registration = await handle(
       new Request(`${baseURL}/api/auth/oauth2/register`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          client_name: "Authenticated MCP client",
-          redirect_uris: ["http://127.0.0.1:9876/callback"],
-          token_endpoint_auth_method: method === "private_key_jwt" ? method : "client_secret_basic",
-          ...(method === "private_key_jwt"
-            ? { jwks: { keys: [{ ...(await exportJWK(publicKey)), kid: "test-key" }] } }
-            : {}),
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-        }),
+        body: JSON.stringify(registrationBody),
       }),
     );
+
     expect(registration.status, await registration.clone().text()).toBe(201);
     const { client_id, client_secret } = await registration.json();
+
     const exchange = async (form: Record<string, string>) => {
       const body = new URLSearchParams(form);
       body.delete("client_id");
       const headers = new Headers({ "content-type": "application/x-www-form-urlencoded" });
-      if (method === "private_key_jwt") {
+
+      if (pair) {
         body.set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
         body.set(
           "client_assertion",
@@ -435,7 +507,7 @@ test.each(["Basic", "basic", "bAsIc", "private_key_jwt"])(
             .setIssuedAt()
             .setExpirationTime("2m")
             .setJti(randomUUID())
-            .sign(privateKey),
+            .sign(pair.privateKey),
         );
       } else {
         headers.set(
@@ -443,10 +515,12 @@ test.each(["Basic", "basic", "bAsIc", "private_key_jwt"])(
           `${method} ${Buffer.from(`${encodeURIComponent(client_id)}:${encodeURIComponent(client_secret)}`).toString("base64")}`,
         );
       }
+
       return handle(
         new Request(`${baseURL}/api/auth/oauth2/token`, { method: "POST", headers, body }),
       );
     };
+
     const first = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
     expect((await mcp(first.tokens.access_token)).status).toBe(200);
     expect((await admin("revokeClient", { client_id })).status).toBe(200);
@@ -455,11 +529,13 @@ test.each(["Basic", "basic", "bAsIc", "private_key_jwt"])(
     expect(decodeJwt(renewed.tokens.access_token).grant_generation).not.toBe(
       decodeJwt(first.tokens.access_token).grant_generation,
     );
+
     const refreshed = await exchange({
       grant_type: "refresh_token",
       refresh_token: renewed.tokens.refresh_token,
       resource: `${baseURL}/mcp`,
     });
+
     expect(refreshed.status, await refreshed.clone().text()).toBe(200);
     expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
     expect((await mcp(first.tokens.access_token)).status).toBe(401);
@@ -478,19 +554,21 @@ test.each(["revoke", "block", "metadata", "unrelated-metadata"])(
     vi.spyOn(context.adapter, "transaction").mockImplementationOnce(async (operation) => {
       reached.resolve();
       await release.promise;
+
       return transact(operation);
     });
     const pending = refresh(client_id, tokens.refresh_token);
+
     try {
       await reached.promise;
+
       if (change === "revoke" || change === "block") {
+        const payload: ClientActionPayload = { client_id };
+
+        if (change === "block") payload.blocked = true;
+
         expect(
-          (
-            await admin(change === "revoke" ? "revokeClient" : "blockClient", {
-              client_id,
-              ...(change === "block" ? { blocked: true } : {}),
-            })
-          ).status,
+          (await admin(change === "revoke" ? "revokeClient" : "blockClient", payload)).status,
         ).toBe(200);
       } else {
         const changedId = change === "metadata" ? client_id : other.client_id;
@@ -498,8 +576,10 @@ test.each(["revoke", "block", "metadata", "unrelated-metadata"])(
           service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = 'Changed metadata' WHERE clientId = ${changedId}`,
         );
       }
+
       release.resolve();
       const response = await pending;
+
       if (change === "unrelated-metadata") {
         expect(response.status, await response.clone().text()).toBe(200);
         expect((await mcp((await response.json()).access_token)).status).toBe(200);
@@ -530,13 +610,16 @@ test.each(["admin", "offline_access admin"])(
     const release = Promise.withResolvers<void>();
     vi.spyOn(context.adapter, "findMany").mockImplementation(async (input) => {
       const result = await findMany(input);
+
       if (input.model === "jwks") {
         reached.resolve();
         await release.promise;
       }
+
       return result;
     });
     const pending = oauthToken(handle, baseURL, form);
+
     try {
       await reached.promise;
       expect((await admin("revokeClient", { client_id: form.client_id })).status).toBe(200);

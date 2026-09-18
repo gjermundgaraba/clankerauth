@@ -10,10 +10,11 @@ import {
   Unauthorized,
 } from "@clankerauth/api";
 
-export function apiError(error: unknown) {
-  if (error instanceof APIError) {
-    const body = { error: error.body?.message ?? "Request could not be completed" };
-    switch (error.statusCode) {
+export function apiError(cause: unknown) {
+  if (cause instanceof APIError) {
+    const body = { error: cause.body?.message ?? "Request could not be completed" };
+
+    switch (cause.statusCode) {
       case 400:
         return new BadRequest(body);
       case 401:
@@ -30,5 +31,6 @@ export function apiError(error: unknown) {
         return new ServiceUnavailable(body);
     }
   }
+
   return new InternalServerError({ error: "Request could not be completed" });
 }

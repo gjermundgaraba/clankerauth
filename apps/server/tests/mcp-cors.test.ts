@@ -4,14 +4,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
-import { application } from "../src/app.ts";
+import { webApplication as application } from "./web-application.ts";
 import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
+
 const clientOrigin = "https://mcp-client.example.test";
+
 let directory: string;
+
 let service: Service;
+
 let handle: ReturnType<typeof application>;
 
 beforeEach(async () => {
@@ -36,6 +40,7 @@ afterEach(async () => {
 
 const list = (headers: Record<string, string> = {}) =>
   handle(mcpRequest({ method: "tools/list", url: `${baseURL}/mcp`, headers }));
+
 const preflight = (
   origin: string,
   method = "POST",
@@ -51,11 +56,13 @@ const preflight = (
       },
     }),
   );
+
 const headerNames = (response: Response, header: string) =>
   (response.headers.get(header) ?? "")
     .toLowerCase()
     .split(",")
     .map((value) => value.trim());
+
 const expectCors = (response: Response, origin: string) => {
   expect(response.headers.get("access-control-allow-origin")).toBe(origin);
   expect(response.headers.has("access-control-allow-credentials")).toBe(false);
@@ -73,6 +80,7 @@ test("allowed browser origins can preflight MCP without credentials", async () =
     "Mcp-Name",
     "Last-Event-ID",
   ];
+
   for (const origin of [clientOrigin, baseURL]) {
     for (const method of ["GET", "POST", "DELETE"]) {
       const response = await preflight(origin, method, allowedHeaders.join(", "));
@@ -96,16 +104,19 @@ test("MCP preflight rejects unlisted origins, methods, and headers", async () =>
     expect(response.status).toBe(403);
     expect(response.headers.has("access-control-allow-origin")).toBe(false);
   }
+
   expect((await preflight(clientOrigin, "PATCH")).status).toBe(403);
   expect((await preflight(clientOrigin, "POST", "authorization, x-unlisted")).status).toBe(403);
 });
 
 test("browser authentication failures expose the challenge and MCP headers", async () => {
   for (const authorization of [undefined, "Bearer invalid"]) {
-    const response = await list({
-      origin: clientOrigin,
-      ...(authorization ? { authorization } : {}),
-    });
+    const response = await list(
+      authorization === undefined
+        ? { origin: clientOrigin }
+        : { origin: clientOrigin, authorization },
+    );
+
     expect(response.status).toBe(401);
     expectCors(response, clientOrigin);
     expect(response.headers.get("www-authenticate")).toContain('scope="admin"');
@@ -127,6 +138,7 @@ test("MCP rejects unlisted origins before authentication and accepts originless 
 test("an allowed external browser uses bearer MCP while dashboard cookie CSRF stays separate", async () => {
   const credentials = { email: "owner@example.internal", password: "test-only password123" };
   await createOwner(service, credentials);
+
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {
       method: "POST",
@@ -134,25 +146,33 @@ test("an allowed external browser uses bearer MCP while dashboard cookie CSRF st
       body: JSON.stringify(credentials),
     }),
   );
+
   expect(login.status).toBe(200);
+
   const cookie = login.headers
     .getSetCookie()
     .map((part) => part.split(";")[0])
     .join("; ");
+
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+
   const response = await list({
     origin: clientOrigin,
     authorization: `Bearer ${tokens.access_token}`,
   });
+
   expect(response.status, await response.clone().text()).toBe(200);
   expectCors(response, clientOrigin);
   expect((await list({ origin: clientOrigin, cookie })).status).toBe(401);
+
   const foreignToken = await list({
     origin: "https://unlisted.example.test",
     authorization: `Bearer ${tokens.access_token}`,
   });
+
   expect(foreignToken.status).toBe(403);
   expect(foreignToken.headers.has("access-control-allow-origin")).toBe(false);
+
   const dashboard = await handle(
     new Request(`${baseURL}/api/listClients`, {
       method: "POST",
@@ -160,6 +180,42 @@ test("an allowed external browser uses bearer MCP while dashboard cookie CSRF st
       body: "{}",
     }),
   );
+
   expect(dashboard.status).toBe(403);
   expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
+
+  const missingSession = await handle(
+    new Request(`${baseURL}/mcp`, {
+      method: "POST",
+      headers: {
+        origin: clientOrigin,
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    }),
+  );
+
+  expect(missingSession.status).toBe(400);
+  expectCors(missingSession, clientOrigin);
+  expect(missingSession.headers.get("x-content-type-options")).toBe("nosniff");
+});
+
+test("discovery middleware cannot bypass public CORS or security headers", async () => {
+  for (const method of ["GET", "HEAD", "OPTIONS"]) {
+    const response = await handle(
+      new Request(`${baseURL}/.well-known/oauth-protected-resource/mcp`, {
+        method,
+        headers: { origin: clientOrigin },
+      }),
+    );
+
+    expect(response.status).toBe(method === "OPTIONS" ? 204 : 200);
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    await response.body?.cancel();
+  }
 });

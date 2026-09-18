@@ -1,50 +1,85 @@
-import { AuthError } from "./errors.ts";
+import { Context, Effect } from "effect";
+import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { HttpServerRequest } from "effect/unstable/http";
+import {
+  authenticationErrors,
+  ConfigurationError,
+  Forbidden,
+  RateLimited,
+  Unauthorized,
+} from "./errors.ts";
+import type { AuthenticationError } from "./errors.ts";
+import * as Verifier from "./verify.ts";
+import type { BrowserSession } from "./browser.ts";
 
-export interface ResourceOptions {
-  /** Exact audience URL of this resource, for example `https://notes.internal/api`. */
-  readonly resource: string;
-  /** Issuer identifier, for example `https://auth.internal/api/auth`. */
-  readonly issuer: string;
-  /** Scopes the resource defines. */
+export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Verifier.Principal>()(
+  "@clankerauth/CurrentPrincipal",
+) {}
+
+export interface Options extends Verifier.Options {
   readonly scopes: readonly string[];
 }
 
-/** RFC 9728 protected-resource metadata. Serve it at `/.well-known/oauth-protected-resource/<path>`. */
-export const protectedResourceMetadata = ({ resource, issuer, scopes }: ResourceOptions) =>
-  Response.json(
-    {
-      resource,
-      authorization_servers: [issuer],
-      scopes_supported: scopes,
-      bearer_methods_supported: ["header"],
-    },
-    { headers: { "cache-control": "no-store" } },
-  );
+/** One resource, one verifier and bearer-only middleware for HTTP actions or MCP. */
+export const make = Effect.fn("Resource.make")(function* (options: Options) {
+  const discovery = yield* Effect.try({
+    try: () =>
+      Authentication.protectedResource({
+        resource: options.resource,
+        authorizationServers: [options.issuer],
+        scopesSupported: options.scopes,
+      }),
+    catch: () => new ConfigurationError({ message: "Invalid resource metadata configuration" }),
+  });
 
-/** The URL where a resource publishes its metadata: the well-known path under the resource origin. */
-export const metadataUrl = (resource: string) => {
-  const url = new URL(resource);
-  return `${url.origin}/.well-known/oauth-protected-resource${url.pathname === "/" ? "" : url.pathname}`;
-};
+  const verifier = yield* Verifier.make(options);
 
-/** A `WWW-Authenticate` challenge that lets clients discover the issuer and the scopes an operation needs. */
-export const challenge = (
-  error: AuthError,
-  { resource, scopes }: { readonly resource: string; readonly scopes: readonly string[] },
-) =>
-  `Bearer resource_metadata="${metadataUrl(resource)}", error="${error.code === "forbidden" ? "insufficient_scope" : "invalid_token"}", scope="${scopes.join(" ")}"`;
+  const headers = (error: AuthenticationError) => {
+    if (error instanceof RateLimited) return { "retry-after": "60" };
 
-/** The complete response to a failed authentication: status, JSON body, and discovery headers. */
-export const failureResponse = (
-  error: AuthError,
-  options: { readonly resource: string; readonly scopes: readonly string[] },
-) => {
-  const headers = new Headers({ "cache-control": "no-store" });
-  if (error.status === 401 || error.status === 403)
-    headers.set("www-authenticate", challenge(error, options));
-  if (error.status === 429) headers.set("retry-after", "60");
-  return Response.json(
-    { error: error.code, error_description: error.message },
-    { status: error.status, headers },
-  );
-};
+    if (error instanceof Unauthorized || error instanceof Forbidden)
+      return {
+        "www-authenticate": discovery.challenge({
+          error: error instanceof Forbidden ? "insufficient_scope" : "invalid_token",
+          scope: options.requiredScopes?.length ? options.requiredScopes.join(" ") : undefined,
+        }),
+      };
+
+    return {};
+  };
+
+  const middleware = Authentication.middleware(CurrentPrincipal, {
+    authenticate: Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+      verifier.verify(request.headers.authorization),
+    ),
+    errors: authenticationErrors,
+    headers,
+  });
+
+  return {
+    verifier,
+    middleware,
+    discovery,
+    headers,
+    resource: options.resource,
+    issuer: options.issuer,
+  };
+});
+
+export type Resource = Effect.Success<ReturnType<typeof make>>;
+
+/** Opt-in browser-only HTTP authentication. Never attach this to MCP. */
+export const browserMiddleware = (resource: Resource, browser: BrowserSession) =>
+  Authentication.middleware(CurrentPrincipal, {
+    authenticate: Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method))
+        yield* browser.checkOrigin(request.headers.origin);
+      const token = yield* browser.accessToken(request.cookies[`${browser.cookie.name}_session`]);
+
+      return yield* resource.verifier.verifyToken(token);
+    }),
+    errors: authenticationErrors,
+    headers: resource.headers,
+  });

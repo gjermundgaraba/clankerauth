@@ -185,6 +185,9 @@ catalogs:
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
+    '@oxlint/plugins':
+      specifier: 1.82.0
+      version: 1.82.0
     '@types/node':
       specifier: 26.5.1
       version: 26.5.1
@@ -230,6 +233,9 @@ importers:
 
   .:
     devDependencies:
+      '@oxlint/plugins':
+        specifier: 'catalog:'
+        version: 1.82.0
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
@@ -361,6 +367,9 @@ importers:
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
+      effect:
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
       vite:
         specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-core@0.3.2(@types/node@26.5.1)(typescript@7.0.2)'
@@ -370,6 +379,9 @@ importers:
 
   packages/node:
     dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
       jose:
         specifier: 'catalog:'
         version: 6.2.12
@@ -380,6 +392,9 @@ importers:
       '@clankerauth/server':
         specifier: workspace:*
         version: link:../../apps/server
+      '@gjermundgaraba/effect-actions':
+        specifier: 0.1.0-rc.1
+        version: 0.1.0-rc.1(@modelcontextprotocol/client@2.0.0)(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
@@ -853,6 +868,10 @@ packages:
 
   '@oxlint/plugins@1.79.0':
     resolution: {integrity: sha512-S0uyoxakDINJ4DPgqxGlEEvrdSMeQb7Z2lKVjxoY2gwsbZbfg2Xr8Klfeo5ZeraHmmdBCELFUHkSe6KEmBpMvg==}
+    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+
+  '@oxlint/plugins@1.82.0':
+    resolution: {integrity: sha512-IDF4UXBNOaCeLoEpVxf5Bg85KOWdeuBEkbo1rGzS2vXcbD+GT1asBSeeTC+5BgW6NFTHVByd6N5giHsFPGtwAA==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
   '@polka/url@1.0.0-next.29':
@@ -2105,6 +2124,8 @@ snapshots:
     optional: true
 
   '@oxlint/plugins@1.79.0': {}
+
+  '@oxlint/plugins@1.82.0': {}
 
   '@polka/url@1.0.0-next.29': {}
 
