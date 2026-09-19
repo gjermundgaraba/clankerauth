@@ -1,5 +1,8 @@
+import { Effect, Schema, SchemaAST } from "effect";
+import { HttpServerResponse } from "effect/unstable/http";
 import { APIError } from "better-auth/api";
 import {
+  errors,
   BadRequest,
   Conflict,
   Forbidden,
@@ -34,3 +37,20 @@ export function apiError(cause: unknown) {
 
   return new InternalServerError({ error: "Request could not be completed" });
 }
+
+const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(errors));
+
+/** Encode only public error fields; callers own request-specific challenge headers. */
+export const apiErrorResponse = (
+  error: (typeof errors)[number]["Type"],
+  headers: Readonly<Record<string, string>> = {},
+) => {
+  const schema = errors.find((schema) => Schema.is(schema)(error));
+
+  if (schema === undefined) return Effect.die(new Error("Undeclared API error"));
+
+  return encodeResponse(error, {
+    status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
+    headers,
+  }).pipe(Effect.orDie);
+};

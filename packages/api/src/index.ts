@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { HttpApiSchema } from "effect/unstable/httpapi";
+import { HttpApiSchema, type HttpApiError } from "effect/unstable/httpapi";
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()(
   "BadRequest",
@@ -162,12 +162,12 @@ export const MachineKey = Schema.Struct({
   createdAt: Schema.String,
 });
 
-// Every action can fail with the shared API errors, and both transports answer malformed
-// requests and unencodable results the same way, so each group declares both once.
+// Every action can fail with shared API errors. HTTP maps native schema failures
+// through the group policy; MCP retains its native validation and error responses.
 const schemaError = {
   errors: [BadRequest, InternalServerError],
-  map: (failure: Action.SchemaFailure) =>
-    failure.phase === "output"
+  map: (failure: HttpApiError.HttpApiSchemaError) =>
+    failure.kind === "Body" || failure.kind === "ResponseHeaders"
       ? new InternalServerError({ error: "Request could not be completed" })
       : new BadRequest({ error: "Invalid request" }),
 };

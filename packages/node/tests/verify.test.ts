@@ -133,7 +133,7 @@ test("issuer fixture rejects malformed API-key verification requests", async () 
 
   try {
     for (const body of ["invalid", "{}", "[]", "null", '{"resource":42}']) {
-      const response = await fetch(new URL("/api/verifyApiKey", issuer.issuer), {
+      const response = await fetch(new URL("/api/issuer/verifyApiKey", issuer.issuer), {
         method: "POST",
         headers: { authorization: `Bearer ${issuer.key}`, "content-type": "application/json" },
         body,

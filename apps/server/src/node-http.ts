@@ -89,7 +89,7 @@ export const requestPolicy =
         normalized,
       );
 
-      // This snapshot ends failed streams cleanly. Preserve failure visibility on
+      // The native Node server ends failed streams cleanly. Preserve failure visibility on
       // the wire without taking over response writing or backpressure from Effect.
       if (!(source instanceof IncomingMessage)) return response;
 

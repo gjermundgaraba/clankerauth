@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 import { Effect, Layer, Schema } from "effect";
+import { McpProtocol } from "effect/unstable/ai";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
@@ -70,9 +71,10 @@ test("effect-actions HTTP/MCP middleware supplies isolated principals and public
       api.discovery.layer,
       mcp.discovery.layer,
       Http.layer(app).pipe(Layer.provide(api.middleware.layer)),
-      ActionMcp.layer({ name: "notes", version: "1.0.0", path: "/mcp" }, app).pipe(
-        Layer.provide(mcp.middleware.layer),
-      ),
+      ActionMcp.layerHttp(
+        { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
+        app,
+      ).pipe(Layer.provide(mcp.middleware.layer)),
     ).pipe(Layer.provide(HttpServer.layerServices)),
   );
 
@@ -82,7 +84,7 @@ test("effect-actions HTTP/MCP middleware supplies isolated principals and public
     if (token) headers.set("authorization", `Bearer ${token}`);
 
     return web.handler(
-      new Request(`${publicUrl}/api/${name}`, {
+      new Request(`${publicUrl}/api/notes/${name}`, {
         method: "POST",
         headers,
         body: "{}",

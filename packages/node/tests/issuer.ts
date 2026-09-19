@@ -33,7 +33,7 @@ export const startIssuer = async () => {
     if (request.url === "/api/auth/jwks")
       return send(failure ?? 200, JSON.stringify({ keys: [jwk] }));
 
-    if (request.url !== "/api/verifyApiKey") return send(404, "{}");
+    if (request.url !== "/api/issuer/verifyApiKey") return send(404, "{}");
     verificationCount++;
 
     if (failure) return send(failure, "{}");

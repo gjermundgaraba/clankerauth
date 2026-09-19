@@ -47,7 +47,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.equal(
       (
         await (
-          await fetch(`${issuer.url}/api/setupStatus`, {
+          await fetch(`${issuer.url}/api/issuer/setupStatus`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: "{}",
@@ -58,7 +58,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     );
     assert.equal(
       (
-        await fetch(`${issuer.url}/api/listClients`, {
+        await fetch(`${issuer.url}/api/administration/listClients`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: "{}",
@@ -77,7 +77,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     await session.body.cancel();
 
     const state = await (
-      await fetch(`${issuer.url}/api/listClients`, {
+      await fetch(`${issuer.url}/api/administration/listClients`, {
         method: "POST",
         headers: { cookie, origin: issuer.url, "content-type": "application/json" },
         body: "{}",
@@ -98,7 +98,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.ok(issuer.clientSecret);
     assert.equal(
       (
-        await fetch(`${issuer.url}/api/setupOwner`, {
+        await fetch(`${issuer.url}/api/issuer/setupOwner`, {
           method: "POST",
           headers: { "content-type": "application/json", origin: issuer.url },
           body: "x".repeat(65537),
@@ -166,7 +166,7 @@ await test("bundled provider preserves complete key listings and fixed verificat
     let first;
 
     for (let index = 0; index < 101; index++) {
-      const response = await fetch(`${issuer.url}/api/createApiKey`, {
+      const response = await fetch(`${issuer.url}/api/administration/createApiKey`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -182,7 +182,11 @@ await test("bundled provider preserves complete key listings and fixed verificat
     }
 
     const listing = await (
-      await fetch(`${issuer.url}/api/listApiKeys`, { method: "POST", headers, body: "{}" })
+      await fetch(`${issuer.url}/api/administration/listApiKeys`, {
+        method: "POST",
+        headers,
+        body: "{}",
+      })
     ).json();
 
     assert.equal(listing.keys.length, 101);
@@ -200,7 +204,7 @@ await test("bundled provider preserves complete key listings and fixed verificat
     context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
 
     for (let index = 0; index < 7; index++) {
-      const response = await fetch(`${issuer.url}/api/verifyApiKey`, {
+      const response = await fetch(`${issuer.url}/api/issuer/verifyApiKey`, {
         method: "POST",
         headers: { authorization: `Bearer ${first.key}`, "content-type": "application/json" },
         body: JSON.stringify({ resource: resource.identifier }),
@@ -248,7 +252,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   });
 
   try {
-    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/setupOwner`));
+    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/issuer/setupOwner`));
     requests.length = 0;
     const discoveryURL = `${issuer.issuer}/.well-known/openid-configuration`;
     const discoveryResponse = await fetch(discoveryURL);

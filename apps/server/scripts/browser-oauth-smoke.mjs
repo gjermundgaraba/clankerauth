@@ -104,7 +104,7 @@ try {
 
   assert.ok(ready, `Server did not become ready: ${output}`);
 
-  const setup = await fetch(`${issuer}/api/setupOwner`, {
+  const setup = await fetch(`${issuer}/api/issuer/setupOwner`, {
     method: "POST",
     headers: { origin: issuer, "content-type": "application/json" },
     body: JSON.stringify({ email: "browser@example.internal", password }),

@@ -180,8 +180,8 @@ catalogs:
       specifier: 1.7.4
       version: 1.7.4
     '@effect/platform-node':
-      specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891
-      version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891
+      specifier: 4.0.0-rc.116
+      version: 4.0.0-rc.116
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -198,8 +198,8 @@ catalogs:
       specifier: 1.4.0
       version: 1.4.0
     effect:
-      specifier: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
-      version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+      specifier: 4.0.0-rc.116
+      version: 4.0.0-rc.116
     jose:
       specifier: 6.2.12
       version: 6.2.12
@@ -274,10 +274,10 @@ importers:
         version: link:../web
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)(redis@6.2.1(@opentelemetry/api@1.9.1))
+        version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@gjermundgaraba/effect-actions':
-        specifier: 0.1.0-rc.1
-        version: 0.1.0-rc.1(@modelcontextprotocol/client@2.0.0)(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)
+        specifier: 0.1.0-rc.2
+        version: 0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.4(@opentelemetry/api@1.9.1)(vitest@4.1.11)
@@ -286,7 +286,7 @@ importers:
         version: 1.4.0(zod@4.6.4)
       effect:
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+        version: 4.0.0-rc.116
       jose:
         specifier: 'catalog:'
         version: 6.2.12
@@ -326,7 +326,7 @@ importers:
         version: 1.7.4(@opentelemetry/api@1.9.1)(vitest@4.1.11)
       effect:
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+        version: 4.0.0-rc.116
       playwright:
         specifier: 'catalog:'
         version: 1.63.0
@@ -343,11 +343,11 @@ importers:
   packages/api:
     dependencies:
       '@gjermundgaraba/effect-actions':
-        specifier: 0.1.0-rc.1
-        version: 0.1.0-rc.1(@modelcontextprotocol/client@2.0.0)(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)
+        specifier: 0.1.0-rc.2
+        version: 0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+        version: 4.0.0-rc.116
     devDependencies:
       typescript:
         specifier: 'catalog:'
@@ -369,7 +369,7 @@ importers:
         version: 1.9.1
       effect:
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+        version: 4.0.0-rc.116
       vite:
         specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-core@0.3.2(@types/node@26.5.1)(typescript@7.0.2)'
@@ -381,7 +381,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+        version: 4.0.0-rc.116
       jose:
         specifier: 'catalog:'
         version: 6.2.12
@@ -393,8 +393,8 @@ importers:
         specifier: workspace:*
         version: link:../../apps/server
       '@gjermundgaraba/effect-actions':
-        specifier: 0.1.0-rc.1
-        version: 0.1.0-rc.1(@modelcontextprotocol/client@2.0.0)(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)
+        specifier: 0.1.0-rc.2
+        version: 0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
@@ -532,28 +532,25 @@ packages:
   '@blazediff/core@1.9.1':
     resolution: {integrity: sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA==}
 
-  '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@9ad9891':
-    resolution: {integrity: sha512-ziIDXnKvu/RNK3gmx3k3vD/5Zagc3hQXOfFpRwjdiGqLaeD/U4INakdpp11jGCAkQOw3ZNQazmirVM4tGR6hTg==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@9ad9891}
-    version: 4.0.0-rc.115
+  '@effect/platform-node-shared@4.0.0-rc.116':
+    resolution: {integrity: sha512-4FB6UriGqArWFUaFqVchhfCRmmtOVzmD/k/bH6LErlKY8a9amt5dk6c3Arsi7AvUpChsdO+3jsG+P85HsxMkNA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.115
+      effect: ^4.0.0-rc.116
 
-  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891':
-    resolution: {integrity: sha512-fON0RoujfbcBOOkAUDrGVi00L3nbt0sHNJS3OGIFMC1sVDGwr1OJmsuisGWQTlRUKelZDH7VVN6pkv3pFOvY9A==, tarball: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891}
-    version: 4.0.0-rc.115
+  '@effect/platform-node@4.0.0-rc.116':
+    resolution: {integrity: sha512-uA66Nh998OcChBVX83tQDkBDvQQcVaMXodP9gNGWVeIwWWquy7bzIkAq/fMZGKs/BVFhFQ0XCp3VIqYjnXu5ng==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.115
+      effect: ^4.0.0-rc.116
       redis: '>=5.0.0 <7.0.0'
 
-  '@gjermundgaraba/effect-actions@0.1.0-rc.1':
-    resolution: {integrity: sha512-xxZWwsF0OQT6jqgAcfmIHkto/ohnNP0oMkTgy4c9+e9EC52QH1ZIV5r0NXw99JZhEclu3rMBPS/gYYPHa48X3A==}
-    version: 0.1.0-rc.1
+  '@gjermundgaraba/effect-actions@0.1.0-rc.2':
+    resolution: {integrity: sha512-Ls0THoQ1wOP8loWud1xcib4B8JRSxdjNlYV9w2z3Aimy+ikBOq0dBm+YhzxR+pbcQsBE8sNKQfYhGHyBERi/rQ==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     peerDependencies:
       '@modelcontextprotocol/client': ^2.0.0
-      effect: 4.0.0-rc.115
+      effect: 4.0.0-rc.116
     peerDependenciesMeta:
       '@modelcontextprotocol/client':
         optional: true
@@ -1461,9 +1458,8 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
-  effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891:
-    resolution: {integrity: sha512-60PlabANG7hn9o/fLzwwiy7BKmNoGll+hwSNI3JyaZv1xZ+8crGIr25/sCyMCGPYMpDmjrWiv4OpwEYGZiiqJw==, tarball: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891}
-    version: 4.0.0-rc.115
+  effect@4.0.0-rc.116:
+    resolution: {integrity: sha512-nawqJHSjHV8XIBRZNZ+D7cLZpN3kkSjzy6aiT9ofKENsl7xAMFKEoDa0itN5JFl3GUQ1PIN1T1HNlva5+xyO/A==}
 
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
@@ -1938,28 +1934,28 @@ snapshots:
 
   '@blazediff/core@1.9.1': {}
 
-  '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@9ad9891(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)':
+  '@effect/platform-node-shared@4.0.0-rc.116(effect@4.0.0-rc.116)':
     dependencies:
       '@types/ws': 8.18.1
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+      effect: 4.0.0-rc.116
       ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)(redis@6.2.1(@opentelemetry/api@1.9.1))':
+  '@effect/platform-node@4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1(@opentelemetry/api@1.9.1))':
     dependencies:
-      '@effect/platform-node-shared': https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@9ad9891(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+      '@effect/platform-node-shared': 4.0.0-rc.116(effect@4.0.0-rc.116)
+      effect: 4.0.0-rc.116
       redis: 6.2.1(@opentelemetry/api@1.9.1)
       undici: 8.10.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@gjermundgaraba/effect-actions@0.1.0-rc.1(@modelcontextprotocol/client@2.0.0)(effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891)':
+  '@gjermundgaraba/effect-actions@0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)':
     dependencies:
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+      effect: 4.0.0-rc.116
     optionalDependencies:
       '@modelcontextprotocol/client': 2.0.0
 
@@ -2500,7 +2496,7 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891: {}
+  effect@4.0.0-rc.116: {}
 
   es-module-lexer@2.3.2: {}
 

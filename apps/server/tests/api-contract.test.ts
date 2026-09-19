@@ -420,7 +420,7 @@ describe("API integration", () => {
   });
 
   test("malformed setup payload returns 400 without reflecting sensitive input", async () => {
-    const response = await appFetch(`${settings.baseURL}/api/setupOwner`, {
+    const response = await appFetch(`${settings.baseURL}/api/issuer/setupOwner`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password: { sensitive: password } }),

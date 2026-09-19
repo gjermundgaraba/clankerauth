@@ -9,6 +9,7 @@ import {
 } from "@clankerauth/api";
 import { Effect, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { HttpApiClient } from "effect/unstable/httpapi";
 import "./style.css";
 
 type ClientView = typeof Client.Type;
@@ -20,7 +21,9 @@ type KeyView = typeof MachineKey.Type;
 const ErrorMessage = Schema.Struct({ error: Schema.String });
 
 const api = await Effect.runPromise(
-  Http.client({ baseUrl: location.origin }).pipe(Effect.provide(FetchHttpClient.layer)),
+  HttpApiClient.make(Http.api, { baseUrl: location.origin }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+  ),
 );
 
 function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
@@ -111,10 +114,12 @@ function setup() {
 
       if (password !== confirmation) throw new Error("Passwords do not match.");
       await request(
-        api
+        api.issuer
           .setupOwner({
-            email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-            password,
+            payload: {
+              email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+              password,
+            },
           })
           .pipe(
             Effect.tap(() => Effect.sync(() => location.replace("/login?setup=complete"))),
@@ -414,8 +419,8 @@ const registerForm = (resources: readonly ResourceView[]) =>
 
 async function dashboard() {
   const [data, keyData] = await Promise.all([
-    request(api.listClients()),
-    request(api.listApiKeys()),
+    request(api.administration.listClients({ payload: {} })),
+    request(api.administration.listApiKeys({ payload: {} })),
   ]);
 
   const { resources } = data;
@@ -501,12 +506,14 @@ async function dashboard() {
     const fields = new FormData(target);
 
     const result = await request(
-      api.createClient({
-        name: textField(fields, "name"),
-        redirect: textField(fields, "redirect"),
-        resources: selectedResources(target),
-        native: fields.has("native"),
-        confidential: fields.has("confidential"),
+      api.administration.createClient({
+        payload: {
+          name: textField(fields, "name"),
+          redirect: textField(fields, "redirect"),
+          resources: selectedResources(target),
+          native: fields.has("native"),
+          confidential: fields.has("confidential"),
+        },
       }),
     );
 
@@ -520,10 +527,12 @@ async function dashboard() {
     const expiry = textField(fields, "expiry");
 
     const result = await request(
-      api.createApiKey({
-        name: textField(fields, "name"),
-        permissions: keyGrants(target),
-        expiresAt: expiry ? new Date(expiry).toISOString() : null,
+      api.administration.createApiKey({
+        payload: {
+          name: textField(fields, "name"),
+          permissions: keyGrants(target),
+          expiresAt: expiry ? new Date(expiry).toISOString() : null,
+        },
       }),
     );
 
@@ -535,9 +544,11 @@ async function dashboard() {
   onSubmit(form("#resource-create"), async (target) => {
     const fields = new FormData(target);
     await request(
-      api.createResource({
-        identifier: textField(fields, "identifier"),
-        ...resourceFields(fields),
+      api.administration.createResource({
+        payload: {
+          identifier: textField(fields, "identifier"),
+          ...resourceFields(fields),
+        },
       }),
     );
     target.reset();
@@ -547,9 +558,11 @@ async function dashboard() {
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-rename]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.updateApiKey({
-          keyId: target.dataset.keyRename!,
-          name: textField(new FormData(target), "name"),
+        api.administration.updateApiKey({
+          payload: {
+            keyId: target.dataset.keyRename!,
+            name: textField(new FormData(target), "name"),
+          },
         }),
       );
       await refreshDashboard();
@@ -558,9 +571,11 @@ async function dashboard() {
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-grants]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.updateApiKey({
-          keyId: target.dataset.keyGrants!,
-          permissions: keyGrants(target),
+        api.administration.updateApiKey({
+          payload: {
+            keyId: target.dataset.keyGrants!,
+            permissions: keyGrants(target),
+          },
         }),
       );
       await refreshDashboard();
@@ -573,10 +588,14 @@ async function dashboard() {
       )!;
 
       await request(
-        api.updateResource({
-          identifier: target.dataset.resourceEdit!,
-          name: textField(new FormData(target), "name"),
-          scopes: resource.builtIn ? resource.scopes : resourceFields(new FormData(target)).scopes,
+        api.administration.updateResource({
+          payload: {
+            identifier: target.dataset.resourceEdit!,
+            name: textField(new FormData(target), "name"),
+            scopes: resource.builtIn
+              ? resource.scopes
+              : resourceFields(new FormData(target)).scopes,
+          },
         }),
       );
       await refreshDashboard();
@@ -590,7 +609,9 @@ async function dashboard() {
       const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
 
       const save = async () => {
-        await request(api.setClientAccess({ client_id, resources: selected }));
+        await request(
+          api.administration.setClientAccess({ payload: { client_id, resources: selected } }),
+        );
         await refreshDashboard();
       };
 
@@ -604,9 +625,11 @@ async function dashboard() {
   onClick("[data-key-toggle]", (button) => {
     void submit(async () => {
       await request(
-        api.updateApiKey({
-          keyId: button.dataset.keyToggle!,
-          enabled: button.dataset.enabled !== "true",
+        api.administration.updateApiKey({
+          payload: {
+            keyId: button.dataset.keyToggle!,
+            enabled: button.dataset.enabled !== "true",
+          },
         }),
       );
       await refreshDashboard();
@@ -615,7 +638,7 @@ async function dashboard() {
   onClick("[data-key-delete]", (button) => {
     const keyId = button.dataset.keyDelete!;
     confirmed("Delete this API key?", async () => {
-      await request(api.deleteApiKey({ keyId }));
+      await request(api.administration.deleteApiKey({ payload: { keyId } }));
       pendingKeys.delete(keyId);
       renderCredentials();
       await refreshDashboard();
@@ -624,7 +647,7 @@ async function dashboard() {
   onClick("[data-revoke]", (button) => {
     const client_id = button.dataset.revoke!;
     confirmed("Revoke this Client’s authorization? It can request consent again.", async () => {
-      await request(api.revokeClient({ client_id }));
+      await request(api.administration.revokeClient({ payload: { client_id } }));
       await refreshDashboard();
     });
   });
@@ -634,7 +657,7 @@ async function dashboard() {
     confirmed(
       blocked ? "Block this Client and revoke its authorization?" : "Unblock this Client?",
       async () => {
-        await request(api.blockClient({ client_id, blocked }));
+        await request(api.administration.blockClient({ payload: { client_id, blocked } }));
         await refreshDashboard();
       },
     );
@@ -642,7 +665,10 @@ async function dashboard() {
   onClick("[data-rotate]", (button) => {
     const client_id = button.dataset.rotate!;
     confirmed("Rotate the secret? The old one stops working immediately.", async () => {
-      const result = await request(api.rotateClientSecret({ client_id }));
+      const result = await request(
+        api.administration.rotateClientSecret({ payload: { client_id } }),
+      );
+
       pendingCredentials.set(result.client_id, result);
       showCredentials();
     });
@@ -650,7 +676,7 @@ async function dashboard() {
   onClick("[data-delete]", (button) => {
     const client_id = button.dataset.delete!;
     confirmed("Delete this Client and its grants?", async () => {
-      await request(api.deleteClient({ client_id }));
+      await request(api.administration.deleteClient({ payload: { client_id } }));
       pendingCredentials.delete(client_id);
       renderCredentials();
       await refreshDashboard();
@@ -661,7 +687,7 @@ async function dashboard() {
     confirmed(
       `Delete Resource ${identifier}? Stored grants are kept and may become usable again if it is recreated.`,
       async () => {
-        await request(api.deleteResource({ identifier }));
+        await request(api.administration.deleteResource({ payload: { identifier } }));
         await refreshDashboard();
       },
     );
@@ -669,7 +695,7 @@ async function dashboard() {
 }
 
 try {
-  const state = await request(api.setupStatus());
+  const state = await request(api.issuer.setupStatus({ payload: {} }));
 
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");

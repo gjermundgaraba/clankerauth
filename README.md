@@ -66,7 +66,7 @@ MCP servers additionally publish RFC 9728 protected-resource metadata that lists
 For CLIs and automation, the owner creates **API keys** with explicit per-resource scopes. A resource server verifies one with:
 
 ```http
-POST /api/verifyApiKey
+POST /api/issuer/verifyApiKey
 Authorization: Bearer ca_…
 Content-Type: application/json
 
@@ -96,9 +96,9 @@ vp run test:lint # lint-policy regression fixtures
 
 ### effect-actions integration
 
-Custom API operations use the published
-[`@gjermundgaraba/effect-actions`](https://www.npmjs.com/package/@gjermundgaraba/effect-actions)
-release and are exposed at `POST /api/<actionName>`. No-input actions take
+Custom API operations use
+[`@gjermundgaraba/effect-actions`](https://github.com/gjermundgaraba/effect-actions)
+and are exposed at `POST /api/<groupName>/<actionName>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
@@ -110,10 +110,12 @@ operational `GET /healthz` endpoint are separate.
 | Administration actions | Owner session and configured Origin                         | HTTP      |
 | Administration tools   | OAuth access token for `<AUTH_BASE_URL>/mcp`, scope `admin` | MCP       |
 
-The dashboard uses the direct typed action client. Shared schema-error handling returns
+Issuer actions use the `issuer` group; owner operations use `administration`. The
+dashboard uses the direct typed action client. HTTP schema-error handling returns
 sanitized `BadRequest` JSON (400) for malformed input and `InternalServerError`
-JSON (500) for invalid handler output. MCP tool failures carry the same tagged
-errors in `structuredContent` with `isError: true`.
+JSON (500) for invalid handler output. MCP uses native tool errors: declared domain
+failures are JSON text with `isError: true`, while schema failures use native
+validation/internal-error messages. Successful tool results use `structuredContent.value`.
 
 ### Connect to administration MCP
 
@@ -167,7 +169,7 @@ The combined `GET /openapi.json` document requires the owner cookie and permits
 browser navigation without Origin:
 
 ```sh
-curl "$AUTH_BASE_URL/api/listClients" \
+curl "$AUTH_BASE_URL/api/administration/listClients" \
   -H "Origin: $AUTH_BASE_URL" -H "Cookie: $OWNER_COOKIE" \
   -H 'Content-Type: application/json' -d '{}'
 ```

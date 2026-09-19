@@ -16,7 +16,7 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput"
   },
   "dependencies": {
-    "@gjermundgaraba/effect-actions": "0.1.0-rc.1",
+    "@gjermundgaraba/effect-actions": "0.1.0-rc.2",
     "effect": "catalog:"
   },
   "devDependencies": {

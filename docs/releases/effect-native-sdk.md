@@ -1,6 +1,6 @@
 # Effect-native Node SDK (unreleased, breaking)
 
-The Node SDK uses the existing Effect snapshot `9ad9891`, with optional effect-actions integration. It no longer supports the standalone Promise API.
+The Node SDK uses Effect `4.0.0-rc.116`, with optional effect-actions integration. It no longer supports the standalone Promise API.
 
 ## Removed
 
@@ -21,7 +21,7 @@ The Node SDK uses the existing Effect snapshot `9ad9891`, with optional effect-a
 
 Successful JWKS lookups last ten minutes. Unknown signing keys trigger one coordinated refresh and resolution retry, with a thirty-second cooldown after successful lookups and miss-triggered refresh attempts. Failed refreshes return 503 during the cooldown without discarding valid cached keys; initial lookup failures remain retryable. Immediate-use rotation can encounter this short cooldown but no longer requires ten-minute publish-before-use. The bundled issuer has automatic rotation disabled.
 
-Core imports do not load or require effect-actions. Install its optional peer dependency only when using `/effect-actions`; the preview's `skipLibCheck` requirement is confined to integration consumers.
+Core imports do not load or require effect-actions. Install its optional peer dependency only when using `/effect-actions`; both core and integration declarations are validated without `skipLibCheck` against the workspace's local effect-actions build.
 
 Missing or invalid authorization endpoints are rejected at discovery as sanitized provider failures rather than escaping as defects. Malformed or unsupported browser callback URLs fail construction with `ConfigurationError`.
 

@@ -174,7 +174,7 @@ test("an allowed external browser uses bearer MCP while dashboard cookie CSRF st
   expect(foreignToken.headers.has("access-control-allow-origin")).toBe(false);
 
   const dashboard = await handle(
-    new Request(`${baseURL}/api/listClients`, {
+    new Request(`${baseURL}/api/administration/listClients`, {
       method: "POST",
       headers: { cookie, origin: clientOrigin, "content-type": "application/json" },
       body: "{}",

@@ -142,11 +142,11 @@ test("first-party browser login, verification of tokens and keys, and logout aga
   const issuer = await startServer();
 
   try {
-    assert.equal((await issuer.call("/api/setupOwner", owner)).status, 201);
+    assert.equal((await issuer.call("/api/issuer/setupOwner", owner)).status, 201);
     assert.equal((await issuer.call("/api/auth/sign-in/email", owner)).status, 200);
     assert.equal(
       (
-        await issuer.call("/api/createResource", {
+        await issuer.call("/api/administration/createResource", {
           identifier: resource,
           name: "Notes",
           scopes: ["notes:read", "notes:write"],
@@ -155,7 +155,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
       201,
     );
 
-    const registration = await issuer.call("/api/createClient", {
+    const registration = await issuer.call("/api/administration/createClient", {
       name: "Notes web",
       redirect: browserCallback,
       resources: [resource],
@@ -249,7 +249,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     assert.equal(sessionBody.subject, principal.subject);
 
     // API keys are verified online with their granted scopes and the key as actor.
-    const created = await issuer.call("/api/createApiKey", {
+    const created = await issuer.call("/api/administration/createApiKey", {
       name: "Backup script",
       permissions: { [resource]: ["notes:read"] },
       expiresAt: null,
@@ -263,7 +263,10 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     assert.deepEqual(machine.scopes, ["notes:read"]);
     assert.deepEqual(machine.actor, { kind: "key", keyId });
     await assert.rejects(run(other.verifyToken(key)), (error) => error instanceof Forbidden);
-    assert.equal((await issuer.call("/api/updateApiKey", { keyId, enabled: false })).status, 200);
+    assert.equal(
+      (await issuer.call("/api/administration/updateApiKey", { keyId, enabled: false })).status,
+      200,
+    );
     await assert.rejects(run(verifier.verifyToken(key)), (error) => error instanceof Unauthorized);
 
     // Logout revokes the refresh token at the issuer and ends the local session.

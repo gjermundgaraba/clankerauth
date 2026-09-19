@@ -1,7 +1,7 @@
 import { Context, Effect, type Scope } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
-import { Forbidden, Unauthorized, errors } from "@clankerauth/api";
-import { apiError } from "./api-errors.ts";
+import { Forbidden, Unauthorized } from "@clankerauth/api";
+import { apiError, apiErrorResponse } from "./api-errors.ts";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import type { Service } from "./auth.ts";
 
@@ -16,9 +16,9 @@ export class CurrentOwner extends Context.Service<
 >()("ClankerAuth/CurrentOwner") {}
 
 export const ownerAuthentication = (service: Service) =>
-  Authentication.middleware(CurrentOwner, {
-    errors,
-    authenticate: Effect.gen(function* () {
+  Authentication.middleware(
+    CurrentOwner,
+    Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const headers = new Headers(request.headers);
 
@@ -39,5 +39,5 @@ export const ownerAuthentication = (service: Service) =>
         userId: session.user.id,
         email: session.user.email,
       };
-    }),
-  });
+    }).pipe(Effect.catch((error) => Effect.flatMap(apiErrorResponse(error), Effect.fail))),
+  );

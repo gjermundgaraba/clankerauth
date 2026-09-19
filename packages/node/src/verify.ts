@@ -82,7 +82,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const endpoints = yield* Effect.try({
     try: () => ({
       jwks: new URL(`${options.issuer}/jwks`).href,
-      apiKey: new URL("/api/verifyApiKey", options.issuer).href,
+      apiKey: new URL("/api/issuer/verifyApiKey", options.issuer).href,
     }),
     catch: () => new ConfigurationError({ message: "Invalid issuer URL" }),
   });

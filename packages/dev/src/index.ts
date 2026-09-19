@@ -158,15 +158,16 @@ export async function startDisposableIssuer({
       await (await exchange(path, body, status)).body?.cancel();
     };
 
-    await post("/api/setupOwner", owner, 201);
+    await post("/api/issuer/setupOwner", owner, 201);
     await post("/api/auth/sign-in/email", owner, 200);
 
-    for (const resource of resources) await post("/api/createResource", resource, 201);
+    for (const resource of resources)
+      await post("/api/administration/createResource", resource, 201);
 
     const clientBody: ClientSeed = { ...client, confidential: true, native: true };
 
     const registration = Schema.decodeUnknownSync(ClientCredentials)(
-      await (await exchange("/api/createClient", clientBody, 201)).json(),
+      await (await exchange("/api/administration/createClient", clientBody, 201)).json(),
     );
 
     if (registration.client_secret === undefined)

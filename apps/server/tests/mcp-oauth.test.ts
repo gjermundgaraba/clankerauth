@@ -48,7 +48,7 @@ let cookie: string;
 
 const admin = (action: string, body: TestRequestBody) =>
   handle(
-    new Request(`${baseURL}/api/${action}`, {
+    new Request(`${baseURL}/api/administration/${action}`, {
       method: "POST",
       headers: { cookie, origin: baseURL, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -143,7 +143,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
 
   // The token grants MCP access only; browser administration still requires its own session.
   const http = await handle(
-    new Request(`${baseURL}/api/listClients`, {
+    new Request(`${baseURL}/api/administration/listClients`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${tokens.access_token}`,

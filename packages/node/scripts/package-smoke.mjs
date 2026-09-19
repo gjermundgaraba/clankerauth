@@ -23,17 +23,9 @@ try {
     join(directory, "package.json"),
     JSON.stringify({ private: true, type: "module" }),
   );
-  // This SDK intentionally pins the repository-approved pkg.pr.new Effect snapshot.
   await execute(
     "npm",
-    [
-      "install",
-      "--allow-remote=all",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      join(directory, tarball),
-    ],
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(directory, tarball)],
     { cwd: directory },
   );
   const installed = join(directory, "node_modules", name);
@@ -138,7 +130,6 @@ void makeBrowser;
     "npm",
     [
       "install",
-      "--allow-remote=all",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
@@ -157,13 +148,12 @@ void make;
 void subject;
 `,
   );
-  // The optional effect-actions preview has an upstream declaration error.
+  // The effect-actions package must also expose valid declarations.
   await execute(
     process.execPath,
     [
       join(root, "node_modules/typescript/bin/tsc"),
       "--noEmit",
-      "--skipLibCheck",
       "--strict",
       "--target",
       "ESNext",

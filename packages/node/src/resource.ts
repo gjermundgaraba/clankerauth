@@ -1,6 +1,6 @@
-import { Context, Effect } from "effect";
+import { Context, Effect, Schema, SchemaAST } from "effect";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { HttpServerRequest } from "effect/unstable/http";
+import { type Headers, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import {
   authenticationErrors,
   ConfigurationError,
@@ -11,6 +11,19 @@ import {
 import type { AuthenticationError } from "./errors.ts";
 import * as Verifier from "./verify.ts";
 import type { BrowserSession } from "./browser.ts";
+
+const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(authenticationErrors));
+
+const authenticationResponse = (error: AuthenticationError, headers: Headers.Input) => {
+  const schema = authenticationErrors.find((schema) => Schema.is(schema)(error));
+
+  if (schema === undefined) return Effect.die(new Error("Undeclared authentication error"));
+
+  return encodeResponse(error, {
+    status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
+    headers,
+  }).pipe(Effect.orDie);
+};
 
 export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Verifier.Principal>()(
   "@clankerauth/CurrentPrincipal",
@@ -48,13 +61,16 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
     return {};
   };
 
-  const middleware = Authentication.middleware(CurrentPrincipal, {
-    authenticate: Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+  const middleware = Authentication.middleware(
+    CurrentPrincipal,
+    Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
       verifier.verify(request.headers.authorization),
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.flatMap(authenticationResponse(error, headers(error)), Effect.fail),
+      ),
     ),
-    errors: authenticationErrors,
-    headers,
-  });
+  );
 
   return {
     verifier,
@@ -70,8 +86,9 @@ export type Resource = Effect.Success<ReturnType<typeof make>>;
 
 /** Opt-in browser-only HTTP authentication. Never attach this to MCP. */
 export const browserMiddleware = (resource: Resource, browser: BrowserSession) =>
-  Authentication.middleware(CurrentPrincipal, {
-    authenticate: Effect.gen(function* () {
+  Authentication.middleware(
+    CurrentPrincipal,
+    Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
 
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method))
@@ -79,7 +96,9 @@ export const browserMiddleware = (resource: Resource, browser: BrowserSession) =
       const token = yield* browser.accessToken(request.cookies[`${browser.cookie.name}_session`]);
 
       return yield* resource.verifier.verifyToken(token);
-    }),
-    errors: authenticationErrors,
-    headers: resource.headers,
-  });
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.flatMap(authenticationResponse(error, resource.headers(error)), Effect.fail),
+      ),
+    ),
+  );

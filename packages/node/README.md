@@ -2,7 +2,7 @@
 
 Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification and browser sessions. Verifies JWT access tokens and API keys and runs browser login with encrypted server-held credentials. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
 
-This is a breaking replacement for the Promise SDK. There is no legacy API or framework-neutral HTTP adapter. It requires the repository's Effect snapshot `9ad9891`, not the nominally same-version registry RC. Node 26 or later.
+This is a breaking replacement for the Promise SDK. There is no legacy API or framework-neutral HTTP adapter. Requires Effect `4.0.0-rc.116` and Node 26 or later.
 
 ## Install
 
@@ -14,10 +14,10 @@ echo '//npm.pkg.github.com/:_authToken=${GH_TOKEN}' >> ~/.npmrc
 vp add @gjermundgaraba/clankerauth-node
 ```
 
-Use the same Effect snapshot in the application:
+Install Effect in the application:
 
 ```sh
-vp add 'effect@https://pkg.pr.new/Effect-TS/effect/effect@9ad9891'
+vp add effect@4.0.0-rc.116
 ```
 
 ## Verify tokens directly
@@ -27,6 +27,7 @@ Core consumers do not need effect-actions or `skipLibCheck`.
 ```ts
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { McpProtocol } from "effect/unstable/ai";
 import { Verifier } from "@gjermundgaraba/clankerauth-node";
 
 const makeVerifier = Verifier.make({
@@ -42,16 +43,17 @@ const makeVerifier = Verifier.make({
 Install the optional peer dependency and import the integration subpath:
 
 ```sh
-vp add @gjermundgaraba/effect-actions@0.1.0-rc.1
+vp add @gjermundgaraba/effect-actions@0.1.0-rc.2
 ```
 
-Only integration consumers currently need `skipLibCheck: true`: effect-actions' preview declarations contain an unresolved `__exportAll` name. Consumer code is still type-checked.
+Core and integration declarations both type-check without `skipLibCheck`.
 
 Register a resource in the Clanker Auth dashboard. Its identifier is the exact audience URL, not just an origin. Acquire one resource capability per protected audience at application construction, not per request.
 
 ```ts
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { McpProtocol } from "effect/unstable/ai";
 import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 
@@ -74,15 +76,16 @@ const routes = Layer.unwrap(
       api.discovery.layer,
       mcp.discovery.layer,
       Http.layer(app).pipe(Layer.provide(api.middleware.layer)),
-      ActionMcp.layer({ name: "notes", version: "1.0.0", path: "/mcp" }, app).pipe(
-        Layer.provide(mcp.middleware.layer),
-      ),
+      ActionMcp.layerHttp(
+        { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
+        app,
+      ).pipe(Layer.provide(mcp.middleware.layer)),
     );
   }),
 ).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
-Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891` snapshot. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Authentication responses use `Cache-Control: no-store`.
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.116` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Authentication responses use `Cache-Control: no-store`.
 
 The supplied `HttpClient` must not retry credential exchanges or follow redirects. The SDK overrides only FetchHttpClient's redirect policy to reject redirects, preserves other caller-provided fetch defaults, and never installs retry middleware.
 
@@ -172,7 +175,7 @@ Refreshes and logout serialize per session. A durable no-replay marker is writte
 
 Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429), `ProviderUnavailable` and `StoreError` (503). Browser input errors use `InvalidRequest` (400) and `RequestTooLarge` (413). Invalid construction fails with `ConfigurationError`.
 
-effect-actions owns authentication error encoding and challenge headers. Browser HTTP handlers handle their own typed outcomes. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
+The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Browser HTTP handlers handle their own typed outcomes. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
 
 Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable`, `StoreError`, and `Unauthorized` keep this diagnostic field outside their public schemas; BrowserHttp and effect-actions serialize only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
 

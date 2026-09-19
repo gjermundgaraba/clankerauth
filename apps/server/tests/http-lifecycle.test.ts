@@ -106,7 +106,7 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   });
   const controller = new AbortController();
 
-  const response = fetch(`${url}/api/listClients`, {
+  const response = fetch(`${url}/api/administration/listClients`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: "https://issuer.example" },
     body: "{}",

@@ -6,12 +6,12 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { OpenApi } from "effect/unstable/httpapi";
 import {
   Http,
-  errors,
   Administration,
   IssuerActions,
   Forbidden,
   InternalServerError,
 } from "@clankerauth/api";
+import { apiErrorResponse } from "./api-errors.ts";
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { CurrentOwner, ownerAuthentication } from "./current-owner.ts";
@@ -83,7 +83,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
     Http.layer(issuer),
   );
 
-  const mcpRoutes = ActionMcp.layer(
+  const mcpRoutes = ActionMcp.layerHttp(
     {
       name: "clankerauth-admin",
       version: "0.3.0",
@@ -103,29 +103,37 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
     owner,
   ).pipe(
     Layer.provide(
-      Authentication.middleware(CurrentOwner, {
-        errors,
-        authenticate: mcpAuthentication(service),
-        headers: (error) =>
-          Match.value(error).pipe(
-            Match.tag("Unauthorized", (unauthorized) => ({
-              "www-authenticate": discovery.challenge({
-                error:
-                  unauthorized.error === "OAuth access token required"
-                    ? undefined
-                    : "invalid_token",
-                scope: mcpScope,
-              }),
-            })),
-            Match.tag("Forbidden", () => ({
-              "www-authenticate": discovery.challenge({
-                error: "insufficient_scope",
-                scope: mcpScope,
-              }),
-            })),
-            Match.orElse(() => ({})),
+      Authentication.middleware(
+        CurrentOwner,
+        mcpAuthentication(service).pipe(
+          Effect.catch((error) =>
+            Effect.flatMap(
+              apiErrorResponse(
+                error,
+                Match.value(error).pipe(
+                  Match.tag("Unauthorized", (unauthorized) => ({
+                    "www-authenticate": discovery.challenge({
+                      error:
+                        unauthorized.error === "OAuth access token required"
+                          ? undefined
+                          : "invalid_token",
+                      scope: mcpScope,
+                    }),
+                  })),
+                  Match.tag("Forbidden", () => ({
+                    "www-authenticate": discovery.challenge({
+                      error: "insufficient_scope",
+                      scope: mcpScope,
+                    }),
+                  })),
+                  Match.orElse(() => ({})),
+                ),
+              ),
+              Effect.fail,
+            ),
           ),
-      }).layer,
+        ),
+      ).layer,
     ),
   );
 

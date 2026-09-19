@@ -4,12 +4,12 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@9ad9891
+  "@effect/platform-node": 4.0.0-rc.116
   "@better-auth/oauth-provider": 1.7.4
   "@better-auth/api-key": 1.7.4
   better-auth: 1.7.4
   better-call: 1.4.0
-  effect: https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
+  effect: 4.0.0-rc.116
   "@types/node": 26.5.1
   jose: 6.2.12
   oauth4webapi: 3.8.8
@@ -29,15 +29,10 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "0.3.2"
-    "@effect/platform-node>effect": https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
-    "@effect/platform-node-shared>effect": https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
-    "@gjermundgaraba/effect-actions>effect": https://pkg.pr.new/Effect-TS/effect/effect@9ad9891
 patchedDependencies:
   "@better-auth/api-key@1.7.4": patches/@better-auth__api-key@1.7.4.patch
   "@better-auth/oauth-provider@1.7.4": patches/@better-auth__oauth-provider@1.7.4.patch
-# Registry releases wait one day. The Vite+ 0.3.2 upgrade and the current
-# effect-actions release are explicitly approved; future versions must pass the
-# quarantine.
+# Registry releases wait one day unless explicitly approved below.
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-core@0.3.2"
@@ -50,9 +45,7 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.2"
   - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.2"
   - vite-plus@0.3.2
-  - "@gjermundgaraba/effect-actions@0.1.0-rc.1"
-
-# Required by the pinned platform-node -> platform-node-shared snapshot URL.
-# pnpm 12.4.1 rejects it even with an explicit override or direct dependency;
-# re-enable this when the Effect snapshot is replaced by registry releases.
-blockExoticSubdeps: false
+  - "@gjermundgaraba/effect-actions@0.1.0-rc.2"
+  - "@effect/platform-node-shared@4.0.0-rc.116"
+  - "@effect/platform-node@4.0.0-rc.116"
+  - effect@4.0.0-rc.116
