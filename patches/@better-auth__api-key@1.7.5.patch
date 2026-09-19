@@ -1,5 +1,5 @@
 diff --git a/dist/index-BeAW0fNP.d.mts b/dist/index-BeAW0fNP.d.mts
-index e644e5f138b982ffdb18b12399fa70ace19c7b03..668c491aa0b8064292b18774c7fd47f4b34a7425 100644
+index e644e5f..668c491 100644
 --- a/dist/index-BeAW0fNP.d.mts
 +++ b/dist/index-BeAW0fNP.d.mts
 @@ -428,6 +428,7 @@ declare function apiKey(_configurations?: (ApiKeyConfigurationOptions & ApiKeyOp
@@ -35,7 +35,7 @@ index e644e5f138b982ffdb18b12399fa70ace19c7b03..668c491aa0b8064292b18774c7fd47f4
          createdAt: Date;
          updatedAt: Date;
 diff --git a/dist/index.mjs b/dist/index.mjs
-index dbef0ce94c147feb2cef02362a073bf94d7a7536..87cc5e97ec37ef59f1f0a89234eb85b698b5ce63 100644
+index bf85c8b..bf92c0c 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -372,20 +372,27 @@ function applySortingAndPagination(apiKeys, sortBy, sortDirection, limit, offset
@@ -217,7 +217,7 @@ index dbef0ce94c147feb2cef02362a073bf94d7a7536..87cc5e97ec37ef59f1f0a89234eb85b6
  	* The date and time when the key will expire.
  	*/
 diff --git a/dist/types-y22rgFHR.d.mts b/dist/types-y22rgFHR.d.mts
-index 3d896fcdb1e85bb71c0508ee4e22aef0213bc3dc..b38c178bee8548b15aef8915879ab503a72a5f57 100644
+index 3d896fc..b38c178 100644
 --- a/dist/types-y22rgFHR.d.mts
 +++ b/dist/types-y22rgFHR.d.mts
 @@ -153,6 +153,11 @@ declare const apiKeySchema: ({

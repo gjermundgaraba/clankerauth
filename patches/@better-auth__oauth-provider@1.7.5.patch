@@ -1,7 +1,7 @@
-diff --git a/dist/authorize-zWEGx4ky.mjs b/dist/authorize-zWEGx4ky.mjs
-index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..f70e97fde384aaedb22bdb7fa5ebf4108ba52a57 100644
---- a/dist/authorize-zWEGx4ky.mjs
-+++ b/dist/authorize-zWEGx4ky.mjs
+diff --git a/dist/authorize-riRRCSbC.mjs b/dist/authorize-riRRCSbC.mjs
+index 3242d48..4c6454e 100644
+--- a/dist/authorize-riRRCSbC.mjs
++++ b/dist/authorize-riRRCSbC.mjs
 @@ -3508,6 +3508,8 @@ async function revokeRefreshToken(ctx, opts, token, clientId) {
  		error_description: "token not found",
  		error: "invalid_request"
@@ -31,13 +31,13 @@ index 5fdd51c7da07656096bebbdd7b37a7b6b2490d92..f70e97fde384aaedb22bdb7fa5ebf410
  			clientId: {
  				type: "string",
  				unique: true,
-diff --git a/dist/introspect-Dlc-aIaF.mjs b/dist/introspect-Dlc-aIaF.mjs
-index 4076d0580f0a7fb69684637d2d16092609713262..befe32610e7b58dc418732e1e62bb12584679fb8 100644
---- a/dist/introspect-Dlc-aIaF.mjs
-+++ b/dist/introspect-Dlc-aIaF.mjs
+diff --git a/dist/introspect-njKASm3q.mjs b/dist/introspect-njKASm3q.mjs
+index c8d635e..3ae1390 100644
+--- a/dist/introspect-njKASm3q.mjs
++++ b/dist/introspect-njKASm3q.mjs
 @@ -1,6 +1,7 @@
  import { t as __exportAll } from "./rolldown-runtime-wcPFST8Q.mjs";
- import { A as collectExtensionAccessTokenClaims, C as storeToken, E as validateClientCredentials, F as getExtensionGrantHandler, L as getSupportedGrantTypes, M as collectExtensionUserInfoClaims, R as hasUserInfoClaimExtension, T as toResourceList, a as getClient, b as resolveSubjectIdentifier, c as getStoredToken, h as parseClientMetadata, i as extractClientCredentials, j as collectExtensionIdTokenClaims, l as isPKCERequired, n as decryptStoredClientSecret, o as getJwtPlugin, p as normalizeTimestampValue, r as destructureCredentials, t as clientAllowsGrant, w as toAudienceClaim, y as resolveSessionAuthTime } from "./utils-D4G5zf06.mjs";
+ import { A as collectExtensionAccessTokenClaims, C as storeToken, E as validateClientCredentials, F as getExtensionGrantHandler, L as getSupportedGrantTypes, M as collectExtensionUserInfoClaims, R as hasUserInfoClaimExtension, T as toResourceList, a as getClient, b as resolveSubjectIdentifier, c as getStoredToken, h as parseClientMetadata, i as extractClientCredentials, j as collectExtensionIdTokenClaims, l as isPKCERequired, n as decryptStoredClientSecret, o as getJwtPlugin, p as normalizeTimestampValue, r as destructureCredentials, t as clientAllowsGrant, w as toAudienceClaim, y as resolveSessionAuthTime } from "./utils-CWjOhEQb.mjs";
  import { APIError } from "better-auth/api";
 +import { getCurrentAdapter, runWithTransaction } from "@better-auth/core/context";
  import { generateRandomString, symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
@@ -202,7 +202,7 @@ index 4076d0580f0a7fb69684637d2d16092609713262..befe32610e7b58dc418732e1e62bb125
  		scopes: requestedScopes ?? scopes,
  		user,
 diff --git a/dist/oauth-1Ud-hvZY.d.mts b/dist/oauth-1Ud-hvZY.d.mts
-index 130fd5d8f3ddd36d1b776338367af5b8cb7f0e79..dc57753a90b4b3bfd78b9d18c526c00fa9116f70 100644
+index 130fd5d..dc57753 100644
 --- a/dist/oauth-1Ud-hvZY.d.mts
 +++ b/dist/oauth-1Ud-hvZY.d.mts
 @@ -10,6 +10,11 @@ declare const schema: {

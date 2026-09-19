@@ -5,35 +5,36 @@ packages:
 catalogMode: prefer
 catalog:
   "@effect/platform-node": 4.0.0-rc.116
-  "@better-auth/oauth-provider": 1.7.4
-  "@better-auth/api-key": 1.7.4
-  better-auth: 1.7.4
+  "@better-auth/oauth-provider": 1.7.5
+  "@better-auth/api-key": 1.7.5
+  better-auth: 1.7.5
   better-call: 1.4.0
   effect: 4.0.0-rc.116
-  "@types/node": 26.5.1
+  "@types/node": 26.6.2
   jose: 6.2.12
   oauth4webapi: 3.8.8
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.3.3
   vite-plus: 0.3.3
   playwright: 1.63.0
-  kysely: 0.29.5
-  "@better-auth/cimd": 1.7.4
-  "@better-auth/core": 1.7.4
-  "@better-auth/kysely-adapter": 1.7.4
+  kysely: 0.29.6
+  "@better-auth/cimd": 1.7.5
+  "@better-auth/core": 1.7.5
+  "@better-auth/kysely-adapter": 1.7.5
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.82.0
 
 overrides:
   vite@*: "catalog:"
+  kysely: "catalog:"
 peerDependencyRules:
   allowedVersions:
     vite: "*"
   allowAny:
     - vite
 patchedDependencies:
-  "@better-auth/api-key@1.7.4": patches/@better-auth__api-key@1.7.4.patch
-  "@better-auth/oauth-provider@1.7.4": patches/@better-auth__oauth-provider@1.7.4.patch
+  "@better-auth/api-key@1.7.5": patches/@better-auth__api-key@1.7.5.patch
+  "@better-auth/oauth-provider@1.7.5": patches/@better-auth__oauth-provider@1.7.5.patch
 # Registry releases wait one day unless explicitly approved below.
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
@@ -46,12 +47,11 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-linux-x64-musl@0.3.2"
   - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.2"
   - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.2"
-  - vite-plus@0.3.2
+  - vite-plus
   - "@gjermundgaraba/effect-actions@0.1.0-rc.2"
   - "@effect/platform-node-shared@4.0.0-rc.116"
   - "@effect/platform-node@4.0.0-rc.116"
   - effect@4.0.0-rc.116
-  - vite-plus
   - "@voidzero-dev/*"
   - oxlint
   - "@oxlint/*"
@@ -61,3 +61,4 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  - "@types/node@26.6.2"
