@@ -14,8 +14,8 @@ catalog:
   jose: 6.2.12
   oauth4webapi: 3.8.8
   typescript: 7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
-  vite-plus: 0.3.2
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.3
+  vite-plus: 0.3.3
   playwright: 1.63.0
   kysely: 0.29.5
   "@better-auth/cimd": 1.7.4
@@ -28,7 +28,9 @@ overrides:
   vite@*: "catalog:"
 peerDependencyRules:
   allowedVersions:
-    vite: "0.3.2"
+    vite: "*"
+  allowAny:
+    - vite
 patchedDependencies:
   "@better-auth/api-key@1.7.4": patches/@better-auth__api-key@1.7.4.patch
   "@better-auth/oauth-provider@1.7.4": patches/@better-auth__oauth-provider@1.7.4.patch
@@ -49,3 +51,13 @@ minimumReleaseAgeExclude:
   - "@effect/platform-node-shared@4.0.0-rc.116"
   - "@effect/platform-node@4.0.0-rc.116"
   - effect@4.0.0-rc.116
+  - vite-plus
+  - "@voidzero-dev/*"
+  - oxlint
+  - "@oxlint/*"
+  - oxlint-tsgolint
+  - "@oxlint-tsgolint/*"
+  - oxfmt
+  - "@oxfmt/*"
+  - vitest
+  - "@vitest/*"
