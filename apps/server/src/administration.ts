@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { apiError } from "./api-errors.ts";
+import { apiError, provider } from "./api-errors.ts";
 import {
   BadRequest,
   type ClientInput,
@@ -19,7 +19,7 @@ export function administration(service: Service) {
 
   return {
     setup: Effect.fn("Administration.setup")(function* (input: typeof SetupInput.Type) {
-      yield* Effect.tryPromise({ try: () => createOwner(service, input), catch: apiError });
+      yield* createOwner(service, input).pipe(Effect.mapError(apiError));
 
       return { created: true };
     }),
@@ -27,10 +27,7 @@ export function administration(service: Service) {
       const { providerHeaders, email } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      const managed = yield* Effect.tryPromise({
-        try: () => auth.api.getOAuthClients({ headers }),
-        catch: apiError,
-      });
+      const managed = yield* provider(() => auth.api.getOAuthClients({ headers }));
 
       const rows = yield* service.sql`
         SELECT p.clientId AS client_id, p.source AS onboarding, p.blocked,
@@ -106,33 +103,29 @@ export function administration(service: Service) {
 
       const headers = yield* providerHeaders;
 
-      const client = yield* Effect.tryPromise({
-        try: () =>
-          // The administrative endpoint accepts skip_consent; the plain one drops it.
-          auth.api.adminCreateOAuthClient({
-            headers,
-            body: {
-              client_name: input.name.trim(),
-              redirect_uris: [input.redirect],
-              token_endpoint_auth_method: input.confidential ? "client_secret_basic" : "none",
-              application_type: input.native ? "native" : "web",
-              grant_types: ["authorization_code", "refresh_token"],
-              scope: scopes.join(" "),
-              // Owner-registered clients are first party: no consent screen.
-              skip_consent: true,
-            },
-          }),
-        catch: apiError,
-      });
+      const client = yield* provider(() =>
+        // The administrative endpoint accepts skip_consent; the plain one drops it.
+        auth.api.adminCreateOAuthClient({
+          headers,
+          body: {
+            client_name: input.name.trim(),
+            redirect_uris: [input.redirect],
+            token_endpoint_auth_method: input.confidential ? "client_secret_basic" : "none",
+            application_type: input.native ? "native" : "web",
+            grant_types: ["authorization_code", "refresh_token"],
+            scope: scopes.join(" "),
+            // Owner-registered clients are first party: no consent screen.
+            skip_consent: true,
+          },
+        }),
+      );
 
       yield* service.resources.setAccess(client.client_id, input.resources, headers).pipe(
         Effect.mapError(apiError),
         Effect.tapError(() =>
-          Effect.tryPromise({
-            try: () =>
-              auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
-            catch: apiError,
-          }),
+          provider(() =>
+            auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+          ),
         ),
       );
 
@@ -177,10 +170,7 @@ export function administration(service: Service) {
     delete: Effect.fn("Administration.delete")(function* (body: typeof ClientId.Type) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
-      yield* Effect.tryPromise({
-        try: () => auth.api.deleteOAuthClient({ headers, body }),
-        catch: apiError,
-      });
+      yield* provider(() => auth.api.deleteOAuthClient({ headers, body }));
 
       return { deleted: true };
     }),
@@ -200,10 +190,7 @@ export function administration(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      return yield* Effect.tryPromise({
-        try: () => auth.api.rotateClientSecret({ headers, body }),
-        catch: apiError,
-      });
+      return yield* provider(() => auth.api.rotateClientSecret({ headers, body }));
     }),
   };
 }

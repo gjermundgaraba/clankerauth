@@ -20,6 +20,10 @@
     "./effect-actions": {
       "types": "./dist/effect-actions.d.ts",
       "import": "./dist/effect-actions.js"
+    },
+    "./browser-api": {
+      "types": "./dist/browser-api.d.ts",
+      "import": "./dist/browser-api.js"
     }
   },
   "publishConfig": {
@@ -34,7 +38,6 @@
     "oauth4webapi": "catalog:"
   },
   "devDependencies": {
-    "@clankerauth/server": "workspace:*",
     "@gjermundgaraba/effect-actions": "0.1.0-rc.2",
     "@types/node": "catalog:",
     "typescript": "catalog:",

@@ -1,8 +1,12 @@
-import { Effect, Layer, Match } from "effect";
-import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { McpProtocol } from "effect/unstable/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import { OpenApi } from "effect/unstable/httpapi";
 import {
   Http,
@@ -11,135 +15,126 @@ import {
   Forbidden,
   InternalServerError,
 } from "@clankerauth/api";
-import { apiErrorResponse } from "./api-errors.ts";
+import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
-import { CurrentOwner, ownerAuthentication } from "./current-owner.ts";
-import { mcpAuthentication } from "./mcp-auth.ts";
+import { bearerOwner, sessionOwner } from "./current-owner.ts";
 import { mcpResource, mcpScope } from "./resources.ts";
 import type { Service } from "./auth.ts";
 
 export function actionRoutes(service: Service, mcpAllowedOrigins: readonly string[]) {
-  const admin = administration(service);
-  const keys = machineKeys(service);
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const admin = administration(service);
+      const keys = machineKeys(service);
 
-  const owner = Administration.implement({
-    listClients: admin.list,
-    createClient: admin.create,
-    deleteClient: admin.delete,
-    revokeClient: admin.revoke,
-    blockClient: admin.block,
-    rotateClientSecret: admin.rotate,
-    setClientAccess: admin.access,
-    createResource: admin.createResource,
-    updateResource: admin.updateResource,
-    deleteResource: admin.deleteResource,
-    listApiKeys: keys.list,
-    createApiKey: keys.create,
-    updateApiKey: keys.update,
-    deleteApiKey: keys.delete,
-  });
+      const owner = Administration.implement({
+        listClients: admin.list,
+        createClient: admin.create,
+        deleteClient: admin.delete,
+        revokeClient: admin.revoke,
+        blockClient: admin.block,
+        rotateClientSecret: admin.rotate,
+        setClientAccess: admin.access,
+        createResource: admin.createResource,
+        updateResource: admin.updateResource,
+        deleteResource: admin.deleteResource,
+        listApiKeys: keys.list,
+        createApiKey: keys.create,
+        updateApiKey: keys.update,
+        deleteApiKey: keys.delete,
+      });
 
-  const issuer = IssuerActions.implement({
-    setupStatus: () =>
-      service.owner().pipe(
-        Effect.map((owner) => ({ required: !owner })),
-        Effect.mapError(() => new InternalServerError({ error: "Request could not be completed" })),
-      ),
-    setupOwner: (input) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-
-        if (request.headers.origin !== service.settings.baseURL)
-          return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
-
-        return yield* admin.setup(input);
-      }),
-    verifyApiKey: ({ resource }) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-
-        return yield* keys.verify(new Headers(request.headers), resource);
-      }),
-  });
-
-  const discovery = Authentication.protectedResource({
-    resource: mcpResource(service.settings.baseURL),
-    authorizationServers: [`${service.settings.baseURL}/api/auth`],
-    scopesSupported: [mcpScope, "offline_access"],
-  });
-
-  const ownerSession = ownerAuthentication(service).layer;
-
-  // Owner administration and the document need an owner session; issuer actions
-  // have their own access rules and must work before anyone has signed in.
-  const httpRoutes = Layer.mergeAll(
-    Http.layer(owner).pipe(Layer.provide(ownerSession)),
-    HttpRouter.add(
-      "GET",
-      "/openapi.json",
-      HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
-    ).pipe(Layer.provide(ownerSession)),
-    Http.layer(issuer),
-  );
-
-  const mcpRoutes = ActionMcp.layerHttp(
-    {
-      name: "clankerauth-admin",
-      version: "0.3.0",
-      path: "/mcp",
-      // Keep the existing protocol allowlist; native streaming does not expand it.
-      protocols: [
-        McpProtocol.v2026_07_28,
-        McpProtocol.v2025_11_25,
-        McpProtocol.v2025_06_18,
-        McpProtocol.v2025_03_26,
-      ],
-      // Native MCP admission needs this allowlist even after owner authentication.
-      allowedOrigins: mcpAllowedOrigins,
-      instructions:
-        "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
-    },
-    owner,
-  ).pipe(
-    Layer.provide(
-      Authentication.middleware(
-        CurrentOwner,
-        mcpAuthentication(service).pipe(
-          Effect.catch((error) =>
-            Effect.flatMap(
-              apiErrorResponse(
-                error,
-                Match.value(error).pipe(
-                  Match.tag("Unauthorized", (unauthorized) => ({
-                    "www-authenticate": discovery.challenge({
-                      error:
-                        unauthorized.error === "OAuth access token required"
-                          ? undefined
-                          : "invalid_token",
-                      scope: mcpScope,
-                    }),
-                  })),
-                  Match.tag("Forbidden", () => ({
-                    "www-authenticate": discovery.challenge({
-                      error: "insufficient_scope",
-                      scope: mcpScope,
-                    }),
-                  })),
-                  Match.orElse(() => ({})),
-                ),
-              ),
-              Effect.fail,
+      const issuer = IssuerActions.implement({
+        setupStatus: () =>
+          service.owner().pipe(
+            Effect.map((owner) => ({ required: !owner })),
+            Effect.mapError(
+              () => new InternalServerError({ error: "Request could not be completed" }),
             ),
           ),
-        ),
-      ).layer,
-    ),
-  );
+        setupOwner: (input) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
 
-  // Provider SDK calls do not support interruption. Finish admitted action work
-  // before its request scope releases sessions or permits database shutdown.
-  return Layer.mergeAll(httpRoutes, mcpRoutes, discovery.layer).pipe(
-    Layer.provide(HttpRouter.middleware((effect) => Effect.uninterruptible(effect)).layer),
+            if (request.headers.origin !== service.settings.baseURL)
+              return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
+
+            return yield* admin.setup(input);
+          }),
+        verifyApiKey: ({ resource }) =>
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+
+            return yield* keys.verify(new Headers(request.headers), resource);
+          }),
+      });
+
+      // The SDK verifier reads JWKS from this issuer in-process. Provider calls are
+      // tracked for shutdown like external ones: the SDK's deadline can abandon a
+      // call that must still settle.
+      const loopback: typeof fetch = (input, init) => {
+        const request = new Request(input, init);
+        // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
+        request.headers.set("x-clankerauth-peer", "127.0.0.1");
+
+        return service.run(() => service.auth.handler(request));
+      };
+
+      const adminResource = yield* Resource.make({
+        issuer: `${service.settings.baseURL}/api/auth`,
+        resource: mcpResource(service.settings.baseURL),
+        scopes: [mcpScope, "offline_access"],
+        requiredScopes: [mcpScope],
+        // The loopback serves provider routes only, so key verification must never reach the issuer.
+        apiKeys: false,
+      }).pipe(
+        Effect.provide(
+          FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, loopback))),
+        ),
+      );
+
+      // Owner administration needs the dashboard session; issuer actions have
+      // their own access rules and must work before anyone has signed in.
+      const httpRoutes = Layer.mergeAll(
+        Http.layer(owner).pipe(Layer.provide(sessionOwner(service).layer)),
+        HttpRouter.add(
+          "GET",
+          "/openapi.json",
+          HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
+        ),
+        Http.layer(issuer),
+      );
+
+      const mcpRoutes = ActionMcp.layerHttp(
+        {
+          name: "clankerauth-admin",
+          version: "0.3.0",
+          path: "/mcp",
+          // Keep the existing protocol allowlist; native streaming does not expand it.
+          protocols: [
+            McpProtocol.v2026_07_28,
+            McpProtocol.v2025_11_25,
+            McpProtocol.v2025_06_18,
+            McpProtocol.v2025_03_26,
+          ],
+          // Native MCP admission needs this allowlist even after owner authentication.
+          allowedOrigins: mcpAllowedOrigins,
+          instructions:
+            "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
+        },
+        owner,
+      ).pipe(
+        Layer.provide(
+          bearerOwner(service, adminResource).combine(Resource.middleware(adminResource)).layer,
+        ),
+      );
+
+      // Provider SDK calls do not support interruption. Finish admitted action work
+      // before its request scope releases sessions or permits database shutdown.
+      return Layer.mergeAll(httpRoutes, mcpRoutes, adminResource.discovery.layer).pipe(
+        Layer.provide(HttpRouter.middleware((effect) => Effect.uninterruptible(effect)).layer),
+      );
+    }),
   );
 }

@@ -74,13 +74,7 @@ void makeBrowser;
   await writeFile(join(directory, "consumer.mjs"), `export * from "${name}";`);
   const api = await import(pathToFileURL(join(directory, "consumer.mjs")).href);
 
-  for (const exported of [
-    "Verifier",
-    "BrowserSession",
-    "BrowserHttp",
-    "SessionStore",
-    "Unauthorized",
-  ])
+  for (const exported of ["Verifier", "BrowserSession", "SessionStore", "Unauthorized"])
     assert(exported in api, `Missing core export: ${exported}`);
 
   // Resolve Effect from the isolated installation, not the workspace's development dependencies.
@@ -141,11 +135,14 @@ void makeBrowser;
     join(directory, "integration.ts"),
     `
 import { Effect } from "effect";
-import { Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { BrowserActions, Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { Http } from "@gjermundgaraba/clankerauth-node/browser-api";
 const make = Resource.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/api", scopes: [] });
 const subject = Effect.map(CurrentPrincipal, principal => principal.subject);
 void make;
 void subject;
+void BrowserActions.layer;
+void Http.api;
 `,
   );
   // The effect-actions package must also expose valid declarations.

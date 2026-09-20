@@ -75,11 +75,11 @@ const routes = Layer.unwrap(
     return Layer.mergeAll(
       api.discovery.layer,
       mcp.discovery.layer,
-      Http.layer(app).pipe(Layer.provide(api.middleware.layer)),
+      Http.layer(app).pipe(Layer.provide(Resource.middleware(api).layer)),
       ActionMcp.layerHttp(
         { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
         app,
-      ).pipe(Layer.provide(mcp.middleware.layer)),
+      ).pipe(Layer.provide(Resource.middleware(mcp).layer)),
     );
   }),
 ).pipe(Layer.provide(FetchHttpClient.layer));
@@ -107,9 +107,9 @@ const write = Effect.gen(function* () {
 
 Declare `Forbidden` in that action/group's error schemas. Middleware authenticates the request; it does not infer per-action policy or filter MCP tool discovery.
 
-A principal contains `subject`, `scopes`, and `actor`: either `{ kind: "client", clientId }` or `{ kind: "key", keyId }`. The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects.
+A principal contains `subject`, `scopes`, and `actor`: either `{ kind: "client", clientId, generation }` or `{ kind: "key", keyId }`. The generation is the client's grant generation at issuance; the issuer rotates it on revocation and re-registration. The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects.
 
-JWTs are checked against issuer, audience, EdDSA signature, token type, required claims, expiry and scopes. Sender-constrained tokens are rejected. JWKS lookups are cached for ten minutes. Unknown keys trigger one refresh and resolution retry, with a thirty-second cooldown to bound provider traffic. Failed miss-triggered refreshes also cool down and return 503; still-valid cached keys remain usable. Initial lookup failures are not retained. Removed keys can remain trusted until cache expiry. API keys are checked online on **every request**, so revocation is effective immediately. Verification has a five-second deadline.
+JWTs are checked against issuer, audience, EdDSA signature, token type, required claims, expiry and scopes. Sender-constrained tokens are rejected. JWKS lookups are cached for ten minutes. Unknown keys trigger one refresh and resolution retry, with a thirty-second cooldown to bound provider traffic. Failed miss-triggered refreshes also cool down and return 503; still-valid cached keys remain usable. Initial lookup failures are not retained. Removed keys can remain trusted until cache expiry. API keys are checked online on **every request**, so revocation is effective immediately. A resource that accepts only OAuth access tokens sets `apiKeys: false`; key-shaped bearers then fail as `Unauthorized` without contacting the issuer. Verification has a five-second deadline.
 
 The bundled issuer does not configure automatic signing-key rotation. Immediate-use rotation is supported, but tokens signed by a new key can be rejected during the thirty-second cooldown after a successful lookup. Publish-before-use avoids that short window; it is not mandatory.
 
@@ -128,8 +128,8 @@ Map expected database failures to `StoreError({ operation, cause })` at your per
 
 ```ts
 import { Effect, Layer, Redacted } from "effect";
-import { BrowserHttp, BrowserSession } from "@gjermundgaraba/clankerauth-node";
-import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { BrowserSession } from "@gjermundgaraba/clankerauth-node";
+import { BrowserActions, Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
 
 // Inside application construction, with HttpClient and SessionStore provided:
 const browser =
@@ -147,36 +147,38 @@ const browser =
   });
 
 const browserRoutes = Layer.mergeAll(
-  BrowserHttp.layer(browser),
-  Http.layer(app).pipe(Layer.provide(Resource.browserMiddleware(api, browser).layer)),
+  BrowserActions.layer(browser),
+  Http.layer(app).pipe(Layer.provide(Resource.middleware(api, { browser }).layer)),
 );
 ```
 
 This example's construction fragment belongs inside `Effect.gen`. Supply configuration and secrets at your composition root; the SDK does not read environment variables or start its own runtime.
 
-`BrowserHttp.layer` registers:
+`BrowserActions.layer` registers:
 
-- `POST /auth/login`: accepts `{ returnTo: "/path" }`, returns `{ url }`.
+- `POST /auth/browser/login`: accepts `{ returnTo: "/path" }`, returns `{ url }`.
 - `GET <callback pathname>`: consumes the one-time transaction and redirects (`/workspace/auth/callback` above).
-- `GET /auth/session`: returns authenticated subject, scopes and issuer.
-- `POST /auth/logout`: ends the local session and attempts provider revocation.
+- `POST /auth/browser/session`: returns the subject, scopes and issuer, or `Unauthorized`.
+- `POST /auth/browser/logout`: ends the local session and attempts provider revocation.
 
-These are ordinary Effect HTTP routes, **not actions**. `BrowserHttp.handlers(browser)` exposes the same handlers when explicit route composition is needed. Mount its callback at the configured public pathname, exposed as `browser.callbackPath`; authorization and code exchange always use the exact configured URL. The other convenience routes remain under `/auth`. Use explicit routing and distinct cookie names for multiple browser configurations on one origin. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback instead returns the sanitized HTTP error to avoid a redirect loop. Login return destinations must be same-origin paths other than the callback pathname; `/auth/` is not reserved as a whole. Login bodies are bounded at 16 KiB. Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
+Login, session and logout are effect-actions, with JSON bodies (`{}` for session and logout). Browser clients import the pure `Http` contract from `@gjermundgaraba/clankerauth-node/browser-api`. Only the OAuth callback is an ordinary HTTP endpoint. The callback uses the exact configured URL; action routes live under `/auth/browser`. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback returns the sanitized HTTP error to avoid a redirect loop. Login destinations must be same-origin paths other than the callback pathname. The host sets request-body limits, for example `HttpIncomingMessage.MaxBodySize` on Effect's Node server (Clanker Auth's own adapter uses 64 KiB). Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
 
-Use browser middleware only for cookie-authenticated HTTP routes. It checks Origin on unsafe methods. Bearer middleware ignores cookies; browser middleware requires a session cookie. Choose the policy per route/group—there is no fallback between the two. **Never attach browser middleware to MCP.**
+Tokens always remain in the server-side session store, never in browser JavaScript.
+
+Pass `browser` only for HTTP routes the application's own pages call. A request with an Authorization header is always verified as a bearer token; without one, the session cookie authenticates it and Origin is checked on unsafe methods. **Never pass `browser` for MCP.**
 
 The session capability does not accept incoming HTTP requests: `login(returnTo)`, `callback(url, transactionCookie)`, `session(sessionCookie)`, `accessToken(sessionCookie)`, and `logout(sessionCookie)` are Effects. HTTP handlers own cookie extraction and presentation.
 
-Cookies are HttpOnly, SameSite=Lax and Secure on HTTPS. Login uses S256 PKCE, state, nonce, exact issuer validation and signed ID-token checks. Stored payloads remain AES-256-GCM sealed under the configured secret with hashed cookie identifiers. The previous SDK's persisted format is unchanged.
+Cookies are HttpOnly, SameSite=Lax and Secure on HTTPS. Login uses S256 PKCE, state, nonce, exact issuer validation and signed ID-token checks. Stored payloads remain AES-256-GCM sealed under the configured secret with hashed cookie identifiers.
 
 Refreshes and logout serialize per session. A durable no-replay marker is written before refresh; interruptions, ambiguous outcomes and restarts cannot reuse that refresh token. Discovery failure before the marker remains retryable. Operational refresh failures return 503 and invalidate the session; subsequent access requires login. Local logout remains authoritative if provider revocation fails, with a sanitized Effect warning.
 
 ## Errors and observability
 
-Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429), `ProviderUnavailable` and `StoreError` (503). Browser input errors use `InvalidRequest` (400) and `RequestTooLarge` (413). Invalid construction fails with `ConfigurationError`.
+Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429), `ProviderUnavailable` and `StoreError` (503). Browser input errors use `InvalidRequest` (400). Invalid construction fails with `ConfigurationError`.
 
-The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Browser HTTP handlers handle their own typed outcomes. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
+The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Browser actions use their declared error schemas; the callback handles redirects. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
 
-Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable`, `StoreError`, and `Unauthorized` keep this diagnostic field outside their public schemas; BrowserHttp and effect-actions serialize only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
+Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable`, `StoreError`, and `Unauthorized` keep this diagnostic field outside their public schemas; BrowserActions and effect-actions serialize only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
 
 MIT licensed.

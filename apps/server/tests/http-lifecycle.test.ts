@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Exit, Schema, Scope } from "effect";
+import { Redacted, Effect, Exit, Schema, Scope } from "effect";
+import { generateKeyPair, SignJWT } from "jose";
+import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { nodeHandler } from "../src/app.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
 import { createNodeServer } from "../src/node-http.ts";
@@ -23,14 +25,16 @@ let closing: Promise<void> | undefined;
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-http-lifecycle-"));
-  service = await openAuth({
-    baseURL: "https://issuer.example",
-    secret: "test-only-secret-with-at-least-32-characters",
-    database: join(directory, "auth.sqlite"),
-    host: "127.0.0.1",
-    port: 3000,
-  });
-  await initialize(service);
+  service = await Effect.runPromise(
+    openAuth({
+      baseURL: "https://issuer.example",
+      secret: Redacted.make("test-only-secret-with-at-least-32-characters"),
+      database: join(directory, "auth.sqlite"),
+      host: "127.0.0.1",
+      port: 3000,
+    }),
+  );
+  await Effect.runPromise(initialize(service));
   scope = Scope.makeUnsafe();
 
   const listener = await Effect.runPromise(
@@ -97,19 +101,21 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const destroy = vi.spyOn(service.database, "destroy");
-  vi.spyOn(service.auth.api, "getSession").mockImplementation(async () => {
+  const context = await service.auth.$context;
+  const hash = context.password.hash;
+  vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
     entered.resolve();
     await release.promise;
     await Effect.runPromise(service.sql`SELECT 1`);
 
-    return null;
+    return hash(password);
   });
   const controller = new AbortController();
 
-  const response = fetch(`${url}/api/administration/listClients`, {
+  const response = fetch(`${url}/api/issuer/setupOwner`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: "https://issuer.example" },
-    body: "{}",
+    body: JSON.stringify({ email: "owner@example.com", password: "test-password-long-enough" }),
     signal: controller.signal,
   });
 
@@ -128,6 +134,60 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
     release.resolve();
   }
 });
+
+test("shutdown waits for an in-process JWKS fetch the SDK has already given up on", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const destroy = vi.spyOn(service.database, "destroy");
+  const handler = service.auth.handler;
+  let stalledCallFailed: unknown;
+
+  vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
+    if (new URL(request.url).pathname.endsWith("/jwks")) {
+      entered.resolve();
+      await release.promise;
+      await Effect.runPromise(service.sql`SELECT 1`).catch((cause: unknown) => {
+        stalledCallFailed = cause;
+      });
+    }
+
+    return handler(request);
+  });
+
+  const { privateKey } = await generateKeyPair("EdDSA");
+
+  const token = await new SignJWT({ scope: "admin", client_id: "stalled", azp: "stalled" })
+    .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "unknown" })
+    .setIssuer("https://issuer.example/api/auth")
+    .setAudience("https://issuer.example/mcp")
+    .setSubject("owner")
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .setJti("stalled")
+    .sign(privateKey);
+
+  const response = fetch(
+    mcpRequest({
+      method: "tools/list",
+      url: `${url}/mcp`,
+      headers: { authorization: `Bearer ${token}` },
+    }),
+  );
+
+  try {
+    await entered.promise;
+    expect((await response).status).toBe(503);
+    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => service.close());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(destroy).not.toHaveBeenCalled();
+    release.resolve();
+    await closing;
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(stalledCallFailed).toBeUndefined();
+  } finally {
+    release.resolve();
+  }
+}, 15000);
 
 test.each(["GET", "HEAD"])("%s reaches the provider without a body", async (method) => {
   const handler = vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {

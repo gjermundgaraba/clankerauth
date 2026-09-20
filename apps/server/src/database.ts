@@ -1,5 +1,5 @@
 import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-dialect";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { Kysely, sql as query } from "kysely";
 import { DatabaseSync } from "node:sqlite";
 
@@ -29,16 +29,34 @@ export function makeSql(database: Kysely<DatabaseSchema>) {
 
 export type Sql = ReturnType<typeof makeSql>;
 
-/** Keep local writes atomic while preserving domain errors across the Promise boundary. */
-export function transaction<A>(
+/** Commit on success, roll back on failure or defect; a started transaction always settles. */
+export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>(
   database: Kysely<DatabaseSchema>,
-  operation: (sql: Sql) => Effect.Effect<A, Error>,
-): Effect.Effect<A, Error> {
-  return Effect.tryPromise({
-    try: () => database.transaction().execute((trx) => Effect.runPromise(operation(makeSql(trx)))),
+  operation: (sql: Sql) => Effect.Effect<A, E, R>,
+) {
+  const trx = yield* Effect.tryPromise({
+    try: () => database.startTransaction().execute(),
     catch: normalizeError,
   });
-}
+
+  const exit = yield* Effect.exit(operation(makeSql(trx)));
+
+  // The body's own outcome is what callers see; a failed ROLLBACK cannot improve on it.
+  const settle = Effect.ignore(
+    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: normalizeError }),
+  );
+
+  // A failed COMMIT, such as a deferred constraint, leaves the transaction open on the
+  // shared connection; roll it back before surfacing the failure.
+  const commit = Effect.tryPromise({
+    try: () => trx.commit().execute(),
+    catch: normalizeError,
+  }).pipe(Effect.tapError(() => settle));
+
+  yield* Exit.isSuccess(exit) ? commit : settle;
+
+  return yield* exit;
+}, Effect.uninterruptible);
 
 export async function openDatabase(filename: string) {
   const database = new DatabaseSync(filename);

@@ -15,7 +15,12 @@ export interface Principal {
   readonly subject: string;
   readonly scopes: readonly string[];
   readonly actor:
-    | { readonly kind: "client"; readonly clientId: string }
+    | {
+        readonly kind: "client";
+        readonly clientId: string;
+        /** The client's grant generation when the token was issued; the issuer rotates it on revocation and re-registration. */
+        readonly generation: string;
+      }
     | { readonly kind: "key"; readonly keyId: string };
 }
 
@@ -23,6 +28,8 @@ export interface Options {
   readonly issuer: string;
   readonly resource: string;
   readonly requiredScopes?: readonly string[];
+  /** `false` rejects API keys without consulting the issuer; only OAuth access tokens are accepted. */
+  readonly apiKeys?: boolean;
 }
 
 export interface Verifier {
@@ -51,6 +58,7 @@ const Jwks = Schema.Struct({
 const Claims = Schema.Struct({
   sub: Schema.NonEmptyString,
   client_id: Schema.NonEmptyString,
+  grant_generation: Schema.NonEmptyString,
   scope: Schema.String,
 });
 
@@ -182,7 +190,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
           audience: options.resource,
           algorithms: ["EdDSA"],
           typ: "at+jwt",
-          requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
+          requiredClaims: ["sub", "client_id", "grant_generation", "scope", "iat", "exp"],
           currentDate: new Date(now),
         }),
       catch: (cause) =>
@@ -200,7 +208,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     return {
       subject: claims.sub,
       scopes: claims.scope.split(" ").filter(Boolean),
-      actor: { kind: "client", clientId: claims.client_id },
+      actor: { kind: "client", clientId: claims.client_id, generation: claims.grant_generation },
     } satisfies Principal;
   });
 
@@ -245,7 +253,11 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
   const verifyToken = Effect.fn("Verifier.verifyToken")(
     function* (token: string) {
-      const principal = yield* token.startsWith("ca_") ? verifyKey(token) : verifyJwt(token);
+      const principal = yield* token.startsWith("ca_")
+        ? options.apiKeys === false
+          ? Effect.fail(unauthorized())
+          : verifyKey(token)
+        : verifyJwt(token);
 
       if (options.requiredScopes?.some((scope) => !principal.scopes.includes(scope)))
         return yield* new Forbidden({ message: "Insufficient scope" });

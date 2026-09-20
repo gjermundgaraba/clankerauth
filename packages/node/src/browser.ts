@@ -57,7 +57,7 @@ const pkceChallenge = Effect.fn("BrowserSession.pkceChallenge")((verifier: strin
   Effect.promise(() => oauth.calculatePKCECodeChallenge(verifier)),
 );
 
-/** Domain/session capability. Cookies and HTTP response mapping live in BrowserHttp. */
+/** Domain/session capability. Cookies and HTTP response mapping live in BrowserActions. */
 export const make = Effect.fn("BrowserSession.make")(function* (options: Options) {
   const store = yield* SessionStore;
   const locked = yield* Coordination.make;
@@ -430,7 +430,6 @@ export const make = Effect.fn("BrowserSession.make")(function* (options: Options
     const principal = yield* options.verifyToken(token);
 
     return {
-      authenticated: true,
       subject: principal.subject,
       scopes: principal.scopes,
       issuer: options.issuer,

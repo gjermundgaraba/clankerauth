@@ -1,9 +1,8 @@
 import { onTestFinished } from "vite-plus/test";
-import { BrowserActions } from "../src/effect-actions.ts";
 import { Cause, Effect, Exit, Schema, Layer } from "effect";
 import { FetchHttpClient, HttpServerRequest, HttpRouter, HttpServer } from "effect/unstable/http";
-import { SessionStore } from "../src/index.ts";
-import type { BrowserSession } from "../src/browser.ts";
+import { SessionStore, type BrowserSession } from "@gjermundgaraba/clankerauth-node";
+import { BrowserActions } from "@gjermundgaraba/clankerauth-node/effect-actions";
 
 export const LoginResponse = Schema.Struct({ url: Schema.String });
 
@@ -41,8 +40,8 @@ export const memoryStore = () => {
   return { store, rows };
 };
 
-/** Test-only Web boundary, exercising the actual Effect HTTP handlers. */
-export const webBrowser = (browser: BrowserSession) => {
+/** Test-only Web boundary, exercising the SDK's actual Effect HTTP handlers. */
+export const webBrowser = (browser: BrowserSession.BrowserSession) => {
   const web = HttpRouter.toWebHandler(
     BrowserActions.layer(browser).pipe(Layer.provide(HttpServer.layerServices)),
     { disableLogger: true },

@@ -20,7 +20,7 @@ Resources, scopes and client access are stored in SQLite. Fresh installations co
 
 Client/resource unlinking is a policy change. It prevents new authorization and refresh while unlinked, retaining consent, codes and credentials. Relinking may permit those retained authorizations again. Removing a scope narrows newly issued tokens to the resource's current allowed scopes without deleting grants; a refresh may still succeed with fewer scopes. Restoring scopes can make retained authorization usable again. Deleting a resource removes its client links through provider behavior; there is no application dependency blocker or custom grant cleanup.
 
-**Revoke authorization** explicitly clears stored consent, codes and credentials. **Block client** also disables authorization for that identifier until unblocked, including across CIMD metadata rediscovery. Unblocking does not restore old grants. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. Administration MCP checks the live client grant generation, so revocation, blocking, metadata changes and deletion invalidate its access tokens immediately. Other resource servers that verify JWTs offline may accept them until expiry, at most five minutes after issuance.
+**Revoke authorization** explicitly clears stored consent, codes and credentials. **Block client** also disables authorization for that identifier until unblocked, including across CIMD metadata rediscovery. Unblocking does not restore old grants. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. Administration MCP verifies JWTs offline with the shared SDK and checks the client row, including its grant generation, on every request, so blocking, revocation, deletion and re-registration take effect immediately. Generation checks also protect new issuance and refresh from concurrent revocation.
 
 ## Concurrency and transactions
 
@@ -53,3 +53,7 @@ The [API-key provider patch](../patches/@better-auth__api-key@1.7.5.patch) reads
 ## API-key rate-limit window
 
 The API-key provider patch stores `rateLimitWindowStart` separately from `lastRequest`. The counter resets at the end of a fixed one-minute window, including the exact boundary; successful requests update activity without moving the window. Guarded database updates preserve the per-key maximum under concurrent verification, and the stored window survives restart. New keys have a null window start and begin their first counting window on verification. Tests cover sustained traffic, concurrent bursts, the boundary, and restart. The pinned provider otherwise counts until a full inactivity interval has elapsed.
+
+## Effect boundaries
+
+`openAuth` captures the application context for Better Auth's awaited callbacks, so supplied clocks and logging services survive that Promise boundary. Construct it at application startup, not inside a request. Local Kysely transactions are controlled transactions: the body runs in the calling fiber, commits on success and rolls back on failure or defect. Action routes run uninterruptibly so admitted provider calls settle before their request scope releases sessions or permits database shutdown.

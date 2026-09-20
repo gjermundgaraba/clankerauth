@@ -148,25 +148,14 @@ that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last five minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP request requires a bearer OAuth access token. Owner cookies and API
-keys do not authenticate MCP, and API keys cannot be granted administration
-permissions. Tokens must belong to this issuer, owner, resource,
-and an active client grant. Dashboard **Revoke authorization** and **Block client**
-invalidate administration MCP access immediately; unblocking does not restore a
-revoked grant. Browser-session expiry and dashboard sign-out do not revoke
-administration MCP access.
-Offline refresh grants survive dashboard sign-out; use **Revoke authorization** or
-**Block client** to end delegated access.
-Other resource servers that verify JWTs locally may accept issued tokens until expiry.
+Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with scope `admin`, and their client must exist, be enabled, not blocked, and still carry the grant generation the token was issued under. **Block client**, **Revoke authorization**, deletion and re-registration therefore all end MCP access on the next request. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP supports **2026-07-28**, **2025-11-25**, **2025-06-18**, and **2025-03-26**
 transport revisions. OAuth clients must support resource indicators. Effect's native
 HTTP server streams responses instead of buffering them; historical two-endpoint
 SSE remains unsupported. Requests are still limited to 64 KiB before route execution.
 
-HTTP administration continues to require the owner session and configured Origin.
-The combined `GET /openapi.json` document requires the owner cookie and permits
-browser navigation without Origin:
+`GET /openapi.json` is public.
 
 ```sh
 curl "$AUTH_BASE_URL/api/administration/listClients" \

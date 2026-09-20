@@ -1,8 +1,10 @@
-import { Context, Effect, type Scope } from "effect";
+import { Context, Effect, Match, Schema, type Scope } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
-import { Forbidden, Unauthorized } from "@clankerauth/api";
-import { apiError, apiErrorResponse } from "./api-errors.ts";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { CurrentPrincipal, type Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { Forbidden, Unauthorized } from "@clankerauth/api";
+import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
+import { providerSession } from "./provider-session.ts";
 import type { Service } from "./auth.ts";
 
 /** Authenticated per request, never supplied by action arguments or at startup. */
@@ -15,23 +17,22 @@ export class CurrentOwner extends Context.Service<
   }
 >()("ClankerAuth/CurrentOwner") {}
 
-export const ownerAuthentication = (service: Service) =>
+const fail = (error: ReturnType<typeof apiError>) =>
+  Effect.flatMap(apiErrorResponse(error), Effect.fail);
+
+/** Dashboard HTTP: the issuer session cookie and the configured Origin. */
+export const sessionOwner = (service: Service) =>
   Authentication.middleware(
     CurrentOwner,
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const headers = new Headers(request.headers);
-
-      const session = yield* Effect.tryPromise({
-        try: () => service.auth.api.getSession({ headers }),
-        catch: apiError,
-      });
+      const session = yield* provider(() => service.auth.api.getSession({ headers }));
 
       if (!session)
         return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
 
-      // Browser navigation to OpenAPI can omit Origin. Mutating HTTP actions cannot.
-      if (request.method !== "GET" && request.headers.origin !== service.settings.baseURL)
+      if (request.headers.origin !== service.settings.baseURL)
         return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
 
       return {
@@ -39,5 +40,59 @@ export const ownerAuthentication = (service: Service) =>
         userId: session.user.id,
         email: session.user.email,
       };
-    }).pipe(Effect.catch((error) => Effect.flatMap(apiErrorResponse(error), Effect.fail))),
+    }).pipe(Effect.catch(fail)),
   );
+
+const OwnerRow = Schema.Struct({ id: Schema.String, email: Schema.String });
+
+/** MCP: combine with the resource middleware that verifies the bearer token and
+ * supplies CurrentPrincipal. The token's grant generation must match the live
+ * client row, so block, revoke, delete and re-registration all take effect on
+ * the next request, answered with an invalid_token challenge.
+ */
+export const bearerOwner = (service: Service, resource: Resource.Resource) => {
+  const rejected = () => new Unauthorized({ error: "Owner authorization required" });
+
+  return Authentication.middleware(
+    CurrentOwner,
+    Effect.gen(function* () {
+      const principal = yield* CurrentPrincipal;
+
+      if (principal.actor.kind !== "client") return yield* Effect.fail(rejected());
+
+      const rows = yield* service.sql`SELECT u.id, u.email FROM user u
+      JOIN serviceOwner o ON o.userId = u.id
+      JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
+      WHERE o.id = 1 AND u.id = ${principal.subject} AND c.disabled IS NOT 1
+        AND c.grantGeneration = ${principal.actor.generation}
+        AND NOT EXISTS (SELECT 1 FROM clientOnboarding p WHERE p.clientId = c.clientId AND p.blocked = 1)`.pipe(
+        Effect.mapError(apiError),
+      );
+
+      if (!rows[0]) return yield* Effect.fail(rejected());
+
+      const owner = yield* Schema.decodeUnknownEffect(OwnerRow)(rows[0]).pipe(
+        Effect.mapError(apiError),
+      );
+
+      return {
+        userId: owner.id,
+        email: owner.email,
+        providerHeaders: providerSession(service, owner.id),
+      };
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.flatMap(
+          apiErrorResponse(
+            error,
+            Match.value(error).pipe(
+              Match.tag("Unauthorized", () => resource.challenge("invalid_token")),
+              Match.orElse(() => ({})),
+            ),
+          ),
+          Effect.fail,
+        ),
+      ),
+    ),
+  );
+};

@@ -1,10 +1,10 @@
-import { ConfigProvider, Effect } from "effect";
+import { Redacted, ConfigProvider, Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { loadSettings, validateSettings } from "../src/config.ts";
 
 const settings = {
   baseURL: "https://auth.example.test",
-  secret: "test-only-secret-with-at-least-32-characters",
+  secret: Redacted.make("test-only-secret-with-at-least-32-characters"),
   database: ":memory:",
   host: "127.0.0.1",
   port: 3000,
@@ -19,11 +19,11 @@ const load = (origins?: string) =>
             origins === undefined
               ? {
                   AUTH_BASE_URL: settings.baseURL,
-                  BETTER_AUTH_SECRET: settings.secret,
+                  BETTER_AUTH_SECRET: Redacted.value(settings.secret),
                 }
               : {
                   AUTH_BASE_URL: settings.baseURL,
-                  BETTER_AUTH_SECRET: settings.secret,
+                  BETTER_AUTH_SECRET: Redacted.value(settings.secret),
                   MCP_ALLOWED_ORIGINS: origins,
                 },
           ),
@@ -96,7 +96,7 @@ test("configuration rejects insecure issuers and empty secrets", () => {
     expect(() => validateSettings({ ...settings, baseURL })).toThrow();
   }
 
-  expect(() => validateSettings({ ...settings, secret: "" })).toThrow();
+  expect(() => validateSettings({ ...settings, secret: Redacted.make("") })).toThrow();
   expect(validateSettings({ ...settings, baseURL: "https://auth.internal" }).baseURL).toBe(
     "https://auth.internal",
   );

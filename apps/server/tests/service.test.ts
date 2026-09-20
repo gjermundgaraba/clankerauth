@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Redacted, Effect, Schema } from "effect";
 import { sql as query } from "kysely";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { setImmediate } from "node:timers/promises";
@@ -265,13 +265,13 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-"));
   settings = validateSettings({
     baseURL: "http://localhost:3000",
-    secret: randomBytes(32).toString("hex"),
+    secret: Redacted.make(randomBytes(32).toString("hex")),
     database: join(directory, "auth.sqlite"),
     host: "127.0.0.1",
     port: 3000,
   });
-  service = await openAuth(settings);
-  await initialize(service);
+  service = await Effect.runPromise(openAuth(settings));
+  await Effect.runPromise(initialize(service));
   handle = createApplication();
   cookies = new Map();
 });
@@ -293,8 +293,8 @@ async function setupOwner() {
 
 async function restart() {
   await stopCurrentGeneration();
-  service = await openAuth(settings);
-  await initialize(service);
+  service = await Effect.runPromise(openAuth(settings));
+  await Effect.runPromise(initialize(service));
   handle = createApplication();
 }
 
@@ -476,8 +476,8 @@ describe("first-run setup", () => {
       service.sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (${"orphan"}, ${"Orphan"}, ${email}, 0, ${Date.now()}, ${Date.now()})`,
     );
     await stopCurrentGeneration();
-    service = await openAuth(settings);
-    await expect(initialize(service)).rejects.toThrow();
+    service = await Effect.runPromise(openAuth(settings));
+    await expect(Effect.runPromise(initialize(service))).rejects.toThrow();
     expect(await Effect.runPromise(service.sql`SELECT id FROM user`)).toEqual([{ id: "orphan" }]);
     expect(await Effect.runPromise(service.owner())).toBeUndefined();
   });
@@ -1025,7 +1025,7 @@ describe("OAuth boundaries and lifecycle", () => {
     );
 
     expect(refresh.status, await refresh.clone().text()).toBe(200);
-    await initialize(service);
+    await Effect.runPromise(initialize(service));
   });
 
   test("a rotated token cannot revoke another public client's refresh family", async () => {
@@ -1246,8 +1246,11 @@ describe("dashboard resources and client access", () => {
     expect(created.status, await created.clone().text()).toBe(201);
     const app = await created.json();
     expect(
-      (await request("/api/administration/rotateClientSecret", { client_id: app.client_id }))
-        .status,
+      (
+        await request("/api/administration/rotateClientSecret", {
+          client_id: app.client_id,
+        })
+      ).status,
     ).toBe(200);
   });
 

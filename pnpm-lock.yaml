@@ -273,6 +273,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.116(effect@4.0.0-rc.116)(redis@6.2.1(@opentelemetry/api@1.9.1))
+      '@gjermundgaraba/clankerauth-node':
+        specifier: workspace:*
+        version: link:../../packages/node
       '@gjermundgaraba/effect-actions':
         specifier: 0.1.0-rc.2
         version: 0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
@@ -387,9 +390,6 @@ importers:
         specifier: 'catalog:'
         version: 3.8.8
     devDependencies:
-      '@clankerauth/server':
-        specifier: workspace:*
-        version: link:../../apps/server
       '@gjermundgaraba/effect-actions':
         specifier: 0.1.0-rc.2
         version: 0.1.0-rc.2(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)

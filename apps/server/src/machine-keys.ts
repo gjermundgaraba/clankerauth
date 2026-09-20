@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import {
   BadRequest,
   Forbidden,
@@ -12,10 +12,7 @@ import {
 import type { Service } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
-import { apiError } from "./api-errors.ts";
-
-const provider = <A>(operation: () => Promise<A>) =>
-  Effect.tryPromise({ try: operation, catch: apiError });
+import { apiError, provider } from "./api-errors.ts";
 
 const permissions = Schema.decodeUnknownSync(KeyPermissions);
 
@@ -75,6 +72,7 @@ export function machineKeys(service: Service) {
     list: Effect.fn("MachineKeys.list")(function* () {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
+
       const result = yield* provider(() => service.auth.api.listApiKeys({ headers }));
 
       return { keys: result.apiKeys.map(summary) };
@@ -84,7 +82,9 @@ export function machineKeys(service: Service) {
       yield* validate(input.name, input.permissions);
 
       const expiresIn =
-        input.expiresAt === null ? null : (Date.parse(input.expiresAt) - Date.now()) / 1000;
+        input.expiresAt === null
+          ? null
+          : (Date.parse(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
 
       if (
         expiresIn !== null &&

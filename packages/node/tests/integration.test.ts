@@ -70,11 +70,11 @@ test("effect-actions HTTP/MCP middleware supplies isolated principals and public
     Layer.mergeAll(
       api.discovery.layer,
       mcp.discovery.layer,
-      Http.layer(app).pipe(Layer.provide(api.middleware.layer)),
+      Http.layer(app).pipe(Layer.provide(Resource.middleware(api).layer)),
       ActionMcp.layerHttp(
         { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
         app,
-      ).pipe(Layer.provide(mcp.middleware.layer)),
+      ).pipe(Layer.provide(Resource.middleware(mcp).layer)),
     ).pipe(Layer.provide(HttpServer.layerServices)),
   );
 
@@ -97,6 +97,7 @@ test("effect-actions HTTP/MCP middleware supplies isolated principals and public
     assert.equal(missing.status, 401);
     assert.equal(missing.headers.get("cache-control"), "no-store");
     assert.match(missing.headers.get("www-authenticate") ?? "", /oauth-protected-resource\/api/);
+    assert.doesNotMatch(missing.headers.get("www-authenticate") ?? "", /error=/u);
     assert.deepEqual(
       await missing.json(),
       Schema.encodeSync(Unauthorized)(new Unauthorized({ message: "Authentication required" })),

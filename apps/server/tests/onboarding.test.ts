@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Redacted, Effect } from "effect";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -159,20 +159,24 @@ beforeEach(async () => {
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
   };
-  service = await openAuth(
-    {
-      baseURL,
-      database: join(directory, "auth.sqlite"),
-      secret: "test-secret-with-more-than-thirty-two-characters",
-      host: "127.0.0.1",
-      port: 4183,
-    },
-    {
-      cimdTransport,
-    },
+  service = await Effect.runPromise(
+    openAuth(
+      {
+        baseURL,
+        database: join(directory, "auth.sqlite"),
+        secret: Redacted.make("test-secret-with-more-than-thirty-two-characters"),
+        host: "127.0.0.1",
+        port: 4183,
+      },
+      {
+        cimdTransport,
+      },
+    ),
   );
-  await initialize(service);
-  await createOwner(service, { email: "owner@example.com", password: "test-password-long-enough" });
+  await Effect.runPromise(initialize(service));
+  await Effect.runPromise(
+    createOwner(service, { email: "owner@example.com", password: "test-password-long-enough" }),
+  );
 
   const login = await request("/sign-in/email", {
     email: "owner@example.com",
@@ -335,8 +339,8 @@ test("initialization preserves DCR and CIMD clients, policy, and grants", async 
   const before = await snapshot();
   const settings = service.settings;
   await service.close();
-  service = await openAuth(settings, { cimdTransport });
-  await initialize(service);
+  service = await Effect.runPromise(openAuth(settings, { cimdTransport }));
+  await Effect.runPromise(initialize(service));
   expect(await snapshot()).toEqual(before);
 
   const refresh = await request("/oauth2/token", {

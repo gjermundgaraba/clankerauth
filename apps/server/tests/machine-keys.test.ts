@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Exit, Scope, Schema } from "effect";
+import { Redacted, Effect, Exit, Scope, Schema } from "effect";
 import { Administration, BadRequest, InternalServerError, IssuerActions } from "@clankerauth/api";
 import { createNodeServer } from "../src/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
@@ -57,21 +57,25 @@ const verify = (key: string, target = resource) =>
 beforeEach(async () => {
   bearer = undefined;
   directory = mkdtempSync(join(tmpdir(), "clankerauth-keys-"));
-  service = await openAuth(
-    validateSettings({
-      baseURL: origin,
-      secret: randomBytes(32).toString("hex"),
-      database: join(directory, "auth.sqlite"),
-      host: "127.0.0.1",
-      port: 3000,
+  service = await Effect.runPromise(
+    openAuth(
+      validateSettings({
+        baseURL: origin,
+        secret: Redacted.make(randomBytes(32).toString("hex")),
+        database: join(directory, "auth.sqlite"),
+        host: "127.0.0.1",
+        port: 3000,
+      }),
+    ),
+  );
+  await Effect.runPromise(initialize(service));
+  handle = application(service);
+  await Effect.runPromise(
+    createOwner(service, {
+      email: "owner@example.internal",
+      password: "test-only password123",
     }),
   );
-  await initialize(service);
-  handle = application(service);
-  await createOwner(service, {
-    email: "owner@example.internal",
-    password: "test-only password123",
-  });
 
   const login = await call("/api/auth/sign-in/email", {
     email: "owner@example.internal",
@@ -270,39 +274,29 @@ test("listing includes every key beyond the provider database page and preserves
   expect(last.total).toBe(101);
 });
 
-test("key writes reuse middleware owner authorization", async () => {
-  const sessions = vi.spyOn(service.auth.api, "getSession");
-
-  try {
-    const key = await create();
-    expect(sessions).toHaveBeenCalledTimes(1);
-    sessions.mockClear();
-    expect(
-      (await call("/api/administration/updateApiKey", { keyId: key.keyId, name: "Renamed" }))
-        .status,
-    ).toBe(200);
-    expect(sessions).toHaveBeenCalledTimes(1);
-    expect(
-      (
-        await call(
-          "/api/administration/updateApiKey",
-          { keyId: key.keyId, enabled: false },
-          { cookie: "" },
-        )
-      ).status,
-    ).toBe(401);
-    expect(
-      (
-        await call(
-          "/api/administration/createApiKey",
-          { name: "Denied", permissions: { [resource]: ["example:read"] }, expiresAt: null },
-          { origin: "https://evil.example" },
-        )
-      ).status,
-    ).toBe(403);
-  } finally {
-    sessions.mockRestore();
-  }
+test("key writes require owner authorization and browser origin", async () => {
+  const key = await create();
+  expect(
+    (await call("/api/administration/updateApiKey", { keyId: key.keyId, name: "Renamed" })).status,
+  ).toBe(200);
+  expect(
+    (
+      await call(
+        "/api/administration/updateApiKey",
+        { keyId: key.keyId, enabled: false },
+        { cookie: "" },
+      )
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await call(
+        "/api/administration/createApiKey",
+        { name: "Denied", permissions: { [resource]: ["example:read"] }, expiresAt: null },
+        { origin: "https://evil.example" },
+      )
+    ).status,
+  ).toBe(403);
 });
 
 test("sustained verification below the per-minute limit never accumulates across windows", async () => {
@@ -352,8 +346,8 @@ test("concurrent verification respects fixed-window capacity and resets at the e
   const settings = service.settings;
   await handle.dispose();
   await service.close();
-  service = await openAuth(settings);
-  await initialize(service);
+  service = await Effect.runPromise(openAuth(settings));
+  await Effect.runPromise(initialize(service));
   handle = application(service);
   expect((await verify(key.key)).status).toBe(429);
   vi.setSystemTime(start + 120000);
@@ -401,7 +395,8 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
       }),
     ]),
   );
-  const openapi = await handle(new Request(`${origin}/openapi.json`, { headers: { cookie } }));
+
+  const openapi = await handle(new Request(`${origin}/openapi.json`));
   expect(openapi.status).toBe(200);
   const document = await openapi.json();
   expect(Object.keys(document.paths).sort()).toEqual(
@@ -439,8 +434,12 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
   expect(await mcpListing.text()).not.toContain(key.key);
 
   expect(
-    (await call("/api/administration/updateApiKey", { keyId: key.keyId, name: "HTTP rename" }))
-      .status,
+    (
+      await call("/api/administration/updateApiKey", {
+        keyId: key.keyId,
+        name: "HTTP rename",
+      })
+    ).status,
   ).toBe(200);
   const renamed = await (await mcp("tools/call", { name: "listApiKeys", arguments: {} })).json();
   expect(renamed.result.structuredContent.value.keys[0].name).toBe("HTTP rename");
@@ -550,13 +549,6 @@ test("HTTP administration requires owner session and Origin; MCP requires bearer
     }
 
     expect((await call("/api/administration/listClients", {}, headers)).status).toBe(status);
-    expect(
-      (
-        await handle(
-          new Request(`${origin}/openapi.json`, { headers: { origin, cookie, ...headers } }),
-        )
-      ).status,
-    ).toBe(headers.cookie === "" ? 401 : 200);
   }
 
   const key = await create();

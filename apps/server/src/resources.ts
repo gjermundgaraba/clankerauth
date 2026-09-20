@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import { normalizeError, type Sql } from "./database.ts";
 import { APIError } from "better-auth/api";
 import type { Auth } from "better-auth";
@@ -41,10 +41,7 @@ type ResourceAuth = {
 };
 
 const providerCall = <A>(operation: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: operation,
-    catch: normalizeError,
-  });
+  Effect.tryPromise({ try: operation, catch: normalizeError });
 
 const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
@@ -195,7 +192,7 @@ export function resourceStore(
     if (unownedClient.length) {
       // Provider update APIs require ownership even for admins. Unowned clients
       // need direct persistence of their scope union.
-      yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
+      yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
     } else {
       yield* providerCall(() =>
         getAuth().api.updateOAuthClient({
@@ -218,7 +215,7 @@ export function resourceStore(
 
   const initialize = Effect.fn("Resources.initialize")(function* () {
     // This resource is application policy, present even before owner setup.
-    const now = Date.now();
+    const now = yield* Clock.currentTimeMillis;
     yield* sql`INSERT OR IGNORE INTO oauthResource
       (id, identifier, name, allowedScopes, accessTokenTtl, disabled, createdAt, updatedAt, policyVersion)
       VALUES (${randomUUID()}, ${reservedIdentifier}, 'Clanker Auth administration', ${JSON.stringify([...protocolScopes, mcpScope])}, 300, 0, ${now}, ${now}, 1)`;

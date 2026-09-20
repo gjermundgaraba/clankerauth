@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { APIError } from "better-auth/api";
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Result } from "effect";
 import { sql as query } from "kysely";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -137,6 +137,37 @@ test("local transactions preserve domain failures and roll back failed commits",
       transaction(database.kysely, (sql) => sql`INSERT INTO parent VALUES (99)`),
     );
     expect(await Effect.runPromise(database.sql`SELECT * FROM parent`)).toEqual([{ id: 99 }]);
+  } finally {
+    await database.close();
+  }
+});
+
+test("transactions preserve non-Error failures and defects after rollback", async () => {
+  const database = await openDatabase(":memory:");
+  const refusal = { reason: "denied" };
+  const defect = new Error("programming error");
+
+  try {
+    await Effect.runPromise(database.sql`CREATE TABLE rollbackProbe (value TEXT)`);
+
+    const failure = await Effect.runPromise(
+      transaction(database.kysely, (sql) =>
+        sql`INSERT INTO rollbackProbe VALUES ('failure')`.pipe(
+          Effect.andThen(Effect.fail(refusal)),
+        ),
+      ).pipe(Effect.result),
+    );
+
+    expect(Result.isFailure(failure) && failure.failure).toBe(refusal);
+
+    const exit = await Effect.runPromiseExit(
+      transaction(database.kysely, (sql) =>
+        sql`INSERT INTO rollbackProbe VALUES ('defect')`.pipe(Effect.andThen(Effect.die(defect))),
+      ),
+    );
+
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
+    expect(await Effect.runPromise(database.sql`SELECT * FROM rollbackProbe`)).toEqual([]);
   } finally {
     await database.close();
   }

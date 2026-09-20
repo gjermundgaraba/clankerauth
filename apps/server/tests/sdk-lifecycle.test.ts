@@ -5,14 +5,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decodeJwt } from "jose";
 import { test } from "vite-plus/test";
-import { nodeHandler } from "../../../apps/server/src/app.ts";
-import { initialize, openAuth } from "../../../apps/server/src/auth.ts";
-import { createNodeServer } from "../../../apps/server/src/node-http.ts";
+import { nodeHandler } from "../src/app.ts";
+import { initialize, openAuth } from "../src/auth.ts";
+import { createNodeServer } from "../src/node-http.ts";
 import { Effect, Exit, Redacted, Schema, Scope } from "effect";
-import { BrowserSession, SessionStore, Unauthorized, Forbidden } from "../src/index.ts";
-import { Resource } from "../src/effect-actions.ts";
-import { LoginResponse, memoryStore, run, webBrowser, withHttp } from "./support.ts";
+import {
+  BrowserSession,
+  SessionStore,
+  Unauthorized,
+  Forbidden,
+} from "@gjermundgaraba/clankerauth-node";
+import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { LoginResponse, memoryStore, run, webBrowser, withHttp } from "./sdk-support.ts";
 
 const origin = "http://127.0.0.1:7337";
 
@@ -68,15 +74,17 @@ const startServer = async () => {
   const { port } = address;
   const url = `http://127.0.0.1:${port}`;
 
-  const service = await openAuth({
-    baseURL: url,
-    secret: randomBytes(32).toString("hex"),
-    database: join(directory, "issuer.sqlite"),
-    host: "127.0.0.1",
-    port,
-  });
+  const service = await Effect.runPromise(
+    openAuth({
+      baseURL: url,
+      secret: Redacted.make(randomBytes(32).toString("hex")),
+      database: join(directory, "issuer.sqlite"),
+      host: "127.0.0.1",
+      port,
+    }),
+  );
 
-  await initialize(service);
+  await Effect.runPromise(initialize(service));
   const httpScope = Scope.makeUnsafe();
   serve = await Effect.runPromise(
     nodeHandler(service).pipe(Effect.provideService(Scope.Scope, httpScope)),
@@ -144,6 +152,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
   try {
     assert.equal((await issuer.call("/api/issuer/setupOwner", owner)).status, 201);
     assert.equal((await issuer.call("/api/auth/sign-in/email", owner)).status, 200);
+
     assert.equal(
       (
         await issuer.call("/api/administration/createResource", {
@@ -200,7 +209,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
 
     // Login: the signed-in owner is sent straight back with a code, with no consent step.
     const started = await browser.login(
-      new Request(`${origin}/auth/login`, {
+      new Request(`${origin}/auth/browser/login`, {
         method: "POST",
         headers: { origin, "content-type": "application/json" },
         body: JSON.stringify({ returnTo: "/notes?x=1#top" }),
@@ -232,7 +241,11 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     const principal = await run(verifier.verify(`Bearer ${token}`));
     // Tokens carry protocol scopes too; resource servers check for the scopes they define.
     assert.deepEqual(principal.scopes, ["openid", "offline_access", "notes:read", "notes:write"]);
-    assert.deepEqual(principal.actor, { kind: "client", clientId: client.client_id });
+    assert.deepEqual(principal.actor, {
+      kind: "client",
+      clientId: client.client_id,
+      generation: decodeJwt(token).grant_generation,
+    });
 
     const { verifier: other } = await run(
       withHttp(Resource.make({ issuer: issuer.issuer, resource: `${origin}/mcp`, scopes: [] })),
@@ -241,7 +254,11 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     await assert.rejects(run(other.verifyToken(token)), (error) => error instanceof Unauthorized);
 
     const session = await browser.session(
-      new Request(`${origin}/auth/session`, { headers: { cookie } }),
+      new Request(`${origin}/auth/browser/session`, {
+        method: "POST",
+        headers: { origin, cookie, "content-type": "application/json" },
+        body: "{}",
+      }),
     );
 
     assert.equal(session.status, 200);
@@ -271,10 +288,14 @@ test("first-party browser login, verification of tokens and keys, and logout aga
 
     // Logout revokes the refresh token at the issuer and ends the local session.
     const logout = await browser.logout(
-      new Request(`${origin}/auth/logout`, { method: "POST", headers: { origin, cookie } }),
+      new Request(`${origin}/auth/browser/logout`, {
+        method: "POST",
+        headers: { origin, cookie, "content-type": "application/json" },
+        body: "{}",
+      }),
     );
 
-    assert.equal(logout.status, 204);
+    assert.equal(logout.status, 200);
     await assert.rejects(
       browser.accessToken(new Request(`${origin}/api`, { headers: { cookie } })),
       (error) => error instanceof Unauthorized,

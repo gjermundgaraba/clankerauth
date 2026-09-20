@@ -252,8 +252,8 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   });
 
   try {
-    assert.ok(requests.some((request) => request.url === `${issuer.url}/api/issuer/setupOwner`));
-    requests.length = 0;
+    // Provisioning is in-process; only the test's own traffic reaches the listener.
+    assert.deepEqual(requests, []);
     const discoveryURL = `${issuer.issuer}/.well-known/openid-configuration`;
     const discoveryResponse = await fetch(discoveryURL);
     assert.equal(discoveryResponse.status, 200);

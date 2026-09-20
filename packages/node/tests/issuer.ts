@@ -92,6 +92,7 @@ export const startIssuer = async () => {
         iat: Math.floor(Date.now() / 1000),
         exp: Math.floor(Date.now() / 1000) + 300,
         client_id: "fixture",
+        grant_generation: "fixture-generation",
         scope: "notes:read notes:write",
         ...claims,
       })

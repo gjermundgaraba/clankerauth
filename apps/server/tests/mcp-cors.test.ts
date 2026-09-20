@@ -1,3 +1,4 @@
+import { Effect, Redacted } from "effect";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,15 +21,17 @@ let handle: ReturnType<typeof application>;
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-cors-"));
-  service = await openAuth({
-    baseURL,
-    secret: randomBytes(32).toString("hex"),
-    database: join(directory, "auth.sqlite"),
-    host: "127.0.0.1",
-    port: 3000,
-    mcpAllowedOrigins: [clientOrigin],
-  });
-  await initialize(service);
+  service = await Effect.runPromise(
+    openAuth({
+      baseURL,
+      secret: Redacted.make(randomBytes(32).toString("hex")),
+      database: join(directory, "auth.sqlite"),
+      host: "127.0.0.1",
+      port: 3000,
+      mcpAllowedOrigins: [clientOrigin],
+    }),
+  );
+  await Effect.runPromise(initialize(service));
   handle = application(service);
 });
 
@@ -137,7 +140,7 @@ test("MCP rejects unlisted origins before authentication and accepts originless 
 
 test("an allowed external browser uses bearer MCP while dashboard cookie CSRF stays separate", async () => {
   const credentials = { email: "owner@example.internal", password: "test-only password123" };
-  await createOwner(service, credentials);
+  await Effect.runPromise(createOwner(service, credentials));
 
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {

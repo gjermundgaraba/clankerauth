@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
-import { Effect } from "effect";
+import { Redacted, Effect, Schema } from "effect";
 import { randomBytes, randomUUID } from "node:crypto";
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -74,19 +74,23 @@ const refresh = (client_id: string, refresh_token: string) =>
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-oauth-"));
-  service = await openAuth({
-    baseURL,
-    database: join(directory, "auth.sqlite"),
-    secret: randomBytes(32).toString("hex"),
-    host: "127.0.0.1",
-    port: 3000,
-  });
-  await initialize(service);
+  service = await Effect.runPromise(
+    openAuth({
+      baseURL,
+      database: join(directory, "auth.sqlite"),
+      secret: Redacted.make(randomBytes(32).toString("hex")),
+      host: "127.0.0.1",
+      port: 3000,
+    }),
+  );
+  await Effect.runPromise(initialize(service));
   handle = application(service);
-  await createOwner(service, {
-    email: "owner@example.internal",
-    password: "test-only password123",
-  });
+  await Effect.runPromise(
+    createOwner(service, {
+      email: "owner@example.internal",
+      password: "test-only password123",
+    }),
+  );
 
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {
@@ -115,6 +119,8 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   expect(unauthorized.status).toBe(401);
   const challenge = unauthorized.headers.get("www-authenticate");
   expect(challenge).toContain("Bearer");
+  // RFC 6750: no error code when the request carried no credentials.
+  expect(challenge).not.toContain("error=");
   const metadataURL = /resource_metadata="([^"]+)"/.exec(challenge ?? "")?.[1];
   expect(metadataURL).toBe(`${baseURL}/.well-known/oauth-protected-resource/mcp`);
   const metadata = await handle(new Request(metadataURL ?? ""));
@@ -257,14 +263,16 @@ test("administration resource permits persistent renaming but reserves its scope
   expect((await admin("updateResource", renamed)).status).toBe(200);
   await handle.dispose();
   await service.close();
-  service = await openAuth({
-    baseURL,
-    database: join(directory, "auth.sqlite"),
-    secret: service.settings.secret,
-    host: "127.0.0.1",
-    port: 3000,
-  });
-  await initialize(service);
+  service = await Effect.runPromise(
+    openAuth({
+      baseURL,
+      database: join(directory, "auth.sqlite"),
+      secret: service.settings.secret,
+      host: "127.0.0.1",
+      port: 3000,
+    }),
+  );
+  await Effect.runPromise(initialize(service));
   handle = application(service);
   expect((await (await admin("listClients", {})).json()).resources).toEqual([renamed]);
 });
@@ -282,13 +290,13 @@ test.each(["block", "revoke"] as const)(
     const response = await admin(operation === "block" ? "blockClient" : "revokeClient", payload);
 
     expect(response.status).toBe(200);
-    expect((await mcp(tokens.access_token)).status).toBe(401);
+    const afterwards = await mcp(tokens.access_token);
+    expect(afterwards.status).toBe(401);
+    expect(afterwards.headers.get("www-authenticate")).toContain('error="invalid_token"');
     expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
 
-    if (operation === "block") {
+    if (operation === "block")
       expect((await admin("blockClient", { client_id, blocked: false })).status).toBe(200);
-      expect((await mcp(tokens.access_token)).status).toBe(401);
-    }
 
     const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id });
     expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
@@ -334,12 +342,14 @@ test("MCP protocol and owner-identity operations do not acquire provider session
       });
 
       expect(created.isError).toBe(false);
-      const listing = await admin("listApiKeys", {});
-      const { keys } = await listing.json();
+
+      const key = Schema.decodeUnknownSync(
+        Schema.Struct({ value: Schema.Struct({ keyId: Schema.String }) }),
+      )(created.structuredContent).value;
 
       const updated = await client.callTool({
         name: "updateApiKey",
-        arguments: { keyId: keys[0].keyId, enabled: false },
+        arguments: { keyId: key.keyId, enabled: false },
       });
 
       expect(updated.isError).toBe(false);
@@ -440,6 +450,7 @@ test("deleting and recreating a client identity cannot revive its old MCP access
     true,
   );
   expect((await mcp(tokens.access_token)).status).toBe(401);
+  expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
 });
 
 test("offline MCP access and refresh survive browser-session expiry and cleanup", async () => {
@@ -524,6 +535,7 @@ test.each(["bAsIc", "private_key_jwt"])(
     const first = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
     expect((await mcp(first.tokens.access_token)).status).toBe(200);
     expect((await admin("revokeClient", { client_id })).status).toBe(200);
+    expect((await mcp(first.tokens.access_token)).status).toBe(401);
     const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
     expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
     expect(decodeJwt(renewed.tokens.access_token).grant_generation).not.toBe(
@@ -538,7 +550,6 @@ test.each(["bAsIc", "private_key_jwt"])(
 
     expect(refreshed.status, await refreshed.clone().text()).toBe(200);
     expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
-    expect((await mcp(first.tokens.access_token)).status).toBe(401);
   },
 );
 

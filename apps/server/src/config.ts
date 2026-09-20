@@ -2,7 +2,7 @@ import { Config, Effect, Redacted } from "effect";
 
 export interface Settings {
   baseURL: string;
-  secret: string;
+  secret: Redacted.Redacted<string>;
   database: string;
   host: string;
   port: number;
@@ -12,7 +12,7 @@ export interface Settings {
 
 export const loadSettings = Effect.gen(function* () {
   const baseURL = yield* Config.String("AUTH_BASE_URL");
-  const secret = Redacted.value(yield* Config.Redacted("BETTER_AUTH_SECRET"));
+  const secret = yield* Config.Redacted("BETTER_AUTH_SECRET");
 
   const database = yield* Config.String("AUTH_DATABASE").pipe(
     Config.withDefault("data/auth.sqlite"),
@@ -48,7 +48,7 @@ export function validateSettings(settings: Settings): Settings {
   if (!validOrigin(settings.baseURL))
     throw new Error("AUTH_BASE_URL must be an HTTPS origin (HTTP allowed only on loopback)");
 
-  if (settings.secret.length < 32)
+  if (Redacted.value(settings.secret).length < 32)
     throw new Error("BETTER_AUTH_SECRET must have at least 32 characters");
 
   if (!Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535)

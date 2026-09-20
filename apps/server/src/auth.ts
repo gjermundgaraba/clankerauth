@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Clock, Effect, Option, Redacted, Schema } from "effect";
 import { getCurrentAuthEndpointContext } from "@better-auth/core/context";
 import { transaction, openDatabase } from "./database.ts";
 import { mkdirSync } from "node:fs";
@@ -16,6 +16,7 @@ import {
   oauthProvider,
   type ClientMetadataResourceFetch,
 } from "@better-auth/oauth-provider";
+import { provider } from "./api-errors.ts";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
 import { mcpResource, protocolScopes, resourceReference, resourceStore } from "./resources.ts";
@@ -26,12 +27,15 @@ const OAuthQueryCarrier = Schema.Struct({ oauth_query: Schema.String });
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
-export async function openAuth(
+export const openAuth = Effect.fn("Auth.open")(function* (
   settings: Settings,
   integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
 ) {
-  mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 });
-  const database = await openDatabase(settings.database);
+  // Construction is application-scoped. Provider callbacks inherit these services,
+  // never a later request's identity or scope.
+  const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
+  yield* Effect.try(() => mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 }));
+  const database = yield* Effect.tryPromise(() => openDatabase(settings.database));
   const { sql } = database;
   const onboarding = onboardingStore(database.kysely);
 
@@ -44,7 +48,7 @@ export async function openAuth(
       .userId;
   });
 
-  const provider = oauthProvider({
+  const oauthPlugin = oauthProvider({
     loginPage: "/login",
     consentPage: "/consent",
     scopes: [...protocolScopes],
@@ -56,19 +60,19 @@ export async function openAuth(
         const query = new URLSearchParams(state?.query);
         const identifiers = query.getAll("resource");
 
-        if (identifiers.length !== 1 || !(await Effect.runPromise(resources.get(identifiers[0]))))
+        if (identifiers.length !== 1 || !(await runCallback(resources.get(identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Choose exactly one Resource",
           });
         const clientId = query.get("client_id");
 
-        if (!clientId || !(await Effect.runPromise(resources.hasAccess(clientId, identifiers[0]))))
+        if (!clientId || !(await runCallback(resources.hasAccess(clientId, identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
           });
-        const allowed = await Effect.runPromise(resources.scopesFor(identifiers));
+        const allowed = await runCallback(resources.scopesFor(identifiers));
 
         if (scopes.some((scope) => !allowed.includes(scope)))
           throw new APIError("BAD_REQUEST", {
@@ -103,8 +107,8 @@ export async function openAuth(
     sql,
     () => serviceAuth(),
     (scopes, identifiers) => {
-      provider.options.scopes = scopes;
-      provider.options.clientRegistrationDefaultResources = identifiers;
+      oauthPlugin.options.scopes = scopes;
+      oauthPlugin.options.clientRegistrationDefaultResources = identifiers;
     },
     mcpResource(settings.baseURL),
   );
@@ -112,7 +116,7 @@ export async function openAuth(
   const options = {
     appName: "Clanker Auth",
     baseURL: settings.baseURL,
-    secret: settings.secret,
+    secret: Redacted.value(settings.secret),
     database: { db: database.kysely, type: "sqlite", transaction: true },
     trustedOrigins: [settings.baseURL],
     logger: { disabled: true },
@@ -148,7 +152,7 @@ export async function openAuth(
         if (
           clientId &&
           ["/oauth2/authorize", "/oauth2/consent", "/oauth2/continue"].includes(ctx.path) &&
-          (await Effect.runPromise(onboarding.isBlocked(clientId)))
+          (await runCallback(onboarding.isBlocked(clientId)))
         )
           throw new APIError("BAD_REQUEST", {
             error: "invalid_client",
@@ -156,7 +160,7 @@ export async function openAuth(
           });
 
         if (ctx.path === "/oauth2/register") {
-          if (!(await Effect.runPromise(onboarding.admit())))
+          if (!(await runCallback(onboarding.admit())))
             throw new APIError("TOO_MANY_REQUESTS", {
               error: "temporarily_unavailable",
               error_description: "Client registration capacity reached",
@@ -205,11 +209,11 @@ export async function openAuth(
         disableSettingJwtHeader: true,
         jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
       }),
-      provider,
+      oauthPlugin,
       cimd({
         fetchClientMetadataResource: async (input, init) => {
           // Reclaim abandoned registrations during discovery without an admission gate.
-          await Effect.runPromise(onboarding.cleanup());
+          await runCallback(onboarding.cleanup());
 
           return (integrations.cimdTransport ?? fetchClientMetadataResource)(input, init);
         },
@@ -281,18 +285,19 @@ export async function openAuth(
     retain,
     close,
   };
-}
+});
 
-export type Service = Awaited<ReturnType<typeof openAuth>>;
+export type Service = Effect.Success<ReturnType<typeof openAuth>>;
 
-export async function initialize(service: Service) {
-  const plan = await getMigrations(service.options);
+export const initialize = Effect.fn("Auth.initialize")(function* (service: Service) {
+  const plan = yield* Effect.tryPromise(() => getMigrations(service.options));
 
-  if (plan.schemaProblems.length) throw new Error("Database schema requires manual repair");
-  await plan.runMigrations();
-  await Effect.runPromise(sqlInitialize(service));
-  await service.auth.$context;
-}
+  if (plan.schemaProblems.length)
+    return yield* Effect.fail(new Error("Database schema requires manual repair"));
+  yield* Effect.tryPromise(() => plan.runMigrations());
+  yield* sqlInitialize(service);
+  yield* Effect.tryPromise(() => service.auth.$context);
+}, Effect.uninterruptible);
 
 const sqlInitialize = (service: Service) =>
   Effect.gen(function* () {
@@ -337,11 +342,14 @@ const sqlInitialize = (service: Service) =>
     yield* service.resources.initialize();
   });
 
-export async function createOwner(service: Service, input: { email: string; password: string }) {
-  if (await Effect.runPromise(service.owner()))
-    throw new APIError("CONFLICT", { message: "Setup already completed" });
+export const createOwner = Effect.fn("Auth.createOwner")(function* (
+  service: Service,
+  input: { email: string; password: string },
+) {
+  if (yield* service.owner())
+    return yield* Effect.fail(new APIError("CONFLICT", { message: "Setup already completed" }));
   const email = input.email.trim().toLowerCase();
-  const context = await service.auth.$context;
+  const context = yield* provider(() => service.auth.$context);
 
   // Match the pinned provider's email validator: setup must produce a usable login.
   if (
@@ -352,24 +360,22 @@ export async function createOwner(service: Service, input: { email: string; pass
     input.password.length < context.password.config.minPasswordLength ||
     input.password.length > context.password.config.maxPasswordLength
   )
-    throw new APIError("BAD_REQUEST", { message: "Invalid email or password" });
-  const hash = await context.password.hash(input.password);
+    return yield* Effect.fail(
+      new APIError("BAD_REQUEST", { message: "Invalid email or password" }),
+    );
+  const hash = yield* provider(() => context.password.hash(input.password));
   // Hash outside the transaction; account creation and ownership commit together.
-  await Effect.runPromise(
-    transaction(service.database, (sql) =>
-      Effect.gen(function* () {
-        if ((yield* sql`SELECT 1 FROM serviceOwner WHERE id = 1`).length)
-          return yield* Effect.fail(
-            new APIError("CONFLICT", { message: "Setup already completed" }),
-          );
-        const id = randomUUID();
-        const now = Date.now();
-        yield* sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
+  yield* transaction(service.database, (sql) =>
+    Effect.gen(function* () {
+      if ((yield* sql`SELECT 1 FROM serviceOwner WHERE id = 1`).length)
+        return yield* Effect.fail(new APIError("CONFLICT", { message: "Setup already completed" }));
+      const id = randomUUID();
+      const now = yield* Clock.currentTimeMillis;
+      yield* sql`INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt)
       VALUES (${id}, 'Owner', ${email}, 0, ${now}, ${now})`;
-        yield* sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt)
+      yield* sql`INSERT INTO account (id, accountId, providerId, userId, password, createdAt, updatedAt)
       VALUES (${randomUUID()}, ${id}, 'credential', ${id}, ${hash}, ${now}, ${now})`;
-        yield* sql`INSERT INTO serviceOwner (id, userId) VALUES (1, ${id})`;
-      }),
-    ),
+      yield* sql`INSERT INTO serviceOwner (id, userId) VALUES (1, ${id})`;
+    }),
   );
-}
+});

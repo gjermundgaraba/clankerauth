@@ -4,23 +4,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ClientCredentials } from "@clankerauth/api";
-import { Effect, Exit, Schema, Scope } from "effect";
+import { Redacted, Effect, Exit, Scope } from "effect";
+import { administration } from "../../../apps/server/src/administration.ts";
 import { nodeHandler } from "../../../apps/server/src/app.ts";
-import { initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
+import { createOwner, initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
+import { CurrentOwner } from "../../../apps/server/src/current-owner.ts";
+import { providerSession } from "../../../apps/server/src/provider-session.ts";
 import { createNodeServer } from "../../../apps/server/src/node-http.ts";
 import type { DisposableIssuer, DisposableIssuerOptions } from "./types.d.ts";
-
-type OwnerAccount = { email: string; password: string };
-
-type ResourceSeed = DisposableIssuerOptions["resources"][number];
-
-type ClientSeed = DisposableIssuerOptions["client"] & {
-  confidential: true;
-  native: true;
-};
-
-type ProvisioningBody = OwnerAccount | ResourceSeed | ClientSeed;
 
 /** Start a fresh issuer on a random loopback port. The caller owns signals and must await close(). */
 export async function startDisposableIssuer({
@@ -100,74 +91,59 @@ export async function startDisposableIssuer({
 
     const { port } = address;
     const url = `http://127.0.0.1:${port}`;
-    service = await openAuth(
-      {
-        baseURL: url,
-        secret: randomBytes(32).toString("hex"),
-        database: join(directory, "issuer.sqlite"),
-        host: "127.0.0.1",
-        port,
-      },
-      { cimdTransport },
+    service = await Effect.runPromise(
+      openAuth(
+        {
+          baseURL: url,
+          secret: Redacted.make(randomBytes(32).toString("hex")),
+          database: join(directory, "issuer.sqlite"),
+          host: "127.0.0.1",
+          port,
+        },
+        { cimdTransport },
+      ),
     );
-    await initialize(service);
+    await Effect.runPromise(initialize(service));
     httpScope = Scope.makeUnsafe();
     serve = await Effect.runPromise(
       nodeHandler(service, staticRoot).pipe(Effect.provideService(Scope.Scope, httpScope)),
     );
 
-    const owner: OwnerAccount = {
+    const owner = {
       email: "owner@example.internal",
       password: randomBytes(24).toString("base64url"),
     };
 
-    const cookies = new Map<string, string>();
+    // Seed in-process: the owner's provider session authorizes administration directly.
+    const issuer = service;
+    const admin = administration(issuer);
 
-    const exchange = async (
-      path: string,
-      body: ProvisioningBody,
-      status: number,
-    ): Promise<Response> => {
-      const response = await fetch(new URL(path, url), {
-        method: "POST",
-        redirect: "manual",
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          origin: url,
-          cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
+    const registration = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* createOwner(issuer, owner);
+          const userId = yield* issuer.owner();
 
-      if (response.status !== status) {
-        await response.body?.cancel();
-        throw new Error(`Disposable issuer provisioning failed at ${path} (${response.status})`);
-      }
+          if (userId === undefined) return yield* Effect.die(new Error("Owner setup failed"));
+          const headers = yield* providerSession(issuer, userId);
 
-      for (const cookie of response.headers.getSetCookie()) {
-        const pair = cookie.split(";")[0]!;
-        const separator = pair.indexOf("=");
-        cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
-      }
+          return yield* Effect.gen(function* () {
+            for (const resource of resources) yield* admin.createResource(resource);
 
-      return response;
-    };
-
-    const post = async (path: string, body: ProvisioningBody, status: number): Promise<void> => {
-      await (await exchange(path, body, status)).body?.cancel();
-    };
-
-    await post("/api/issuer/setupOwner", owner, 201);
-    await post("/api/auth/sign-in/email", owner, 200);
-
-    for (const resource of resources)
-      await post("/api/administration/createResource", resource, 201);
-
-    const clientBody: ClientSeed = { ...client, confidential: true, native: true };
-
-    const registration = Schema.decodeUnknownSync(ClientCredentials)(
-      await (await exchange("/api/administration/createClient", clientBody, 201)).json(),
+            return yield* admin.create({ ...client, confidential: true, native: true });
+          }).pipe(
+            Effect.provideService(CurrentOwner, {
+              userId,
+              email: owner.email,
+              providerHeaders: Effect.succeed(headers),
+            }),
+          );
+        }),
+      ).pipe(
+        Effect.mapError(
+          (error) => new Error("Disposable issuer provisioning failed", { cause: error }),
+        ),
+      ),
     );
 
     if (registration.client_secret === undefined)

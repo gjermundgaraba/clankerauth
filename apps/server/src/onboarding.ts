@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import { APIError } from "better-auth/api";
 import type { Kysely } from "kysely";
 // eslint-disable-next-line anti-slop-effect/no-service-constructor-imports -- makeSql adapts this database, not a contextual service.
@@ -40,7 +40,7 @@ export function onboardingStore(database: Kysely<DatabaseSchema>) {
   });
 
   const cleanup = Effect.fn("Onboarding.cleanup")(function* () {
-    const now = Date.now();
+    const now = yield* Clock.currentTimeMillis;
     const cutoff = now - 7 * 24 * 60 * 60 * 1000;
 
     const stale = yield* Schema.decodeUnknownEffect(
@@ -87,7 +87,7 @@ export function onboardingStore(database: Kysely<DatabaseSchema>) {
             return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
           yield* sql`UPDATE clientOnboarding SET blocked = ${blocked ? 1 : 0} WHERE clientId = ${clientId}`;
           // Managed clients use provider disabled; discovery additionally has a durable tombstone.
-          yield* sql`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${Date.now()} WHERE clientId = ${clientId}`;
+          yield* sql`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
 
           if (blocked) yield* revoke(clientId, sql);
 

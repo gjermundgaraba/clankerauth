@@ -119,7 +119,7 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
   const audience = "https://notes.example/api";
 
   const sign = (kid: string, key: CryptoKey) =>
-    new SignJWT({ client_id: "web", scope: "read" })
+    new SignJWT({ client_id: "web", grant_generation: "g1", scope: "read" })
       .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid })
       .setIssuer(issuer)
       .setAudience(audience)
@@ -297,9 +297,9 @@ test("cookie configuration uses Effect's cookie grammar", () =>
 
       const response = yield* Effect.promise(() =>
         webBrowser(browser).login(
-          new Request("https://notes.example/auth/login", {
+          new Request("https://notes.example/auth/browser/login", {
             method: "POST",
-            headers: { origin: "https://notes.example" },
+            headers: { origin: "https://notes.example", "content-type": "application/json" },
             body: JSON.stringify({ returnTo: "/" }),
           }),
         ),
@@ -381,9 +381,9 @@ test("diagnostic causes survive adapters but never enter public error schemas or
 
       const response = yield* Effect.promise(() =>
         webBrowser(browser).login(
-          new Request("https://notes.example/auth/login", {
+          new Request("https://notes.example/auth/browser/login", {
             method: "POST",
-            headers: { origin: "https://notes.example" },
+            headers: { origin: "https://notes.example", "content-type": "application/json" },
             body: JSON.stringify({ returnTo: "/" }),
           }),
         ),
@@ -399,7 +399,7 @@ test("diagnostic causes survive adapters but never enter public error schemas or
 
       const web = HttpRouter.toWebHandler(
         HttpRouter.add("GET", "/private", Effect.succeed(HttpServerResponse.empty())).pipe(
-          Layer.provide(resource.middleware.layer),
+          Layer.provide(Resource.middleware(resource).layer),
           Layer.provide(HttpServer.layerServices),
         ),
       );
@@ -470,9 +470,9 @@ test("invalid discovery endpoints produce sanitized 503 responses and are not ca
       ]) {
         const response = yield* Effect.promise(() =>
           web.login(
-            new Request(`${origin}/auth/login`, {
+            new Request(`${origin}/auth/browser/login`, {
               method: "POST",
-              headers: { origin },
+              headers: { origin, "content-type": "application/json" },
               body: JSON.stringify({ returnTo: "/" }),
             }),
           ),

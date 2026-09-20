@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Redacted, Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 import { Api, BadRequest } from "@clankerauth/api";
@@ -27,13 +27,13 @@ describe("API integration", () => {
     directory = mkdtempSync(join(tmpdir(), "clankerauth-contract-"));
     settings = validateSettings({
       baseURL: "http://localhost:3000",
-      secret: randomBytes(32).toString("hex"),
+      secret: Redacted.make(randomBytes(32).toString("hex")),
       database: join(directory, "auth.sqlite"),
       host: "127.0.0.1",
       port: 3000,
     });
-    service = await openAuth(settings);
-    await initialize(service);
+    service = await Effect.runPromise(openAuth(settings));
+    await Effect.runPromise(initialize(service));
     handle = application(service);
     cookie = "";
   });

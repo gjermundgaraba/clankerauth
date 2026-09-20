@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { Effect, Schema, SchemaAST } from "effect";
+import { type Headers, HttpServerResponse } from "effect/unstable/http";
 
 /** Schemas define public responses. Diagnostic causes are internal, non-enumerable fields. */
 export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
@@ -58,12 +59,6 @@ export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()(
   { httpApiStatus: 400 },
 ) {}
 
-export class RequestTooLarge extends Schema.TaggedError<RequestTooLarge>()(
-  "RequestTooLarge",
-  { message: Schema.String },
-  { httpApiStatus: 413 },
-) {}
-
 export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
   "ConfigurationError",
   { message: Schema.String },
@@ -83,3 +78,19 @@ export type AuthenticationError =
   | RateLimited
   | ProviderUnavailable
   | StoreError;
+
+/** Encode one of the declared schemas as JSON with its `httpApiStatus`. Undeclared errors are defects. */
+export const encodeError = <const Schemas extends ReadonlyArray<Schema.Top>>(schemas: Schemas) => {
+  const encode = HttpServerResponse.schemaJson(Schema.Union(schemas));
+
+  return (error: Schemas[number]["Type"], headers?: Headers.Input) => {
+    const schema = schemas.find((schema) => Schema.is(schema)(error));
+
+    if (schema === undefined) return Effect.die(new Error("Undeclared error"));
+
+    return encode(error, {
+      status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
+      headers,
+    }).pipe(Effect.orDie);
+  };
+};

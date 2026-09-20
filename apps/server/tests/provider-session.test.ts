@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vite-plus/test";
-import { Effect, Fiber } from "effect";
+import { Redacted, Effect, Fiber } from "effect";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,20 +12,24 @@ test.each([false, true])(
   async (failCleanup) => {
     const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-session-"));
 
-    const service = await openAuth({
-      baseURL: "https://auth.example.internal",
-      database: join(directory, "auth.sqlite"),
-      secret: randomBytes(32).toString("hex"),
-      host: "127.0.0.1",
-      port: 3000,
-    });
+    const service = await Effect.runPromise(
+      openAuth({
+        baseURL: "https://auth.example.internal",
+        database: join(directory, "auth.sqlite"),
+        secret: Redacted.make(randomBytes(32).toString("hex")),
+        host: "127.0.0.1",
+        port: 3000,
+      }),
+    );
 
     const allowDeletion = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
 
     try {
-      await initialize(service);
-      await createOwner(service, { email: "owner@example.internal", password: "test password123" });
+      await Effect.runPromise(initialize(service));
+      await Effect.runPromise(
+        createOwner(service, { email: "owner@example.internal", password: "test password123" }),
+      );
       const owner = await Effect.runPromise(service.owner());
 
       if (!owner) throw new Error("Missing test owner");
@@ -42,9 +46,7 @@ test.each([false, true])(
       });
       const destroy = vi.spyOn(service.database, "destroy");
 
-      const request = Effect.runPromiseExit(
-        Effect.scoped(providerSession(service, owner, Math.floor(Date.now() / 1000) + 300)),
-      );
+      const request = Effect.runPromiseExit(Effect.scoped(providerSession(service, owner)));
 
       await startedDeletion.promise;
       closing = service.close();
@@ -63,34 +65,37 @@ test.each([false, true])(
   },
 );
 
-test("cancellation releases a provider session whose lifetime is bounded by token expiry", async () => {
+test("cancellation releases a temporary provider session that lasts at most one minute", async () => {
   const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-cancellation-"));
 
-  const service = await openAuth({
-    baseURL: "https://auth.example.internal",
-    database: join(directory, "auth.sqlite"),
-    secret: randomBytes(32).toString("hex"),
-    host: "127.0.0.1",
-    port: 3000,
-  });
+  const service = await Effect.runPromise(
+    openAuth({
+      baseURL: "https://auth.example.internal",
+      database: join(directory, "auth.sqlite"),
+      secret: Redacted.make(randomBytes(32).toString("hex")),
+      host: "127.0.0.1",
+      port: 3000,
+    }),
+  );
 
   let request: Fiber.Fiber<never, unknown> | undefined;
 
   try {
-    await initialize(service);
-    await createOwner(service, { email: "owner@example.internal", password: "test password123" });
+    await Effect.runPromise(initialize(service));
+    await Effect.runPromise(
+      createOwner(service, { email: "owner@example.internal", password: "test password123" }),
+    );
     const owner = await Effect.runPromise(service.owner());
 
     if (!owner) throw new Error("Missing test owner");
     const context = await service.auth.$context;
     const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
     const acquired = Promise.withResolvers<void>();
-    const expiry = Math.floor(Date.now() / 1000) + 30;
     const before = await Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`);
     request = Effect.runFork(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* providerSession(service, owner, expiry);
+          yield* providerSession(service, owner);
           acquired.resolve();
 
           return yield* Effect.never;
@@ -100,7 +105,7 @@ test("cancellation releases a provider session whose lifetime is bounded by toke
     await acquired.promise;
     const sessions = await Effect.runPromise(service.sql`SELECT expiresAt FROM session`);
     expect(sessions).toHaveLength(before.length + 1);
-    expect(sessions.at(-1)?.expiresAt).toBe(new Date(expiry * 1000).toISOString());
+    expect(Date.parse(String(sessions.at(-1)?.expiresAt))).toBeLessThanOrEqual(Date.now() + 60_000);
     await Effect.runPromise(Fiber.interrupt(request));
     expect(deleteSession).toHaveBeenCalledTimes(1);
     expect(await Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`)).toEqual(

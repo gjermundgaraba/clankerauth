@@ -12,13 +12,12 @@ const program = Effect.scoped(
   Effect.gen(function* () {
     const settings = yield* loadSettings;
 
-    const service = yield* Effect.acquireRelease(
-      Effect.tryPromise(() => openAuth(settings)),
-      (s) => Effect.promise(() => s.close()),
+    const service = yield* Effect.acquireRelease(openAuth(settings), (s) =>
+      Effect.promise(() => s.close()),
     );
 
     // Provider migrations cannot be cancelled; settle before database finalization.
-    yield* Effect.tryPromise(() => initialize(service)).pipe(Effect.uninterruptible);
+    yield* initialize(service);
 
     const nodeServer = createNodeServer();
 

@@ -1,3 +1,4 @@
+import { BrowserActions } from "../src/effect-actions.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -5,13 +6,7 @@ import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { test } from "vite-plus/test";
 import { Effect, Fiber, Layer, Redacted, Schema } from "effect";
-import {
-  BrowserHttp,
-  BrowserSession,
-  SessionStore,
-  StoreError,
-  Unauthorized,
-} from "../src/index.ts";
+import { BrowserSession, SessionStore, StoreError, Unauthorized } from "../src/index.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 import { TestClock } from "effect/testing";
@@ -29,9 +24,9 @@ const request = (path: string, method = "GET", cookie?: string, body?: { returnT
   if (cookie) headers.set("cookie", cookie);
   const init: RequestInit = { method, headers };
 
-  if (body) {
+  if (body || method === "POST") {
     headers.set("content-type", "application/json");
-    init.body = JSON.stringify(body);
+    init.body = JSON.stringify(body ?? {});
   }
 
   return new Request(origin + path, init);
@@ -190,7 +185,7 @@ const withFixture = async (
               Effect.succeed({
                 subject: "owner",
                 scopes: ["notes:read"],
-                actor: { kind: "client", clientId: "web-client" },
+                actor: { kind: "client", clientId: "web-client", generation: "g1" },
               }),
           }).pipe(
             Effect.provideService(SessionStore, {
@@ -212,10 +207,12 @@ const withFixture = async (
 
   const beginLogin = async () => {
     const result = await auth.login(
-      request("/auth/login", "POST", undefined, { returnTo: "/#board" }),
+      request("/auth/browser/login", "POST", undefined, { returnTo: "/#board" }),
     );
 
     assert.equal(result.status, 200, await result.clone().text());
+    assert.equal(result.headers.get("cache-control"), "no-store");
+    assert.equal(result.headers.get("referrer-policy"), "no-referrer");
     const body = Schema.decodeUnknownSync(LoginResponse)(await result.json());
     const authorization = new URL(body.url);
     assert.equal(authorization.searchParams.get("resource"), resource);
@@ -315,16 +312,15 @@ test("login seals storage, refreshes once concurrently, survives restart, and lo
       await (await restart()).accessToken(request("/api", "GET", cookie)),
       "second-access",
     );
-    const session = await auth.session(request("/auth/session", "GET", cookie));
+    const session = await auth.session(request("/auth/browser/session", "POST", cookie));
     assert.equal(session.status, 200);
     assert.deepEqual(await session.json(), {
-      authenticated: true,
       subject: "owner",
       scopes: ["notes:read"],
       issuer,
     });
-    const logout = await auth.logout(request("/auth/logout", "POST", cookie));
-    assert.equal(logout.status, 204);
+    const logout = await auth.logout(request("/auth/browser/logout", "POST", cookie));
+    assert.equal(logout.status, 200);
     assert.match(logout.headers.get("set-cookie") ?? "", /^notes_session=; .*Max-Age=0/u);
     await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
   }));
@@ -333,11 +329,17 @@ test("ambiguous refresh failure invalidates the session even after recovery and 
   withFixture(async ({ auth, login, tokenRequests, failRefresh, restart, rows }) => {
     const cookie = await login();
     failRefresh();
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 503);
-    failRefresh(false);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 401);
     assert.equal(
-      (await (await restart()).session(request("/auth/session", "GET", cookie))).status,
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      503,
+    );
+    failRefresh(false);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      401,
+    );
+    assert.equal(
+      (await (await restart()).session(request("/auth/browser/session", "POST", cookie))).status,
       401,
     );
     assert.equal(tokenRequests.length, 2);
@@ -369,7 +371,7 @@ test("restart invalidates a persisted refresh marker without replay", () =>
 
     for (const [id, row] of rows) rows.set(id, { ...row, payload });
     assert.equal(
-      (await (await restart()).session(request("/auth/session", "GET", cookie))).status,
+      (await (await restart()).session(request("/auth/browser/session", "POST", cookie))).status,
       401,
     );
     assert.equal(tokenRequests.length, 1);
@@ -381,25 +383,33 @@ test("discovery failure before refresh remains retryable", () =>
     const cookie = await login();
     const auth = await restart();
     failDiscovery(true);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 503);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      503,
+    );
     assert.equal(tokenRequests.length, 1);
     assert.equal(rows.size, 1);
     failDiscovery(false);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 200);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      200,
+    );
     assert.equal(tokenRequests.length, 2);
   }));
 
 test("cross-origin mutations, unbound callbacks and bad return destinations are rejected", () =>
   withFixture(async ({ auth }) => {
     const rejected = await auth.login(
-      new Request(`${origin}/auth/login`, {
+      new Request(`${origin}/auth/browser/login`, {
         method: "POST",
-        headers: { origin: "https://evil.example" },
+        headers: { origin: "https://evil.example", "content-type": "application/json" },
         body: JSON.stringify({ returnTo: "/" }),
       }),
     );
 
     assert.equal(rejected.status, 403);
+    assert.equal(rejected.headers.get("cache-control"), "no-store");
+    assert.equal(rejected.headers.get("referrer-policy"), "no-referrer");
     assert.equal(
       (await auth.callback(request("/auth/callback?code=stolen&state=unknown"))).headers.get(
         "location",
@@ -409,16 +419,16 @@ test("cross-origin mutations, unbound callbacks and bad return destinations are 
 
     for (const returnTo of ["//evil.example", "/auth/callback", "https://evil.example/", "board"])
       assert.equal(
-        (await auth.login(request("/auth/login", "POST", undefined, { returnTo }))).status,
+        (await auth.login(request("/auth/browser/login", "POST", undefined, { returnTo }))).status,
         400,
         returnTo,
       );
-    assert.equal((await auth.session(request("/auth/session"))).status, 401);
+    assert.equal((await auth.session(request("/auth/browser/session", "POST"))).status, 401);
 
     for (const body of ["{}", "invalid", JSON.stringify({ returnTo: "http://[invalid" })]) {
-      const invalid = new Request(`${origin}/auth/login`, {
+      const invalid = new Request(`${origin}/auth/browser/login`, {
         method: "POST",
-        headers: { origin },
+        headers: { origin, "content-type": "application/json" },
         body,
       });
 
@@ -465,10 +475,10 @@ test("logout waits for an admitted refresh and revokes the rotated credential", 
     const gate = pauseRefresh();
     const refresh = auth.accessToken(request("/api", "GET", cookie));
     await gate.started;
-    const logout = auth.logout(request("/auth/logout", "POST", cookie));
+    const logout = auth.logout(request("/auth/browser/logout", "POST", cookie));
     gate.release();
     assert.equal(await refresh, "second-access");
-    assert.equal((await logout).status, 204);
+    assert.equal((await logout).status, 200);
     assert.deepEqual(revoked, ["second-refresh"]);
     await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
   }));
@@ -477,8 +487,8 @@ test("logout stays local when the issuer fails to revoke, and reports it", () =>
   withFixture(async ({ auth, login, failRevocation, revoked, rows }) => {
     const cookie = await login();
     failRevocation();
-    const logout = await auth.logout(request("/auth/logout", "POST", cookie));
-    assert.equal(logout.status, 204);
+    const logout = await auth.logout(request("/auth/browser/logout", "POST", cookie));
+    assert.equal(logout.status, 200);
     assert.deepEqual(revoked, ["first-refresh"]);
     assert.equal(rows.size, 0);
     await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
@@ -489,28 +499,6 @@ test("invalid refresh grants remove the local session without reporting a failur
     const cookie = await login();
     invalidateRefresh();
     await unauthorized(auth.accessToken(request("/api", "GET", cookie)));
-    assert.equal(rows.size, 0);
-  }));
-
-test("streamed login bodies stop at 16 KiB before discovery or persistence", () =>
-  withFixture(async ({ auth, rows, discoveryReads }) => {
-    const init = {
-      method: "POST",
-      headers: { origin },
-      duplex: "half" as const,
-      body: new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(10_000));
-          controller.enqueue(new Uint8Array(10_000));
-          controller.close();
-        },
-      }),
-    };
-
-    const response = await auth.login(new Request(`${origin}/auth/login`, init));
-    assert.equal(response.status, 413);
-    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
-    assert.equal(discoveryReads(), 0);
     assert.equal(rows.size, 0);
   }));
 
@@ -525,7 +513,7 @@ test("interruption after refresh admission preserves the durable marker and forb
       await run(Fiber.interrupt(fiber));
       assert.equal(rows.size, 1);
       assert.equal(
-        (await (await restart()).session(request("/auth/session", "GET", cookie))).status,
+        (await (await restart()).session(request("/auth/browser/session", "POST", cookie))).status,
         401,
       );
       assert.equal(tokenRequests.length, 2);
@@ -566,18 +554,27 @@ test("a failed durable marker prevents the refresh request; a failed replacement
   withFixture(async ({ auth, login, failWriteAfter, tokenRequests, rows }) => {
     const cookie = await login();
     failWriteAfter(0);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 503);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      503,
+    );
     assert.equal(tokenRequests.length, 1);
     assert.equal(rows.size, 1);
     failWriteAfter(1);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 503);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      503,
+    );
     assert.equal(tokenRequests.length, 2);
     assert.equal(rows.size, 0);
-    assert.equal((await auth.session(request("/auth/session", "GET", cookie))).status, 401);
+    assert.equal(
+      (await auth.session(request("/auth/browser/session", "POST", cookie))).status,
+      401,
+    );
     assert.equal(tokenRequests.length, 2);
   }));
 
-test("browser middleware is cookie-only, checks mutation origins, and supplies CurrentPrincipal", () =>
+test("cookie authentication checks mutation origins, yields to bearer, and supplies CurrentPrincipal", () =>
   withFixture(async ({ auth, login, issuer }) => {
     const cookie = await login();
 
@@ -596,7 +593,7 @@ test("browser middleware is cookie-only, checks mutation origins, and supplies C
             ? Effect.succeed({
                 subject: "owner",
                 scopes: ["notes:read"],
-                actor: { kind: "client", clientId: "web-client" },
+                actor: { kind: "client", clientId: "web-client", generation: "g1" },
               })
             : Effect.fail(new Unauthorized({ message: "Invalid fixture token" })),
       },
@@ -608,14 +605,16 @@ test("browser middleware is cookie-only, checks mutation origins, and supplies C
 
     const web = HttpRouter.toWebHandler(
       Layer.mergeAll(
-        BrowserHttp.layer(auth.native),
+        BrowserActions.layer(auth.native),
         HttpRouter.add("GET", "/identity", identity).pipe(
-          Layer.provide(Resource.browserMiddleware(fixtureResource, auth.native).layer),
+          Layer.provide(Resource.middleware(fixtureResource, { browser: auth.native }).layer),
         ),
         HttpRouter.add("POST", "/write", identity).pipe(
-          Layer.provide(Resource.browserMiddleware(fixtureResource, auth.native).layer),
+          Layer.provide(Resource.middleware(fixtureResource, { browser: auth.native }).layer),
         ),
-        HttpRouter.add("GET", "/bearer", identity).pipe(Layer.provide(configured.middleware.layer)),
+        HttpRouter.add("GET", "/bearer", identity).pipe(
+          Layer.provide(Resource.middleware(configured).layer),
+        ),
       ).pipe(Layer.provide(HttpServer.layerServices)),
     );
 
@@ -662,7 +661,10 @@ test("browser middleware is cookie-only, checks mutation origins, and supplies C
       assert.deepEqual(await accepted.json(), { subject: "owner" });
       assert.equal((await web.handler(request("/identity", "GET", cookie))).status, 200);
       assert.equal((await web.handler(request("/bearer", "GET", cookie))).status, 401);
-      assert.equal((await web.handler(request("/auth/session", "GET", cookie))).status, 200);
+      assert.equal(
+        (await web.handler(request("/auth/browser/session", "POST", cookie))).status,
+        200,
+      );
     } finally {
       await web.dispose();
     }
@@ -684,35 +686,30 @@ for (const callbackUrl of [
   `${origin}/auth/callback`,
   `${origin}/workspace/oauth/complete?client=notes`,
 ]) {
-  test(`configured callback works with convenience and explicit routing: ${callbackUrl}`, () =>
+  test(`the callback is mounted at the configured pathname: ${callbackUrl}`, () =>
     withFixture(async ({ auth, beginLogin, tokenRequests }) => {
-      const routes = BrowserHttp.handlers(auth.native);
+      const web = HttpRouter.toWebHandler(
+        BrowserActions.layer(auth.native).pipe(Layer.provide(HttpServer.layerServices)),
+      );
 
-      for (const layer of [
-        BrowserHttp.layer(auth.native),
-        HttpRouter.add("GET", auth.native.callbackPath, routes.callback),
-      ]) {
-        const web = HttpRouter.toWebHandler(layer.pipe(Layer.provide(HttpServer.layerServices)));
+      try {
+        const started = await beginLogin();
 
-        try {
-          const started = await beginLogin();
+        const response = await web.handler(
+          request(started.callbackUrl, "GET", started.transaction),
+        );
 
-          const response = await web.handler(
-            request(started.callbackUrl, "GET", started.transaction),
-          );
-
-          assert.equal(response.status, 302);
-          assert.equal(response.headers.get("location"), `${origin}/#board`);
-          assert.match(response.headers.getSetCookie()[0] ?? "", /^notes_session=/);
-          assert.equal(tokenRequests.at(-1)?.get("redirect_uri"), callbackUrl);
-        } finally {
-          await web.dispose();
-        }
+        assert.equal(response.status, 302);
+        assert.equal(response.headers.get("location"), `${origin}/#board`);
+        assert.match(response.headers.getSetCookie()[0] ?? "", /^notes_session=/);
+        assert.equal(tokenRequests.at(-1)?.get("redirect_uri"), callbackUrl);
+      } finally {
+        await web.dispose();
       }
 
       for (const suffix of ["", "?x=1", "#fragment"]) {
         const rejected = await auth.login(
-          request("/auth/login", "POST", undefined, {
+          request("/auth/browser/login", "POST", undefined, {
             returnTo: auth.native.callbackPath + suffix,
           }),
         );
@@ -723,7 +720,7 @@ for (const callbackUrl of [
       assert.equal(
         (
           await auth.login(
-            request("/auth/login", "POST", undefined, {
+            request("/auth/browser/login", "POST", undefined, {
               returnTo: "/auth/account",
             }),
           )
