@@ -93,7 +93,9 @@ vp run test:lint # lint-policy regression fixtures
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
 - `packages/sdk`: the `@gjermundgaraba/clankerauth-sdk` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
-- `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it. A `v*` tag publishes both packages at that version.
+- `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it.
+
+Both packages are public on npm. A `v*` tag matching their shared version publishes them from `.github/workflows/npm.yml` through npm trusted publishing: each package names this repository and that workflow file as its trusted publisher, so no registry token is stored. npm can only register a trusted publisher on a package that already exists, so the first release of a new package name is published by hand with `pnpm publish` from its directory after `npm login`.
 
 ### effect-actions integration
 

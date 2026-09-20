@@ -4,11 +4,7 @@ Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) veri
 
 ## Install
 
-Published to GitHub Packages. Configure the scope and keep the credential in your user-level `~/.npmrc`:
-
 ```sh
-echo '@gjermundgaraba:registry=https://npm.pkg.github.com' >> .npmrc
-echo '//npm.pkg.github.com/:_authToken=${GH_TOKEN}' >> ~/.npmrc
 vp add @gjermundgaraba/clankerauth-sdk
 ```
 

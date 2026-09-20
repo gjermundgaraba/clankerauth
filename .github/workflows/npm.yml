@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  id-token: write
 
 jobs:
   publish:
@@ -16,7 +16,6 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: 26.8.2
-          registry-url: https://npm.pkg.github.com
       - name: Check that the tag matches both package versions
         run: |
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/sdk/package.json').version")"
@@ -26,11 +25,9 @@ jobs:
       - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
       - run: pnpm ready
       # pnpm resolves the workspace catalog protocol in the published manifest; npm would not.
+      # Both packages list this repository and workflow as their npm trusted publisher, so
+      # publishing authenticates with the job's OIDC token and attaches provenance.
       - run: pnpm publish --no-git-checks
         working-directory: packages/sdk
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm publish --no-git-checks
         working-directory: packages/dev
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
