@@ -8,6 +8,7 @@ import { Redacted, Effect, Exit, Scope } from "effect";
 import { administration } from "../../../apps/server/src/administration.ts";
 import { nodeHandler } from "../../../apps/server/src/app.ts";
 import { createOwner, initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
+import { validateSettings } from "../../../apps/server/src/config.ts";
 import { CurrentOwner } from "../../../apps/server/src/current-owner.ts";
 import { providerSession } from "../../../apps/server/src/provider-session.ts";
 import { createNodeServer } from "../../../apps/server/src/node-http.ts";
@@ -17,6 +18,7 @@ import type { DisposableIssuer, DisposableIssuerOptions } from "./types.d.ts";
 export async function startDisposableIssuer({
   resources,
   client,
+  cookieDomain,
   cimdTransport,
   onRequest,
 }: DisposableIssuerOptions): Promise<DisposableIssuer> {
@@ -90,19 +92,26 @@ export async function startDisposableIssuer({
       throw new Error("Disposable issuer failed to bind a TCP port");
 
     const { port } = address;
-    const url = `http://127.0.0.1:${port}`;
+
+    // Forward auth shares a cookie across hosts, which an IP address cannot do. A `.localhost`
+    // name resolves to this loopback listener and gives the issuer and the apps a common parent.
+    const url =
+      cookieDomain === undefined
+        ? `http://127.0.0.1:${port}`
+        : `http://auth.${cookieDomain}:${port}`;
+
     service = await Effect.runPromise(
       openAuth(
-        {
+        validateSettings({
           baseURL: url,
           secret: Redacted.make(randomBytes(32).toString("hex")),
           database: join(directory, "issuer.sqlite"),
           host: "127.0.0.1",
           port,
           trustProxy: false,
-          allowInsecureHttp: false,
-          cookieDomain: undefined,
-        },
+          allowInsecureHttp: cookieDomain !== undefined,
+          cookieDomain,
+        }),
         { cimdTransport },
       ),
     );

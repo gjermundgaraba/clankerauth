@@ -110,6 +110,73 @@ await test("real HTTP issuer provisions resources and a confidential native clie
   await assert.rejects(fetch(`${issuer.url}/healthz`));
 });
 
+await test("a cookie domain serves forward auth: the signed-in owner gets a resource token", async () => {
+  const app = "http://app.notes.localhost:9876";
+  const forwarded = { identifier: `${app}/api`, name: "Notes API", scopes: ["notes:read"] };
+
+  const forward = (issuer, cookie) =>
+    fetch(`${issuer.url}/forward-auth?resource=${encodeURIComponent(forwarded.identifier)}`, {
+      redirect: "manual",
+      headers: {
+        cookie,
+        "x-forwarded-proto": "http",
+        "x-forwarded-host": "app.notes.localhost:9876",
+        "x-forwarded-uri": "/docs",
+      },
+    });
+
+  const issuer = await startDisposableIssuer({
+    resources: [forwarded],
+    client: { ...options.client, resources: [forwarded.identifier] },
+    cookieDomain: "notes.localhost",
+  });
+
+  try {
+    assert.equal(new URL(issuer.url).hostname, "auth.notes.localhost");
+    assert.equal(issuer.issuer, `${issuer.url}/api/auth`);
+    // Node's fetch is a script's request, not a navigation, so no session is refused in place.
+    const anonymous = await forward(issuer, "");
+    assert.equal(anonymous.status, 401);
+    await anonymous.body.cancel();
+    const session = await login(issuer);
+    assert.equal(session.status, 200);
+
+    const cookie = session.headers
+      .getSetCookie()
+      .map((part) => part.split(";")[0])
+      .join("; ");
+
+    await session.body.cancel();
+
+    const proceed = await fetch(
+      `${issuer.url}/forward-auth/continue?rd=${encodeURIComponent(`${app}/docs`)}`,
+      { redirect: "manual", headers: { cookie } },
+    );
+
+    assert.equal(proceed.status, 302);
+    assert.equal(proceed.headers.get("location"), `${app}/docs`);
+    const shared = proceed.headers.getSetCookie().find((part) => part.includes("Domain="));
+    assert.match(shared, /Domain=notes\.localhost/);
+    const decision = await forward(issuer, shared.split(";")[0]);
+    assert.equal(decision.status, 204);
+    assert.match(decision.headers.get("authorization"), /^Bearer /);
+  } finally {
+    await issuer.close();
+  }
+});
+
+await test("without a cookie domain the forward-auth routes are not served", async () => {
+  const issuer = await startDisposableIssuer(options);
+
+  try {
+    const response = await fetch(`${issuer.url}/forward-auth?resource=x`);
+    assert.equal(response.status, 404);
+    await response.body.cancel();
+  } finally {
+    await issuer.close();
+  }
+});
+
 await test("new runs have independent credentials and identity databases", async () => {
   const first = await startDisposableIssuer(options);
   await first.close();
