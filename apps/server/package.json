@@ -22,7 +22,7 @@
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerauth-sdk": "workspace:*",
-    "@gjermundgaraba/effect-actions": "0.1.0-rc.2",
+    "@gjermundgaraba/effect-actions": "catalog:",
     "better-auth": "catalog:",
     "better-call": "catalog:",
     "effect": "catalog:",

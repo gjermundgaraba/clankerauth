@@ -41,7 +41,7 @@ const makeVerifier = Verifier.make({
 Install the optional peer dependency and import the integration subpath:
 
 ```sh
-vp add @gjermundgaraba/effect-actions@0.1.0-rc.2
+vp add @gjermundgaraba/effect-actions@0.1.0
 ```
 
 Core and integration declarations both type-check without `skipLibCheck`.

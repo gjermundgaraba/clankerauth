@@ -38,14 +38,14 @@
     "oauth4webapi": "catalog:"
   },
   "devDependencies": {
-    "@gjermundgaraba/effect-actions": "0.1.0-rc.2",
+    "@gjermundgaraba/effect-actions": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "0.1.0-rc.2"
+    "@gjermundgaraba/effect-actions": "0.1.0"
   },
   "peerDependenciesMeta": {
     "@gjermundgaraba/effect-actions": {
