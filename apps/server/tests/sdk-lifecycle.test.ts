@@ -31,16 +31,26 @@ const startServer = async () => {
     serve(incoming, outgoing);
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  // Every interface: `*.localhost` names resolve to either loopback family.
+  await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
 
   if (address === null || !(address instanceof Object) || !("port" in address))
     throw new Error("Expected TCP listener");
   const { port } = address;
-  const url = `http://127.0.0.1:${port}`;
+  // Forward auth shares one cookie domain between the issuer and the apps behind the proxy.
+  const url = `http://auth.home.localhost:${port}`;
 
   const service = await Effect.runPromise(
-    openAuth(testSettings({ baseURL: url, database: join(directory, "issuer.sqlite"), port })),
+    openAuth(
+      testSettings({
+        baseURL: url,
+        database: join(directory, "issuer.sqlite"),
+        port,
+        allowInsecureHttp: true,
+        cookieDomain: "home.localhost",
+      }),
+    ),
   );
 
   await Effect.runPromise(initialize(service));
@@ -98,8 +108,7 @@ const startServer = async () => {
 
 test("forward-auth tokens and API keys verify with the SDK against the real issuer, until logout", async () => {
   const issuer = await startServer();
-  // Without a cookie domain, forward auth covers apps on the issuer's own host.
-  const app = new URL("/notes?x=1", issuer.url.replace(/:\d+$/, ":7337"));
+  const app = new URL("http://notes.home.localhost:7337/notes?x=1");
   const resource = `${app.origin}/api`;
 
   try {
@@ -176,21 +185,16 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       (error) => error instanceof Unauthorized,
     );
 
-    // Logout ends the issuer session; the next browser request is sent through the issuer,
-    // which finds no session and asks for login.
+    // Logout ends the issuer session. Node's fetch is a script's request, not a navigation,
+    // so the next check is refused in place, and continuing asks for login.
     const logout = await issuer.call(`/forward-auth/logout?rd=${encodeURIComponent(app.href)}`);
     assert.equal(logout.status, 302);
     assert.equal(logout.headers.get("location"), app.href);
-    const again = await issuer.forward(resource, app);
-    assert.equal(again.status, 302);
-    const next = new URL(again.headers.get("location") ?? "");
-    assert.equal(`${next.origin}${next.pathname}`, `${issuer.url}/forward-auth/continue`);
-    assert.equal(next.searchParams.get("rd"), app.href);
-    const login = await issuer.call(`${next.pathname}${next.search}`);
+    assert.equal((await issuer.forward(resource, app)).status, 401);
+    const login = await issuer.call(`/forward-auth/continue?rd=${encodeURIComponent(app.href)}`);
     assert.equal(login.status, 302);
     const target = new URL(login.headers.get("location") ?? "");
     assert.equal(`${target.origin}${target.pathname}`, `${issuer.url}/login`);
-    assert.equal(target.searchParams.get("rd"), next.href);
   } finally {
     await issuer.close();
   }

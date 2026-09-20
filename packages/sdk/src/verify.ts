@@ -1,5 +1,5 @@
 import { Clock, Effect, Exit, Schema, Semaphore } from "effect";
-import { createLocalJWKSet, decodeProtectedHeader, errors, jwtVerify } from "jose";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import type { JWSHeaderParameters } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
@@ -64,17 +64,6 @@ const KeyResponse = Schema.Struct({
   expiresAt: Schema.NullOr(Schema.String),
 });
 
-const credentialErrors = [
-  errors.JWTExpired,
-  errors.JWTClaimValidationFailed,
-  errors.JWSSignatureVerificationFailed,
-  errors.JWSInvalid,
-  errors.JWTInvalid,
-  errors.JOSENotSupported,
-  errors.JOSEAlgNotAllowed,
-  errors.JWKSNoMatchingKey,
-];
-
 const unauthorized = () => new Unauthorized({ message: "Authentication required" });
 
 /** Acquire once per resource; transport is selected by the application, not the SDK. */
@@ -124,10 +113,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const resolveKey = (resolve: ReturnType<typeof createLocalJWKSet>, header: JWSHeaderParameters) =>
     Effect.tryPromise({
       try: () => resolve(header),
-      catch: (cause) =>
-        cause instanceof errors.JWKSNoMatchingKey
-          ? unauthorized()
-          : new ProviderUnavailable({ operation: "jwks.resolve", cause }),
+      // Selecting from fetched keys does no I/O: every failure is the credential's.
+      catch: unauthorized,
     });
 
   const signingKey = Effect.fn("Verifier.signingKey")(function* (header: JWSHeaderParameters) {
@@ -172,9 +159,9 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       catch: unauthorized,
     });
 
-    // Reject unsupported algorithms and critical extensions before doing provider I/O; JOSE
-    // still enforces its allowlist. Access tokens never need crit, and none is understood.
-    if (header.alg !== "EdDSA" || header.crit !== undefined) return yield* unauthorized();
+    // The issuer always names its key, so key selection is never ambiguous. Reject other
+    // tokens before doing provider I/O; JOSE still enforces its algorithm allowlist.
+    if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
     const key = yield* signingKey(header);
     const now = yield* Clock.currentTimeMillis;
 
@@ -188,10 +175,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
           requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
           currentDate: new Date(now),
         }),
-      catch: (cause) =>
-        credentialErrors.some((kind) => cause instanceof kind)
-          ? unauthorized()
-          : new ProviderUnavailable({ operation: "jwt.verify", cause }),
+      // Verification against a resolved key does no I/O either.
+      catch: unauthorized,
     });
 
     if (payload.cnf !== undefined) return yield* unauthorized();

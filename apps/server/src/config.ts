@@ -55,7 +55,7 @@ export const loadSettings = Effect.gen(function* () {
 });
 
 /** `hostname` is `domain` or one of its subdomains. */
-const withinDomain = (hostname: string, domain: string) =>
+export const withinDomain = (hostname: string, domain: string) =>
   hostname === domain || hostname.endsWith(`.${domain}`);
 
 /** Browsers silently drop cookies scoped to a bare TLD or an IP address. */
@@ -70,7 +70,7 @@ const cookieDomainValid = (domain: string) => {
 };
 
 /** HTTPS, or HTTP on loopback or anywhere with ALLOW_INSECURE_HTTP. */
-const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
+export const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
   url.protocol === "https:" ||
   (url.protocol === "http:" &&
     (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || allowInsecureHttp));
@@ -116,24 +116,3 @@ export function validateSettings(settings: Settings): Settings {
 
   return { ...settings, mcpAllowedOrigins };
 }
-
-/** The forwarded request's URL may be returned to after login: same scheme policy as the issuer,
- * and a host the owner session cookie reaches (the issuer host, or the shared cookie domain). */
-export const allowedReturnURL = (settings: Settings, value: string) => {
-  let url: URL;
-
-  try {
-    url = new URL(value);
-  } catch {
-    return undefined;
-  }
-
-  if (url.username || url.password || !allowedScheme(url, settings.allowInsecureHttp))
-    return undefined;
-  const issuerHost = new URL(settings.baseURL).hostname;
-
-  return url.hostname === issuerHost ||
-    (settings.cookieDomain !== undefined && withinDomain(url.hostname, settings.cookieDomain))
-    ? url
-    : undefined;
-};

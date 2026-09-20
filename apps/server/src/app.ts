@@ -311,7 +311,9 @@ export function application(
 
   return Layer.mergeAll(
     actionRoutes(service, mcpAllowedOrigins),
-    forwardAuthRoutes(service),
+    settings.cookieDomain === undefined
+      ? Layer.empty
+      : forwardAuthRoutes(service, settings.cookieDomain),
     HttpRouter.add(
       "GET",
       "/healthz",

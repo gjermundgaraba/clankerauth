@@ -15,7 +15,7 @@ import type { BetterAuthPlugin } from "better-auth";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { signJWT, type JwtOptions } from "better-auth/plugins/jwt";
 import * as z from "zod";
-import { allowedReturnURL } from "./config.ts";
+import { allowedScheme, withinDomain } from "./config.ts";
 import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
 import { mcpResource } from "./resources.ts";
 import type { Service } from "./auth.ts";
@@ -61,14 +61,29 @@ export const forwardTokens = (jwt: JwtOptions, lifetimeSeconds: number) =>
 const json = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status });
 
-export const forwardAuthRoutes = (service: Service) => {
+/** Forward auth exists to share one owner session across a cookie domain, so it needs one. */
+export const forwardAuthRoutes = (service: Service, cookieDomain: string) => {
   const { settings } = service;
+
+  /** Return only where the forward cookie reaches, under the issuer's own scheme policy. */
+  const allowedReturnURL = (value: string) => {
+    if (!URL.canParse(value)) return undefined;
+    const url = new URL(value);
+
+    return !url.username &&
+      !url.password &&
+      allowedScheme(url, settings.allowInsecureHttp) &&
+      withinDomain(url.hostname, cookieDomain)
+      ? url
+      : undefined;
+  };
+
   const secret = Redacted.value(settings.secret);
   const reserved = mcpResource(settings.baseURL);
   const loginPage = new URL("/login", settings.baseURL);
 
   const cookieOptions = {
-    domain: settings.cookieDomain,
+    domain: cookieDomain,
     path: "/",
     httpOnly: true,
     secure: settings.baseURL.startsWith("https:"),
@@ -95,10 +110,13 @@ export const forwardAuthRoutes = (service: Service) => {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const { headers } = request;
 
-    const returnTo = allowedReturnURL(
-      settings,
-      `${headers["x-forwarded-proto"]}://${headers["x-forwarded-host"]}${headers["x-forwarded-uri"] ?? "/"}`,
-    );
+    const proto = headers["x-forwarded-proto"];
+    const host = headers["x-forwarded-host"];
+
+    const returnTo =
+      proto && host
+        ? allowedReturnURL(`${proto}://${host}${headers["x-forwarded-uri"] ?? "/"}`)
+        : undefined;
 
     if (!returnTo) return json(400, "invalid_forwarded_request");
     const identifier = new URL(request.url, settings.baseURL).searchParams.get("resource");
@@ -120,8 +138,12 @@ export const forwardAuthRoutes = (service: Service) => {
       ? yield* session(`${yield* sessionCookieName}=${unsealed.value}`)
       : null;
 
+    // Only a page navigation can follow the issuer and come back. A script's request would
+    // chase the redirect across origins and fail opaquely, so it gets a plain refusal.
     if (!current)
-      return HttpServerResponse.redirect(withReturn("/forward-auth/continue", returnTo));
+      return headers["sec-fetch-mode"] === "navigate"
+        ? HttpServerResponse.redirect(withReturn("/forward-auth/continue", returnTo))
+        : json(401, "unauthenticated");
 
     const { token } = yield* provider(() =>
       service.auth.api.signForwardToken({
@@ -144,7 +166,7 @@ export const forwardAuthRoutes = (service: Service) => {
   const proceed = Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
-    const returnTo = requested ? allowedReturnURL(settings, requested) : undefined;
+    const returnTo = requested ? allowedReturnURL(requested) : undefined;
 
     if (!returnTo) return json(400, "invalid_return_url");
     const value = request.cookies[yield* sessionCookieName];
@@ -166,7 +188,7 @@ export const forwardAuthRoutes = (service: Service) => {
   const logout = Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
-    const returnTo = (requested && allowedReturnURL(settings, requested)) || loginPage;
+    const returnTo = (requested && allowedReturnURL(requested)) || loginPage;
 
     // Sign-out ends the session and clears its cookie whether or not one exists.
     const { headers } = yield* provider(() =>

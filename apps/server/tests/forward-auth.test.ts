@@ -41,7 +41,7 @@ const continueTo = (rd: string, cookie = session) =>
   call(`/forward-auth/continue?rd=${encodeURIComponent(rd)}`, undefined, { cookie });
 
 /** What Caddy's forward_auth or Traefik's forwardAuth sends for a browser request. */
-const forward = (cookie: string, target = resource, original = page) => {
+const forward = (cookie: string, target = resource, original = page, mode = "navigate") => {
   const url = new URL(original);
 
   return handle(
@@ -51,7 +51,7 @@ const forward = (cookie: string, target = resource, original = page) => {
         "x-forwarded-proto": url.protocol.slice(0, -1),
         "x-forwarded-host": url.host,
         "x-forwarded-uri": `${url.pathname}${url.search}`,
-        "x-forwarded-method": "GET",
+        "sec-fetch-mode": mode,
       },
       redirect: "manual",
     }),
@@ -165,6 +165,11 @@ test("without a forward cookie the browser passes through the issuer, which asks
   redirectTo(await forward(session), "/forward-auth/continue");
   redirectTo(await forward(`${forwardCookie}=tampered`), "/forward-auth/continue");
   redirectTo(await continueTo(page, ""), "/login", continueURL());
+
+  // A script's request cannot follow the issuer across origins, so it is refused in place.
+  const scripted = await forward("", resource, page, "cors");
+  expect(scripted.status).toBe(401);
+  expect((await scripted.json()).error).toBe("unauthenticated");
 });
 
 test("proxy misconfiguration is refused: missing headers, foreign hosts, unknown or reserved resources", async () => {

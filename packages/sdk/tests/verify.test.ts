@@ -106,8 +106,8 @@ test("malformed credentials, outages and rate limits remain distinct typed outco
       "Bearer invalid, Bearer another",
       "Bearer not.a.jwt",
       "Bearer eyJhbGciOiJIUzI1NiJ9.e30.AA",
-      // A critical extension nobody understands is refused before any key lookup.
-      `Bearer ${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt", crit: ["unknown"], unknown: true })).toString("base64url")}.e30.AA`,
+      // A token that does not name its key is refused before any key lookup.
+      `Bearer ${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
     ])
       assert((await failure(verifier.verify(header))) instanceof Unauthorized);
     assert.equal(issuer.count(), 0);
