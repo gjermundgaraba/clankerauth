@@ -172,8 +172,9 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       catch: unauthorized,
     });
 
-    // Reject unsupported algorithms before doing provider I/O; JOSE still enforces its allowlist.
-    if (header.alg !== "EdDSA") return yield* unauthorized();
+    // Reject unsupported algorithms and critical extensions before doing provider I/O; JOSE
+    // still enforces its allowlist. Access tokens never need crit, and none is understood.
+    if (header.alg !== "EdDSA" || header.crit !== undefined) return yield* unauthorized();
     const key = yield* signingKey(header);
     const now = yield* Clock.currentTimeMillis;
 
