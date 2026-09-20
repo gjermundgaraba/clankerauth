@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vp run @clankerauth/admin-api#build && vp run --no-cache --parallel -r dev",
     "build": "vp run -r build",
-    "check": "vp run @clankerauth/admin-api#build && vp check && vp run test:lint",
+    "check": "vp run @gjermundgaraba/clankerauth-sdk#build && vp run @clankerauth/admin-api#build && vp check && vp run test:lint",
     "test": "vp run -r test",
     "ready": "vp run check && vp run -r build && vp run -r test",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
