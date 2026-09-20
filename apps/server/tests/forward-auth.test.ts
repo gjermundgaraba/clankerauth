@@ -64,12 +64,16 @@ const cookiePair = (response: Response, name: string) =>
     .map((cookie) => cookie.split(";")[0]!)
     .find((pair) => pair.startsWith(`${name}=`));
 
-const redirectTo = (response: Response, path: string, original = page) => {
+const redirectTo = (response: Response, path: string, rd = page) => {
   expect(response.status).toBe(302);
   const location = new URL(response.headers.get("location")!);
   expect(location.origin + location.pathname).toBe(`${origin}${path}`);
-  expect(location.searchParams.get("rd")).toBe(original);
+  expect(location.searchParams.get("rd")).toBe(rd);
 };
+
+/** Where login sends the browser afterwards: back through continue to the original page. */
+const continueURL = (original = page) =>
+  `${origin}/forward-auth/continue?rd=${encodeURIComponent(original)}`;
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-forward-"));
@@ -160,7 +164,7 @@ test("without a forward cookie the browser passes through the issuer, which asks
   // The issuer session cookie alone does not count: apps only ever hold the forward cookie.
   redirectTo(await forward(session), "/forward-auth/continue");
   redirectTo(await forward(`${forwardCookie}=tampered`), "/forward-auth/continue");
-  redirectTo(await continueTo(page, ""), "/login");
+  redirectTo(await continueTo(page, ""), "/login", continueURL());
 });
 
 test("proxy misconfiguration is refused: missing headers, foreign hosts, unknown or reserved resources", async () => {

@@ -81,11 +81,11 @@ export const forwardAuthRoutes = (service: Service) => {
     return context.authCookies.sessionToken.name;
   });
 
-  const redirectWith = (path: string, returnTo: URL) => {
+  const withReturn = (path: string, returnTo: URL) => {
     const url = new URL(path, settings.baseURL);
     url.searchParams.set("rd", returnTo.href);
 
-    return HttpServerResponse.redirect(url);
+    return url;
   };
 
   const session = (cookie: string) =>
@@ -120,7 +120,8 @@ export const forwardAuthRoutes = (service: Service) => {
       ? yield* session(`${yield* sessionCookieName}=${unsealed.value}`)
       : null;
 
-    if (!current) return redirectWith("/forward-auth/continue", returnTo);
+    if (!current)
+      return HttpServerResponse.redirect(withReturn("/forward-auth/continue", returnTo));
 
     const { token } = yield* provider(() =>
       service.auth.api.signForwardToken({
@@ -149,7 +150,11 @@ export const forwardAuthRoutes = (service: Service) => {
     const value = request.cookies[yield* sessionCookieName];
     const current = value ? yield* session(request.headers.cookie ?? "") : null;
 
-    if (!current || !value) return redirectWith("/login", returnTo);
+    // Login returns only to this origin: back here, which then seals the cookie and goes on.
+    if (!current || !value)
+      return HttpServerResponse.redirect(
+        withReturn("/login", withReturn("/forward-auth/continue", returnTo)),
+      );
     const sealed = yield* Effect.tryPromise(() => symmetricEncrypt({ key: secret, data: value }));
 
     // A browser-session cookie: renewing it is two redirects while the issuer session lives.

@@ -190,7 +190,7 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
     assert.equal(login.status, 302);
     const target = new URL(login.headers.get("location") ?? "");
     assert.equal(`${target.origin}${target.pathname}`, `${issuer.url}/login`);
-    assert.equal(target.searchParams.get("rd"), app.href);
+    assert.equal(target.searchParams.get("rd"), next.href);
   } finally {
     await issuer.close();
   }

@@ -47,11 +47,14 @@ Discovery is served at `/.well-known/oauth-authorization-server/api/auth`. There
 
 ## Protect a web app behind a reverse proxy
 
-Browser applications need no OAuth code of their own. Put them behind Caddy or Traefik with forward auth pointed at this issuer, and add the app's API as a **Resource**. On every browser request the proxy asks `/forward-auth`; a signed-in owner gets a fifteen-minute access token for that resource in an `Authorization` header, which the proxy copies upstream, and anyone else is sent through the issuer, which signs them in if needed, and back to the page they asked for. The app verifies the token exactly as it verifies MCP and API-key bearer tokens below. Requests that already carry an `Authorization` header (MCP clients, API keys) bypass forward auth, so one origin serves browsers and agents alike.
+Browser applications need no OAuth code of their own. Put them behind Caddy or Traefik with forward auth pointed at this issuer, and add the app's API as a **Resource**. On every browser request the proxy asks `/forward-auth`; a signed-in owner gets a fifteen-minute access token for that resource in an `Authorization` header, which the proxy copies upstream, and anyone else is sent through the issuer, which signs them in if needed, and back to the page they asked for. The app verifies the token exactly as it verifies MCP and API-key bearer tokens below. Requests that already carry an `Authorization` header (MCP clients, API keys) bypass forward auth, and an MCP endpoint and the discovery documents under `/.well-known` stay public so MCP clients receive the 401 challenge they onboard from; one origin then serves browsers and agents alike.
 
 ```caddyfile
 notes.home.example {
-  @browser not header Authorization *
+  @browser {
+    not header Authorization *
+    not path /mcp /mcp/* /.well-known/*
+  }
   forward_auth @browser https://auth.home.example {
     uri /forward-auth?resource=https://notes.home.example/api
     copy_headers Authorization
