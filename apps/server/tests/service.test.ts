@@ -194,7 +194,7 @@ function authorization(clientId: string, resource = resourceA, extra: Record<str
     client_id: clientId,
     redirect_uri: "http://127.0.0.1:9876/callback",
     response_type: "code",
-    scope: "openid offline_access notes:read",
+    scope: "offline_access notes:read",
     resource,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
@@ -210,11 +210,7 @@ async function authorize(clientId: string, resource = resourceA, scope?: string)
   const flow = authorization(
     clientId,
     resource,
-    scope
-      ? { scope }
-      : resource === resourceB
-        ? { scope: "openid offline_access reports:read" }
-        : {},
+    scope ? { scope } : resource === resourceB ? { scope: "offline_access reports:read" } : {},
   );
 
   const response = await request(flow.path);
@@ -691,14 +687,6 @@ describe("OAuth boundaries and lifecycle", () => {
     expect(exchange.headers.get("access-control-allow-origin")).toBe("*");
     const issued = await exchange.json();
 
-    const userInfo = await request("/api/auth/oauth2/userinfo", undefined, {
-      anonymous: true,
-      authorization: `Bearer ${issued.access_token}`,
-    });
-
-    expect(userInfo.status).toBe(200);
-    expect((await userInfo.json()).sub).toBe(await Effect.runPromise(service.owner()));
-
     const introspect = (secret: string) =>
       request(
         "/api/auth/oauth2/introspect",
@@ -745,7 +733,6 @@ describe("OAuth boundaries and lifecycle", () => {
     for (const path of [
       "/.well-known/oauth-authorization-server/api/auth",
       "/api/auth/.well-known/oauth-authorization-server",
-      "/api/auth/.well-known/openid-configuration",
     ]) {
       const response = await request(path);
       expect(response.status, await response.clone().text()).toBe(200);
@@ -756,6 +743,20 @@ describe("OAuth boundaries and lifecycle", () => {
       expect(metadata.client_id_metadata_document_supported).toBe(true);
       expect(metadata.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
     }
+  });
+
+  test("scopes no resource defines are refused before consent", async () => {
+    await login();
+    const app = await client();
+
+    const response = await request(
+      authorization(app.client_id, resourceA, { scope: "notes:read notes:nope" }).path,
+    );
+
+    expect(response.status, await response.clone().text()).toBe(302);
+    const location = new URL(response.headers.get("location")!);
+    expect(location.origin + location.pathname).toBe("http://127.0.0.1:9876/callback");
+    expect(location.searchParams.get("error")).toBe("invalid_scope");
   });
 
   test("login continuation and signed consent denial; altered consent is rejected", async () => {
@@ -857,11 +858,8 @@ describe("OAuth boundaries and lifecycle", () => {
       typ: "at+jwt",
     });
 
-    // With openid, Better Auth also includes its own UserInfo endpoint, never another downstream API.
-    expect(verified.payload.aud).toEqual([
-      resourceA,
-      `${settings.baseURL}/api/auth/oauth2/userinfo`,
-    ]);
+    // Exactly the requested resource: no UserInfo or other downstream audience.
+    expect(verified.payload.aud).toEqual(resourceA);
     expect(verified.payload.scope).toContain("notes:read");
     expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(900);
 
@@ -1038,7 +1036,7 @@ describe("dashboard resources and client access", () => {
       { ...valid, scopes: ["read\\write"] },
       { ...valid, scopes: ["read\twrite"] },
       { ...valid, scopes: ["réad"] },
-      { ...valid, scopes: ["openid"] },
+      { ...valid, scopes: ["offline_access"] },
       { ...valid, scopes: [42] },
     ]) {
       expect(
@@ -1309,7 +1307,7 @@ describe("dashboard resources and client access", () => {
     expect(stored.scope.split(" ")).toContain("notes:admin");
 
     const response = await request(
-      authorization(app.client_id, resourceA, { scope: "openid notes:admin", prompt: "none" }).path,
+      authorization(app.client_id, resourceA, { scope: "notes:admin", prompt: "none" }).path,
     );
 
     expect(
@@ -1321,7 +1319,7 @@ describe("dashboard resources and client access", () => {
     const app = await client();
     expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
     expect((await updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
-    const sharedScopes = "openid offline_access notes:read";
+    const sharedScopes = "offline_access notes:read";
     const issuedA = await tokens(app.client_id, resourceA);
     const retainedRefreshA = await tokens(app.client_id, resourceA);
     const issuedB = await tokens(app.client_id, resourceB, undefined, sharedScopes);
@@ -1381,7 +1379,7 @@ describe("dashboard resources and client access", () => {
 
     const unaffected = await request(
       authorization(app.client_id, resourceB, {
-        scope: "openid offline_access reports:read",
+        scope: "offline_access reports:read",
         prompt: "none",
       }).path,
     );

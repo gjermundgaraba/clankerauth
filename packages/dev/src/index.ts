@@ -101,6 +101,7 @@ export async function startDisposableIssuer({
           port,
           trustProxy: false,
           allowInsecureHttp: false,
+          cookieDomain: undefined,
         },
         { cimdTransport },
       ),

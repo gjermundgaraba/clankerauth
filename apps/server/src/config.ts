@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { Config, Effect, Redacted } from "effect";
 
 export interface Settings {
@@ -12,6 +13,8 @@ export interface Settings {
   trustProxy: boolean;
   /** Permit a plain-HTTP issuer beyond loopback, for private networks without TLS. */
   allowInsecureHttp: boolean;
+  /** Parent domain the forward cookie is scoped to, so forward auth covers sibling hosts. */
+  cookieDomain: string | undefined;
 }
 
 export const loadSettings = Effect.gen(function* () {
@@ -32,6 +35,10 @@ export const loadSettings = Effect.gen(function* () {
     Config.withDefault(false),
   );
 
+  const cookieDomain = yield* Config.String("AUTH_COOKIE_DOMAIN").pipe(
+    Config.withDefault(undefined),
+  );
+
   return yield* Effect.try(() =>
     validateSettings({
       baseURL,
@@ -42,21 +49,37 @@ export const loadSettings = Effect.gen(function* () {
       mcpAllowedOrigins,
       trustProxy,
       allowInsecureHttp,
+      cookieDomain,
     }),
   );
 });
 
+/** `hostname` is `domain` or one of its subdomains. */
+const withinDomain = (hostname: string, domain: string) =>
+  hostname === domain || hostname.endsWith(`.${domain}`);
+
+/** Browsers silently drop cookies scoped to a bare TLD or an IP address. */
+const cookieDomainValid = (domain: string) => {
+  try {
+    return (
+      new URL(`https://${domain}`).hostname === domain && domain.includes(".") && !isIP(domain)
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** HTTPS, or HTTP on loopback or anywhere with ALLOW_INSECURE_HTTP. */
+const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
+  url.protocol === "https:" ||
+  (url.protocol === "http:" &&
+    (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || allowInsecureHttp));
+
 const validOrigin = (value: string, allowInsecureHttp: boolean) => {
   try {
     const url = new URL(value);
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 
-    return (
-      url.origin === value &&
-      !url.username &&
-      !url.password &&
-      (url.protocol === "https:" || (url.protocol === "http:" && (loopback || allowInsecureHttp)))
-    );
+    return url.origin === value && allowedScheme(url, allowInsecureHttp);
   } catch {
     return false;
   }
@@ -82,5 +105,35 @@ export function validateSettings(settings: Settings): Settings {
       "MCP_ALLOWED_ORIGINS must contain exact HTTPS origins (HTTP allowed on loopback, or anywhere with ALLOW_INSECURE_HTTP=true)",
     );
 
+  if (
+    settings.cookieDomain !== undefined &&
+    (!cookieDomainValid(settings.cookieDomain) ||
+      !withinDomain(new URL(settings.baseURL).hostname, settings.cookieDomain))
+  )
+    throw new Error(
+      "AUTH_COOKIE_DOMAIN must be a bare parent domain of the AUTH_BASE_URL host, such as home.example",
+    );
+
   return { ...settings, mcpAllowedOrigins };
 }
+
+/** The forwarded request's URL may be returned to after login: same scheme policy as the issuer,
+ * and a host the owner session cookie reaches (the issuer host, or the shared cookie domain). */
+export const allowedReturnURL = (settings: Settings, value: string) => {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+
+  if (url.username || url.password || !allowedScheme(url, settings.allowInsecureHttp))
+    return undefined;
+  const issuerHost = new URL(settings.baseURL).hostname;
+
+  return url.hostname === issuerHost ||
+    (settings.cookieDomain !== undefined && withinDomain(url.hostname, settings.cookieDomain))
+    ? url
+    : undefined;
+};

@@ -10,6 +10,7 @@ import {
 import { OpenApi } from "effect/unstable/httpapi";
 import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/admin-api";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import manifest from "../package.json" with { type: "json" };
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { bearerOwner, sessionOwner } from "./current-owner.ts";
@@ -97,7 +98,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
       const mcpRoutes = ActionMcp.layerHttp(
         {
           name: "clankerauth-admin",
-          version: "0.4.0",
+          version: manifest.version,
           path: "/mcp",
           // Keep the existing protocol allowlist; native streaming does not expand it.
           protocols: [

@@ -22,6 +22,9 @@ interface RequestPolicyOptions {
   readonly trustProxy: boolean;
 }
 
+/** Proxy subrequests carry the original request's host and scheme for the return URL. */
+const forwardAuthPath = /^\/forward-auth(?:\?|$)/;
+
 /** The address rate limits and session tracking attribute a request to. */
 const peerAddress = (
   headers: Headers.Headers,
@@ -52,10 +55,14 @@ export const requestPolicy =
         return HttpServerResponse.empty({ status: 400 });
 
       // The configured base URL is the only origin; forwarded headers are never trusted
-      // beyond the client address, and only when a proxy is declared.
+      // beyond the client address, and only when a proxy is declared. Forward auth is the
+      // one route that reads them: it validates the forwarded URL against the cookie domain
+      // and never hands those headers to the provider.
       const headers = pipe(
         incoming.headers,
-        Headers.removeMany(["forwarded", "x-forwarded-host", "x-forwarded-proto"]),
+        forwardAuthPath.test(target)
+          ? Headers.remove("forwarded")
+          : Headers.removeMany(["forwarded", "x-forwarded-host", "x-forwarded-proto"]),
         Headers.set("host", new URL(baseURL).host),
         Headers.set(
           "x-clankerauth-peer",

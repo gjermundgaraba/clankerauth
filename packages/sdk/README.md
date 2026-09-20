@@ -1,6 +1,6 @@
 # @gjermundgaraba/clankerauth-sdk
 
-Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification and browser sessions. Verifies JWT access tokens and API keys and runs browser login with encrypted server-held credentials. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
+Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification. Verifies JWT access tokens and API keys, including the tokens a reverse proxy obtains through the issuer's forward auth for browser sessions. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
 
 ## Install
 
@@ -107,72 +107,16 @@ JWTs are checked against issuer, audience, EdDSA signature, token type, required
 
 The bundled issuer does not configure automatic signing-key rotation. Immediate-use rotation is supported, but tokens signed by a new key can be rejected during the thirty-second cooldown after a successful lookup. Publish-before-use avoids that short window; it is not mandatory.
 
-## Browser sessions
+## Browser applications
 
-Register a confidential client with the exact `callbackUrl` supplied to the session. It must be an absolute HTTP(S) URL without credentials or a fragment; query parameters are allowed. The session derives its browser origin and secure-cookie policy from this URL.
-
-Provide a `SessionStore` layer implementing Effect operations:
-
-- `get(id)` → `{ payload, expires } | undefined`
-- `put(id, payload, expires)`
-- `delete(id)`
-- `sweep(now)`: remove rows expiring at or before `now`
-
-Map expected database failures to `StoreError({ operation, cause })` at your persistence adapter. Do not put SQL, secrets, credentials or provider payloads in public errors. The store owns persistence, not encryption or session policy. **Run one process per store and acquire one shared browser-session capability per cookie/store configuration.**
-
-```ts
-import { Effect, Layer, Redacted } from "effect";
-import { BrowserSession } from "@gjermundgaraba/clankerauth-sdk";
-import { BrowserActions, Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
-
-// Inside application construction, with HttpClient and SessionStore provided:
-const browser =
-  yield *
-  BrowserSession.make({
-    issuer: "https://auth.internal/api/auth",
-    resource: "https://notes.internal/api",
-    callbackUrl: "https://notes.internal/workspace/auth/callback",
-    clientId,
-    clientSecret: Redacted.make(clientSecret),
-    secret: Redacted.make(sessionSecret), // at least 32 characters; retain across restarts
-    scopes: ["notes:read", "notes:write"],
-    cookie: { name: "notes" },
-    verifyToken: api.verifier.verifyToken,
-  });
-
-const browserRoutes = Layer.mergeAll(
-  BrowserActions.layer(browser),
-  Http.layer(app).pipe(Layer.provide(Resource.middleware(api, { browser }).layer)),
-);
-```
-
-This example's construction fragment belongs inside `Effect.gen`. Supply configuration and secrets at your composition root; the SDK does not read environment variables or start its own runtime.
-
-`BrowserActions.layer` registers:
-
-- `POST /auth/browser/login`: accepts `{ returnTo: "/path" }`, returns `{ url }`.
-- `GET <callback pathname>`: consumes the one-time transaction and redirects (`/workspace/auth/callback` above).
-- `POST /auth/browser/session`: returns the subject, scopes and issuer, or `Unauthorized`.
-- `POST /auth/browser/logout`: ends the local session and attempts provider revocation.
-
-Login, session and logout are effect-actions, with JSON bodies (`{}` for session and logout). Browser clients import the pure `Http` contract from `@gjermundgaraba/clankerauth-sdk/browser-api`. Only the OAuth callback is an ordinary HTTP endpoint. The callback uses the exact configured URL; action routes live under `/auth/browser`. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback returns the sanitized HTTP error to avoid a redirect loop. Login destinations must be same-origin paths other than the callback pathname. The host sets request-body limits, for example `HttpIncomingMessage.MaxBodySize` on Effect's Node server (Clanker Auth's own adapter uses 64 KiB). Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
-
-Tokens always remain in the server-side session store, never in browser JavaScript.
-
-Pass `browser` only for HTTP routes the application's own pages call. A request with an Authorization header is always verified as a bearer token; without one, the session cookie authenticates it and Origin is checked on unsafe methods. **Never pass `browser` for MCP.**
-
-The session capability does not accept incoming HTTP requests: `login(returnTo)`, `callback(url, transactionCookie)`, `session(sessionCookie)`, `accessToken(sessionCookie)`, and `logout(sessionCookie)` are Effects. HTTP handlers own cookie extraction and presentation.
-
-Cookies are HttpOnly, SameSite=Lax and Secure on HTTPS. Login uses S256 PKCE, state, nonce, exact issuer validation and signed ID-token checks. Stored payloads remain AES-256-GCM sealed under the configured secret with hashed cookie identifiers.
-
-Refreshes and logout serialize per session. A durable no-replay marker is written before refresh; interruptions, ambiguous outcomes and restarts cannot reuse that refresh token. Discovery failure before the marker remains retryable. Operational refresh failures return 503 and invalidate the session; subsequent access requires login. Local logout remains authoritative if provider revocation fails, with a sanitized Effect warning.
+Browser apps do not use this package. Put them behind a reverse proxy with the issuer's forward auth, described in the Clanker Auth README; the proxy adds an `Authorization` header the same verifier above accepts.
 
 ## Errors and observability
 
-Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429), `ProviderUnavailable` and `StoreError` (503). Browser input errors use `InvalidRequest` (400). Invalid construction fails with `ConfigurationError`.
+Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `RateLimited` (429) and `ProviderUnavailable` (503). Invalid construction fails with `ConfigurationError`.
 
-The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Browser actions use their declared error schemas; the callback handles redirects. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
+The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
 
-Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable`, `StoreError`, and `Unauthorized` keep this diagnostic field outside their public schemas; BrowserActions and effect-actions serialize only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
+Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable` and `Unauthorized` keep this diagnostic field outside their public schemas; effect-actions serializes only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
 
 MIT licensed.

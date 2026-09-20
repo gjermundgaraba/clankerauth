@@ -11,7 +11,6 @@ import {
 } from "./errors.ts";
 import type { AuthenticationError } from "./errors.ts";
 import * as Verifier from "./verify.ts";
-import type { BrowserSession } from "./browser.ts";
 
 const encode = encodeError(authenticationErrors);
 
@@ -66,32 +65,14 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
 
 export type Resource = Effect.Success<ReturnType<typeof make>>;
 
-export interface MiddlewareOptions {
-  /** Authenticate requests without an Authorization header by session cookie. Never for MCP. */
-  readonly browser?: BrowserSession;
-}
-
-/**
- * Bearer authentication providing `CurrentPrincipal`. With `browser`, a request
- * without an Authorization header is authenticated by the session cookie instead,
- * with Origin checked on unsafe methods.
- */
-export const middleware = (resource: Resource, options: MiddlewareOptions = {}) =>
+/** Bearer authentication providing `CurrentPrincipal`. */
+export const middleware = (resource: Resource) =>
   Authentication.middleware(
     CurrentPrincipal,
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      const { browser } = options;
 
-      if (browser === undefined || request.headers.authorization !== undefined)
-        return yield* resource.verifier.verify(request.headers.authorization);
-
-      const session = request.cookies[`${browser.cookie.name}_session`];
-
-      if (session !== undefined && !["GET", "HEAD", "OPTIONS"].includes(request.method))
-        yield* browser.checkOrigin(request.headers.origin);
-
-      return yield* resource.verifier.verifyToken(yield* browser.accessToken(session));
+      return yield* resource.verifier.verify(request.headers.authorization);
     }).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {

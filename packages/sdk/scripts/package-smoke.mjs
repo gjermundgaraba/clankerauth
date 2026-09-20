@@ -40,17 +40,13 @@ try {
 import { Effect } from "effect";
 import { HttpClient } from "effect/unstable/http";
 import {
-  Verifier, BrowserSession, SessionStore, ConfigurationError,
+  Verifier, ConfigurationError,
   type AuthenticationError, type Principal,
 } from "@gjermundgaraba/clankerauth-sdk";
 const verification: Effect.Effect<Principal, AuthenticationError | ConfigurationError, HttpClient.HttpClient> =
   Verifier.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/api" })
     .pipe(Effect.flatMap(verifier => verifier.verifyToken("token")));
-const makeBrowser: (options: BrowserSession.Options) =>
-  Effect.Effect<BrowserSession.BrowserSession, ConfigurationError, HttpClient.HttpClient | SessionStore> =
-  BrowserSession.make;
 void verification;
-void makeBrowser;
 `,
   );
   // Core consumers type-check without installing effect-actions or skipping declarations.
@@ -74,7 +70,7 @@ void makeBrowser;
   await writeFile(join(directory, "consumer.mjs"), `export * from "${name}";`);
   const api = await import(pathToFileURL(join(directory, "consumer.mjs")).href);
 
-  for (const exported of ["Verifier", "BrowserSession", "SessionStore", "Unauthorized"])
+  for (const exported of ["Verifier", "Unauthorized"])
     assert(exported in api, `Missing core export: ${exported}`);
 
   // Resolve Effect from the isolated installation, not the workspace's development dependencies.
@@ -135,14 +131,11 @@ void makeBrowser;
     join(directory, "integration.ts"),
     `
 import { Effect } from "effect";
-import { BrowserActions, Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
-import { Http } from "@gjermundgaraba/clankerauth-sdk/browser-api";
+import { Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 const make = Resource.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/api", scopes: [] });
 const subject = Effect.map(CurrentPrincipal, principal => principal.subject);
 void make;
 void subject;
-void BrowserActions.layer;
-void Http.api;
 `,
   );
   // The effect-actions package must also expose valid declarations.

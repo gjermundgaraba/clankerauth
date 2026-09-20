@@ -5,8 +5,8 @@ import { test } from "vite-plus/test";
 import { Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ProviderUnavailable } from "../src/index.ts";
-import { execute, protocolTransport } from "../src/transport.ts";
-import { run, withHttp } from "./support.ts";
+import { execute } from "../src/transport.ts";
+import { withHttp } from "./support.ts";
 
 test("SDK transport preserves Fetch defaults and request headers while rejecting redirects", async () => {
   let redirected = 0;
@@ -30,7 +30,7 @@ test("SDK transport preserves Fetch defaults and request headers while rejecting
   const observed: RequestInit[] = [];
 
   try {
-    await run(
+    await Effect.runPromise(
       withHttp(
         Effect.gen(function* () {
           const client = yield* HttpClient.HttpClient;
@@ -44,16 +44,6 @@ test("SDK transport preserves Fetch defaults and request headers while rejecting
 
           assert.equal(yield* response.text, "ok");
 
-          const fetch = yield* protocolTransport();
-
-          const bridged = yield* Effect.promise(() =>
-            fetch(`${url}/ok`, {
-              method: "GET",
-              headers: { "x-app": "request" },
-            }),
-          );
-
-          assert.equal(yield* Effect.promise(() => bridged.text()), "ok");
           assert(
             (yield* Effect.flip(
               execute(client, HttpClientRequest.get(`${url}/redirect`)),
@@ -74,7 +64,7 @@ test("SDK transport preserves Fetch defaults and request headers while rejecting
       ),
     );
 
-    assert.equal(observed.length, 3);
+    assert.equal(observed.length, 2);
 
     for (const init of observed) {
       assert.equal(new Headers(init.headers).get("x-default"), "configured");
@@ -83,7 +73,7 @@ test("SDK transport preserves Fetch defaults and request headers while rejecting
       assert(init.signal instanceof AbortSignal);
     }
 
-    for (const init of observed.slice(0, 2))
+    for (const init of observed.slice(0, 1))
       assert.equal(new Headers(init.headers).get("x-app"), "request");
     assert.equal(redirected, 0);
   } finally {

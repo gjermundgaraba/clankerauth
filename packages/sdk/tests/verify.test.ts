@@ -11,7 +11,7 @@ import {
   ConfigurationError,
 } from "../src/index.ts";
 import { publicUrl, startIssuer } from "./issuer.ts";
-import { run, withHttp } from "./support.ts";
+import { withHttp } from "./support.ts";
 
 const resource = `${publicUrl}/api`;
 
@@ -25,7 +25,7 @@ const withIssuer = async (
 
   try {
     await body(
-      await run(
+      await Effect.runPromise(
         withHttp(
           Verifier.make({
             issuer: issuer.issuer,
@@ -41,16 +41,18 @@ const withIssuer = async (
   }
 };
 
-const failure = <A, E>(effect: Effect.Effect<A, E>) => run(Effect.flip(effect));
+const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(effect));
 
 test("API keys verify on every request, carry the actor, and observe revocation", () =>
   withIssuer(async (verifier, issuer) => {
-    const principal = await run(verifier.verify(`Bearer ${issuer.key}`));
+    const principal = await Effect.runPromise(verifier.verify(`Bearer ${issuer.key}`));
     assert.equal(principal.subject, "owner");
     assert.deepEqual(principal.actor, { kind: "key", keyId: "writer" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(issuer.count(), 1);
-    assert.deepEqual((await run(verifier.verifyToken(issuer.readOnlyKey))).scopes, ["notes:read"]);
+    assert.deepEqual((await Effect.runPromise(verifier.verifyToken(issuer.readOnlyKey))).scopes, [
+      "notes:read",
+    ]);
     issuer.keys.delete(issuer.key);
     assert((await failure(verifier.verifyToken(issuer.key))) instanceof Unauthorized);
     assert.equal(issuer.count(), 3);
@@ -59,12 +61,12 @@ test("API keys verify on every request, carry the actor, and observe revocation"
 test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", () =>
   withIssuer(async (verifier, issuer) => {
     const token = await issuer.sign();
-    const principal = await run(verifier.verify(`Bearer ${token}`));
+    const principal = await Effect.runPromise(verifier.verify(`Bearer ${token}`));
     assert.deepEqual(principal.actor, { kind: "client", clientId: "fixture" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(issuer.count(), 0);
 
-    const other = await run(
+    const other = await Effect.runPromise(
       withHttp(Verifier.make({ issuer: issuer.issuer, resource: `${publicUrl}/mcp` })),
     );
 
@@ -88,10 +90,8 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
       (await failure(verifier.verifyToken(await issuer.sign({}, "api", "JWT")))) instanceof
         Unauthorized,
     );
-    await run(
-      verifier.verifyToken(
-        await issuer.sign({ aud: [resource, `${issuer.issuer}/oauth2/userinfo`] }),
-      ),
+    await Effect.runPromise(
+      verifier.verifyToken(await issuer.sign({ aud: [resource, "https://reports.internal/api"] })),
     );
     assert(
       (await failure(verifier.verifyToken(await issuer.sign({ scope: "notes:write" })))) instanceof
@@ -124,7 +124,10 @@ test("malformed credentials, outages and rate limits remain distinct typed outco
   }));
 
 test("invalid standalone verifier configuration fails at construction", async () => {
-  const error = await run(Effect.flip(withHttp(Verifier.make({ issuer: "not a URL", resource }))));
+  const error = await Effect.runPromise(
+    Effect.flip(withHttp(Verifier.make({ issuer: "not a URL", resource }))),
+  );
+
   assert(error instanceof ConfigurationError);
 });
 

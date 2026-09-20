@@ -111,6 +111,30 @@ test("canonical request URL, trusted peer, body and multiple cookies survive nat
   expect(called).toHaveBeenCalledTimes(1);
 });
 
+test("the forward-auth check alone keeps the proxy's forwarded host and scheme", async () => {
+  const { url } = await listen(
+    Effect.gen(function* () {
+      const req = yield* HttpServerRequest.HttpServerRequest;
+      expect(req.headers.host).toBe("issuer.example");
+      expect(req.headers.forwarded).toBeUndefined();
+      const kept = req.url.split("?")[0] === "/forward-auth";
+      expect(req.headers["x-forwarded-host"]).toBe(kept ? "notes.example" : undefined);
+      expect(req.headers["x-forwarded-proto"]).toBe(kept ? "https" : undefined);
+
+      return HttpServerResponse.empty({ status: 204 });
+    }),
+  );
+
+  const headers = {
+    forwarded: "for=evil",
+    "x-forwarded-host": "notes.example",
+    "x-forwarded-proto": "https",
+  };
+
+  expect((await fetch(`${url}/forward-auth?resource=x`, { headers })).status).toBe(204);
+  expect((await fetch(`${url}/forward-auth/logout`, { headers })).status).toBe(204);
+});
+
 test("a trusted proxy's last X-Forwarded-For hop becomes the peer address", async () => {
   const peers: string[] = [];
 

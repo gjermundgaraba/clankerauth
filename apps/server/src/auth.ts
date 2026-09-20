@@ -6,8 +6,9 @@ import { dirname } from "node:path";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey } from "@better-auth/api-key";
-import { jwt } from "better-auth/plugins";
+import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
+import { forwardTokens } from "./forward-auth.ts";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { clientStore } from "./clients.ts";
 import {
@@ -28,10 +29,20 @@ import {
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
+/** Access tokens from OAuth flows and forward auth alike expire after fifteen minutes. */
+export const accessTokenLifetime = 15 * 60;
+
 export const openAuth = Effect.fn("Auth.open")(function* (
   settings: Settings,
   integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
 ) {
+  // The provider and forward auth both name the OAuth issuer, which is the provider's own default.
+  const jwtOptions = {
+    disableSettingJwtHeader: true,
+    jwt: { issuer: `${settings.baseURL}/api/auth` },
+    jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
+  } satisfies JwtOptions;
+
   // Construction is application-scoped. Provider callbacks inherit these services,
   // never a later request's identity or scope.
   const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -99,7 +110,7 @@ export const openAuth = Effect.fn("Auth.open")(function* (
     clientRegistrationRequirePKCE: true,
     clientRegistrationDefaultResources: Array<string>(),
     enforcePerClientResources: true,
-    accessTokenExpiresIn: 15 * 60,
+    accessTokenExpiresIn: accessTokenLifetime,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
     // A retried refresh inside the window replays the same replacement instead of revoking the family.
     refreshTokenReuseInterval: 30,
@@ -184,10 +195,8 @@ export const openAuth = Effect.fn("Auth.open")(function* (
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
         rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 1000 },
       }),
-      jwt({
-        disableSettingJwtHeader: true,
-        jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
-      }),
+      jwt(jwtOptions),
+      forwardTokens(jwtOptions, accessTokenLifetime),
       oauthPlugin,
       cimd({
         fetchClientMetadataResource: (input, init) =>

@@ -35,7 +35,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.equal(new URL(issuer.url).hostname, "127.0.0.1");
 
     const discovery = await (
-      await fetch(`${issuer.issuer}/.well-known/openid-configuration`)
+      await fetch(`${issuer.issuer}/.well-known/oauth-authorization-server`)
     ).json();
 
     assert.equal(discovery.issuer, issuer.issuer);
@@ -248,7 +248,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   try {
     // Provisioning is in-process; only the test's own traffic reaches the listener.
     assert.deepEqual(requests, []);
-    const discoveryURL = `${issuer.issuer}/.well-known/openid-configuration`;
+    const discoveryURL = `${issuer.issuer}/.well-known/oauth-authorization-server`;
     const discoveryResponse = await fetch(discoveryURL);
     assert.equal(discoveryResponse.status, 200);
     const discovery = await discoveryResponse.json();
@@ -296,7 +296,7 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
       client_id: clientId,
       redirect_uri: redirect,
       response_type: "code",
-      scope: "openid example:read",
+      scope: "example:read",
       resource: resource.identifier,
       code_challenge: "a".repeat(43),
       code_challenge_method: "S256",

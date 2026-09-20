@@ -11,7 +11,7 @@ import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { Forbidden, ProviderUnavailable, Unauthorized } from "../src/index.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
 import { publicUrl, startIssuer } from "./issuer.ts";
-import { run, withHttp } from "./support.ts";
+import { withHttp } from "./support.ts";
 
 const Actions = ActionGroup.make(
   { name: "notes", errors: [Forbidden] },
@@ -44,7 +44,7 @@ const app = Actions.implement({
 test("effect-actions HTTP/MCP middleware supplies isolated principals and public discovery", async () => {
   const issuer = await startIssuer();
 
-  const api = await run(
+  const api = await Effect.runPromise(
     withHttp(
       Resource.make({
         issuer: issuer.issuer,
@@ -55,7 +55,7 @@ test("effect-actions HTTP/MCP middleware supplies isolated principals and public
     ),
   );
 
-  const mcp = await run(
+  const mcp = await Effect.runPromise(
     withHttp(
       Resource.make({
         issuer: issuer.issuer,

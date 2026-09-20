@@ -11,6 +11,7 @@ import {
 import { APIError } from "better-auth/api";
 import type { Service } from "./auth.ts";
 import { actionRoutes } from "./action-api.ts";
+import { forwardAuthRoutes } from "./forward-auth.ts";
 import { requestPolicy } from "./node-http.ts";
 
 const publicPaths = new Set([
@@ -27,8 +28,6 @@ const publicPaths = new Set([
   "/oauth2/public-client",
   "/oauth2/introspect",
   "/oauth2/revoke",
-  "/oauth2/userinfo",
-  "/.well-known/openid-configuration",
   "/.well-known/oauth-authorization-server",
 ]);
 
@@ -39,10 +38,8 @@ const corsPaths = new Set([
   "/oauth2/token",
   "/oauth2/revoke",
   "/oauth2/introspect",
-  "/oauth2/userinfo",
   "/.well-known/oauth-authorization-server",
   "/.well-known/oauth-authorization-server/api/auth",
-  "/.well-known/openid-configuration",
 ]);
 
 /** Public, unauthenticated documents resource servers and clients may cache briefly. */
@@ -51,7 +48,6 @@ const cacheablePaths = new Set([
   "/.well-known/oauth-protected-resource/mcp",
   "/.well-known/oauth-authorization-server",
   "/.well-known/oauth-authorization-server/api/auth",
-  "/.well-known/openid-configuration",
 ]);
 
 const spaRoutes = new Set(["/", "/login", "/consent", "/setup"]);
@@ -315,6 +311,7 @@ export function application(
 
   return Layer.mergeAll(
     actionRoutes(service, mcpAllowedOrigins),
+    forwardAuthRoutes(service),
     HttpRouter.add(
       "GET",
       "/healthz",

@@ -40,25 +40,6 @@ export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>
   }
 }
 
-export class StoreError extends Schema.TaggedError<StoreError>()(
-  "StoreError",
-  { operation: Schema.String },
-  { httpApiStatus: 503 },
-) {
-  declare readonly cause?: unknown;
-
-  constructor(options: { readonly operation: string; readonly cause?: unknown }) {
-    super({ operation: options.operation });
-    Object.defineProperty(this, "cause", { value: options.cause });
-  }
-}
-
-export class InvalidRequest extends Schema.TaggedError<InvalidRequest>()(
-  "InvalidRequest",
-  { message: Schema.String },
-  { httpApiStatus: 400 },
-) {}
-
 export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
   "ConfigurationError",
   { message: Schema.String },
@@ -69,15 +50,9 @@ export const authenticationErrors = [
   Forbidden,
   RateLimited,
   ProviderUnavailable,
-  StoreError,
 ] as const;
 
-export type AuthenticationError =
-  | Unauthorized
-  | Forbidden
-  | RateLimited
-  | ProviderUnavailable
-  | StoreError;
+export type AuthenticationError = Unauthorized | Forbidden | RateLimited | ProviderUnavailable;
 
 /** Encode one of the declared schemas as JSON with its `httpApiStatus`. Undeclared errors are defects. */
 export const encodeError = <const Schemas extends ReadonlyArray<Schema.Top>>(schemas: Schemas) => {

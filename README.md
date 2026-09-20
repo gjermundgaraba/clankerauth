@@ -28,8 +28,9 @@ Open the configured origin, create the owner account, and add a resource. Do thi
 | `HOST`, `PORT`        | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                              |
 | `TRUST_PROXY`         | `true` when a reverse proxy sets `X-Forwarded-For`; the last hop becomes the client address for rate limiting. Default `false`.                         |
 | `ALLOW_INSECURE_HTTP` | `true` permits a plain-HTTP issuer and MCP origins beyond loopback, for private networks without TLS. Default `false`.                                  |
+| `AUTH_COOKIE_DOMAIN`  | Parent domain of `AUTH_BASE_URL`, for example `home.example`, that the forward-auth cookie is shared with. Needed for forward auth across hosts.        |
 
-Run it behind a reverse proxy with TLS. The server uses `AUTH_BASE_URL` as its canonical origin and ignores forwarded host and protocol headers. Rate limits key on the direct peer address unless `TRUST_PROXY=true`, in which case the last `X-Forwarded-For` hop set by your proxy is used. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
+Run it behind a reverse proxy with TLS. The server uses `AUTH_BASE_URL` as its canonical origin and ignores forwarded host and protocol headers, except on `/forward-auth`, where they only decide where a browser returns after login. Rate limits key on the direct peer address unless `TRUST_PROXY=true`, in which case the last `X-Forwarded-For` hop set by your proxy is used. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
 
 Shutdown disconnects HTTP clients, including active streams, without waiting for response delivery. Already-running provider operations must settle before SQLite closes; an uncancellable operation that never settles can still delay shutdown.
 
@@ -42,7 +43,24 @@ Add a **Resource** in the dashboard. Its identifier is the exact URL that client
 
 Every authorization request names exactly one `resource`; token requests may omit it and reuse the resource bound to the code or refresh token. The owner's login session lasts 30 days and slides with use, so signing in for one application signs in for all of them. Access tokens are EdDSA JWTs valid for fifteen minutes; refresh tokens last 30 days and rotate on every use, with a thirty-second reuse window so a retried refresh does not revoke the family. The dashboard lists every client: **Revoke authorization** clears its stored grants, **Block client** also stops it from authorizing again. Neither recalls an already-issued access token; it expires within fifteen minutes.
 
-Discovery is served at `/.well-known/oauth-authorization-server/api/auth` and `/api/auth/.well-known/openid-configuration`.
+Discovery is served at `/.well-known/oauth-authorization-server/api/auth`. There is no OpenID Connect: no ID tokens, no UserInfo, and `openid` is not a supported scope.
+
+## Protect a web app behind a reverse proxy
+
+Browser applications need no OAuth code of their own. Put them behind Caddy or Traefik with forward auth pointed at this issuer, and add the app's API as a **Resource**. On every browser request the proxy asks `/forward-auth`; a signed-in owner gets a fifteen-minute access token for that resource in an `Authorization` header, which the proxy copies upstream, and anyone else is sent through the issuer, which signs them in if needed, and back to the page they asked for. The app verifies the token exactly as it verifies MCP and API-key bearer tokens below. Requests that already carry an `Authorization` header (MCP clients, API keys) bypass forward auth, so one origin serves browsers and agents alike.
+
+```caddyfile
+notes.home.example {
+  @browser not header Authorization *
+  forward_auth @browser https://auth.home.example {
+    uri /forward-auth?resource=https://notes.home.example/api
+    copy_headers Authorization
+  }
+  reverse_proxy notes:8080
+}
+```
+
+Set `AUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, here `home.example`; without it, forward auth only covers apps on the issuer's own hostname. The owner's issuer session cookie never leaves the issuer host. After login the browser passes through `/forward-auth/continue`, which sets a separate forward cookie on that domain: the session sealed under the server secret, meaningful only to `/forward-auth`. Apps behind the proxy therefore see the forward cookie and the access token, and neither can administer the issuer; an app could at most use the cookie to obtain tokens for other resources under the same domain, which in a single-owner network are the owner's own. Sign-out at the issuer or at `https://auth.home.example/forward-auth/logout?rd=<page>` invalidates every copy of the cookie. The token's `client_id` is `forward-auth` and it carries all of the resource's scopes. The built-in administration resource is refused. The app must be reachable only through the proxy, as with any forward-auth setup.
 
 ## Protect a resource server
 
@@ -77,7 +95,7 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
 
-[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification and browser login with server-held tokens. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only; see its README for the breaking replacement of the Promise SDK. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
 
 ## Develop
 

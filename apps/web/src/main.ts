@@ -152,8 +152,13 @@ function login() {
       if (result.error)
         throw new Error("Sign-in failed. Check your credentials or try again later.");
 
-      // The provider client handles OAuth redirects; a plain login returns to the dashboard.
-      if (!new URLSearchParams(location.search).has("sig")) location.assign("/");
+      // The provider client handles OAuth redirects. Forward auth continues on this origin,
+      // which validates the real destination; a plain login returns to the dashboard.
+      const query = new URLSearchParams(location.search);
+      const rd = query.get("rd") ?? "/";
+
+      if (!query.has("sig"))
+        location.assign(new URL(rd, location.origin).origin === location.origin ? rd : "/");
     });
   });
 }
@@ -319,8 +324,7 @@ async function refreshDashboard() {
   }
 }
 
-const scopeHelp =
-  "Optional. Separate scopes with spaces. openid, profile, email and offline_access are reserved.";
+const scopeHelp = "Optional. Separate scopes with spaces. offline_access is reserved.";
 
 const onboardingLabel = {
   managed: "Managed registration · first party, no consent screen",

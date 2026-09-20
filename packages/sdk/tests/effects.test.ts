@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import { test } from "vite-plus/test";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Redacted, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError";
 import { authenticationErrors } from "../src/errors.ts";
 import { TestClock } from "effect/testing";
@@ -13,20 +12,11 @@ import {
   HttpServer,
   HttpServerResponse,
 } from "effect/unstable/http";
-import {
-  BrowserSession,
-  ConfigurationError,
-  Forbidden,
-  ProviderUnavailable,
-  SessionStore,
-  StoreError,
-  Unauthorized,
-} from "../src/index.ts";
+import { ProviderUnavailable, Unauthorized } from "../src/index.ts";
 import { Resource } from "../src/effect-actions.ts";
-import { memoryStore, run, webBrowser } from "./support.ts";
 
 test("verification deadlines interrupt the supplied HTTP transport", () =>
-  run(
+  Effect.runPromise(
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const cancelled = yield* Deferred.make<void>();
@@ -58,57 +48,6 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("store failures stay typed and defects are not converted to authentication outcomes", () =>
-  run(
-    Effect.gen(function* () {
-      const { store } = memoryStore();
-
-      const client = HttpClient.make((request) =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            Response.json({
-              issuer: "https://issuer.example",
-              authorization_endpoint: "https://issuer.example/authorize",
-            }),
-          ),
-        ),
-      );
-
-      const make = BrowserSession.make({
-        issuer: "https://issuer.example",
-        callbackUrl: "https://notes.example/auth/callback",
-        resource: "https://notes.example/api",
-        clientId: "web",
-        clientSecret: Redacted.make("secret"),
-        secret: Redacted.make(randomBytes(32).toString("hex")),
-        scopes: [],
-        cookie: { name: "notes" },
-        verifyToken: () => Effect.die("unused"),
-      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-
-      const browser = yield* make.pipe(
-        Effect.provideService(SessionStore, {
-          ...store,
-          get: () => Effect.fail(new StoreError({ operation: "get" })),
-        }),
-      );
-
-      assert((yield* Effect.flip(browser.accessToken("opaque"))) instanceof StoreError);
-
-      const broken = yield* make.pipe(
-        Effect.provideService(SessionStore, {
-          ...store,
-          get: () => Effect.die("broken store invariant"),
-        }),
-      );
-
-      const exit = yield* Effect.exit(broken.accessToken("opaque"));
-      assert(Exit.isFailure(exit));
-      assert(exit.cause.reasons.some(Cause.isDieReason));
-    }),
-  ));
-
 test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and retry initial outages", async () => {
   const { exportJWK, generateKeyPair, SignJWT } = await import("jose");
   const first = await generateKeyPair("EdDSA");
@@ -130,7 +69,7 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
 
   const firstToken = await sign("first", first.privateKey);
   const secondToken = await sign("second", second.privateKey);
-  await run(
+  await Effect.runPromise(
     Effect.gen(function* () {
       let reads = 0;
       let unavailable = true;
@@ -232,91 +171,8 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
   );
 });
 
-test("OAuth's Promise transport bridge preserves defects from the supplied Effect client", () =>
-  run(
-    Effect.gen(function* () {
-      const { store } = memoryStore();
-
-      const browser = yield* BrowserSession.make({
-        issuer: "https://issuer.example",
-        callbackUrl: "https://notes.example/auth/callback",
-        resource: "https://notes.example/api",
-        clientId: "web",
-        clientSecret: Redacted.make("secret"),
-        secret: Redacted.make(randomBytes(32).toString("hex")),
-        scopes: [],
-        cookie: { name: "notes" },
-        verifyToken: () => Effect.die("unused"),
-      }).pipe(
-        Effect.provideService(SessionStore, store),
-        Effect.provideService(
-          HttpClient.HttpClient,
-          HttpClient.make(() => Effect.die("broken transport invariant")),
-        ),
-      );
-
-      const exit = yield* Effect.exit(browser.login("/"));
-      assert(Exit.isFailure(exit));
-      assert(exit.cause.reasons.some(Cause.isDieReason));
-    }),
-  ));
-
-test("cookie configuration uses Effect's cookie grammar", () =>
-  run(
-    Effect.gen(function* () {
-      const make = (name: string) =>
-        BrowserSession.make({
-          issuer: "https://issuer.example",
-          callbackUrl: "https://notes.example/auth/callback",
-          resource: "https://notes.example/api",
-          clientId: "web",
-          clientSecret: Redacted.make("secret"),
-          secret: Redacted.make("a".repeat(32)),
-          scopes: [],
-          cookie: { name },
-          verifyToken: () => Effect.die("unused"),
-        }).pipe(
-          Effect.provideService(SessionStore, memoryStore().store),
-          Effect.provideService(
-            HttpClient.HttpClient,
-            HttpClient.make((request) =>
-              Effect.succeed(
-                HttpClientResponse.fromWeb(
-                  request,
-                  Response.json({
-                    issuer: "https://issuer.example",
-                    authorization_endpoint: "https://issuer.example/authorize",
-                  }),
-                ),
-              ),
-            ),
-          ),
-        );
-
-      const browser = yield* make("notes.v1");
-
-      const response = yield* Effect.promise(() =>
-        webBrowser(browser).login(
-          new Request("https://notes.example/auth/browser/login", {
-            method: "POST",
-            headers: { origin: "https://notes.example", "content-type": "application/json" },
-            body: JSON.stringify({ returnTo: "/" }),
-          }),
-        ),
-      );
-
-      assert.equal(response.status, 200);
-      assert.match(response.headers.get("set-cookie") ?? "", /^notes\.v1_login=/);
-
-      for (const name of ["notes v1", "notes;v1", "notes=v1"]) {
-        const error = yield* Effect.flip(make(name));
-        assert.equal(error._tag, "ConfigurationError");
-      }
-    }),
-  ));
-
 test("diagnostic causes survive adapters but never enter public error schemas or HTTP bodies", () =>
-  run(
+  Effect.runPromise(
     Effect.gen(function* () {
       const secret = "private-provider-diagnostic";
       const request = HttpClientRequest.get("https://issuer.example/jwks");
@@ -337,65 +193,11 @@ test("diagnostic causes survive adapters but never enter public error schemas or
       assert(failure instanceof ProviderUnavailable);
       assert.equal(failure.cause, transportCause);
 
-      const make = BrowserSession.make({
-        issuer: "https://issuer.example",
-        callbackUrl: "https://notes.example/auth/callback",
-        resource: "https://notes.example/api",
-        clientId: "web",
-        clientSecret: Redacted.make("secret"),
-        secret: Redacted.make("a".repeat(32)),
-        scopes: [],
-        cookie: { name: "notes" },
-        verifyToken: resource.verifier.verifyToken,
-      }).pipe(Effect.provideService(SessionStore, memoryStore().store));
-
-      const browser = yield* make.pipe(Effect.provideService(HttpClient.HttpClient, client));
-      const oauthFailure = yield* Effect.flip(browser.login("/"));
-      assert(oauthFailure instanceof ProviderUnavailable);
-      assert.equal(oauthFailure.cause, transportCause);
-
-      const malformed = yield* make.pipe(
-        Effect.provideService(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ issuer: secret }))),
-          ),
-        ),
-      );
-
-      const processingFailure = yield* Effect.flip(malformed.login("/"));
-      assert(processingFailure instanceof ProviderUnavailable);
-      assert(processingFailure.cause instanceof Error);
-      assert("code" in processingFailure.cause);
-
-      for (const error of [
-        new Unauthorized({ message: "Sign in required", cause: { secret } }),
-        new StoreError({ operation: "get", cause: { secret } }),
-        processingFailure,
-      ]) {
-        const encoded = Schema.encodeSync(Schema.Union(authenticationErrors))(error);
-        assert(!("cause" in encoded));
-        assert(!JSON.stringify(encoded).includes(secret));
-        assert(!JSON.stringify(error).includes(secret));
-      }
-
-      const response = yield* Effect.promise(() =>
-        webBrowser(browser).login(
-          new Request("https://notes.example/auth/browser/login", {
-            method: "POST",
-            headers: { origin: "https://notes.example", "content-type": "application/json" },
-            body: JSON.stringify({ returnTo: "/" }),
-          }),
-        ),
-      );
-
-      assert.equal(response.status, 503);
-      assert.deepEqual(
-        yield* Effect.promise(() => response.json()),
-        Schema.encodeSync(ProviderUnavailable)(
-          new ProviderUnavailable({ operation: "http.request" }),
-        ),
-      );
+      const error = new Unauthorized({ message: "Sign in required", cause: { secret } });
+      const encoded = Schema.encodeSync(Schema.Union(authenticationErrors))(error);
+      assert(!("cause" in encoded));
+      assert(!JSON.stringify(encoded).includes(secret));
+      assert(!JSON.stringify(error).includes(secret));
 
       const web = HttpRouter.toWebHandler(
         HttpRouter.add("GET", "/private", Effect.succeed(HttpServerResponse.empty())).pipe(
@@ -423,125 +225,5 @@ test("diagnostic causes survive adapters but never enter public error schemas or
           await web.dispose();
         }
       });
-    }),
-  ));
-
-test("invalid discovery endpoints produce sanitized 503 responses and are not cached", () =>
-  run(
-    Effect.gen(function* () {
-      const origin = "https://notes.example";
-      let endpoint: string | undefined;
-
-      const browser = yield* BrowserSession.make({
-        issuer: "https://issuer.example",
-        callbackUrl: `${origin}/auth/callback`,
-        resource: `${origin}/api`,
-        clientId: "web",
-        clientSecret: Redacted.make("secret"),
-        secret: Redacted.make("a".repeat(32)),
-        scopes: [],
-        cookie: { name: "notes" },
-        verifyToken: () => Effect.die("unused"),
-      }).pipe(
-        Effect.provideService(SessionStore, memoryStore().store),
-        Effect.provideService(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            Effect.sync(() =>
-              HttpClientResponse.fromWeb(
-                request,
-                Response.json({
-                  issuer: "https://issuer.example",
-                  authorization_endpoint: endpoint,
-                }),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      const web = webBrowser(browser);
-
-      for (endpoint of [
-        undefined,
-        "not a URL",
-        "ftp://issuer.example/authorize",
-        "http://issuer.example/authorize",
-      ]) {
-        const response = yield* Effect.promise(() =>
-          web.login(
-            new Request(`${origin}/auth/browser/login`, {
-              method: "POST",
-              headers: { origin, "content-type": "application/json" },
-              body: JSON.stringify({ returnTo: "/" }),
-            }),
-          ),
-        );
-
-        assert.equal(response.status, 503);
-        assert.deepEqual(
-          yield* Effect.promise(() => response.json()),
-          Schema.encodeSync(ProviderUnavailable)(
-            new ProviderUnavailable({ operation: "browser.discovery" }),
-          ),
-        );
-      }
-
-      endpoint = "https://issuer.example/authorize";
-      const result = yield* browser.login("/");
-      assert.equal(new URL(result.url).origin, "https://issuer.example");
-    }),
-  ));
-
-test("browser callback configuration validates URLs and derives origin and cookie security", () =>
-  run(
-    Effect.gen(function* () {
-      const make = (callbackUrl: string) =>
-        BrowserSession.make({
-          issuer: "https://issuer.example",
-          callbackUrl,
-          resource: "https://notes.example/api",
-          clientId: "web",
-          clientSecret: Redacted.make("secret"),
-          secret: Redacted.make("a".repeat(32)),
-          scopes: [],
-          cookie: { name: "notes" },
-          verifyToken: () => Effect.die("unused"),
-        }).pipe(
-          Effect.provideService(SessionStore, memoryStore().store),
-          Effect.provideService(
-            HttpClient.HttpClient,
-            HttpClient.make(() => Effect.die("construction must not perform I/O")),
-          ),
-        );
-
-      for (const callbackUrl of [
-        "not a URL",
-        "/auth/callback",
-        "file:///tmp/app",
-        "data:text/plain,app",
-        "ftp://notes.example/callback",
-        "https://user:password@notes.example/callback",
-        "https://notes.example/callback#fragment",
-        "https://notes.example/callback#",
-      ]) {
-        const error = yield* Effect.flip(make(callbackUrl));
-        assert(error instanceof ConfigurationError, callbackUrl);
-      }
-
-      for (const callbackUrl of [
-        "https://notes.example/workspace/callback?client=web",
-        "http://127.0.0.1:7337/workspace/callback",
-      ]) {
-        const browser = yield* make(callbackUrl);
-        const parsed = new URL(callbackUrl);
-        assert.equal(browser.origin, parsed.origin);
-        assert.equal(browser.callbackPath, parsed.pathname);
-        assert.equal(browser.cookie.secure, parsed.protocol === "https:");
-        yield* browser.checkOrigin(parsed.origin);
-        assert(
-          (yield* Effect.flip(browser.checkOrigin("https://another.example"))) instanceof Forbidden,
-        );
-      }
     }),
   ));

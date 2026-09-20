@@ -9,7 +9,8 @@ export const mcpScope = "admin";
 
 export const mcpResource = (baseURL: string) => `${baseURL}/mcp`;
 
-export const protocolScopes = ["openid", "profile", "email", "offline_access"];
+/** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
+export const protocolScopes = ["offline_access"];
 
 export const resourceReference = (identifier: string) => `resource:${identifier}`;
 

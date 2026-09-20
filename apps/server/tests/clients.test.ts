@@ -81,7 +81,7 @@ function authorization(id: string, identifier = resource, port = 4184) {
       client_id: id,
       redirect_uri: `http://127.0.0.1:${port}/callback`,
       response_type: "code",
-      scope: "openid offline_access resource:read",
+      scope: "offline_access resource:read",
       resource: identifier,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",

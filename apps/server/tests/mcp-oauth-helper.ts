@@ -51,7 +51,7 @@ export async function mcpOAuthCode(
         redirect_uri: callback,
         response_type: "code",
         resource,
-        scope: options.scope ?? "openid offline_access admin",
+        scope: options.scope ?? "offline_access admin",
         code_challenge: createHash("sha256").update(verifier).digest("base64url"),
         code_challenge_method: "S256",
         state: "mcp-oauth-test",

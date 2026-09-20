@@ -11,5 +11,6 @@ export const testSettings = (
   port: Number(new URL(overrides.baseURL).port) || 3000,
   trustProxy: false,
   allowInsecureHttp: false,
+  cookieDomain: undefined,
   ...overrides,
 });

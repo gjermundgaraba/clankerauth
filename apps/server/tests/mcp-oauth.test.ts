@@ -220,13 +220,13 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
 
   const other = await mcpOAuthGrant(handle, baseURL, cookie, {
     resource: target,
-    scope: "openid offline_access read",
+    scope: "offline_access read",
   });
 
   expect((await mcp(other.tokens.access_token)).status).toBe(401);
 
   const insufficient = await mcpOAuthGrant(handle, baseURL, cookie, {
-    scope: "openid offline_access",
+    scope: "offline_access",
   });
 
   const denied = await mcp(insufficient.tokens.access_token);

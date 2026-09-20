@@ -10,6 +10,7 @@ const settings = {
   port: 3000,
   trustProxy: false,
   allowInsecureHttp: false,
+  cookieDomain: undefined,
 };
 
 const load = (extra: Record<string, string> = {}) =>
@@ -104,6 +105,18 @@ test("proxy trust and plain HTTP are opt-in", async () => {
       allowInsecureHttp: true,
     }).mcpAllowedOrigins,
   ).toEqual(["http://client.internal"]);
+});
+
+test("the cookie domain is optional and must be a bare parent domain of the issuer host", async () => {
+  expect((await load()).cookieDomain).toBeUndefined();
+  expect((await load({ AUTH_COOKIE_DOMAIN: "example.test" })).cookieDomain).toBe("example.test");
+  expect(validateSettings({ ...settings, cookieDomain: "auth.example.test" }).cookieDomain).toBe(
+    "auth.example.test",
+  );
+
+  for (const cookieDomain of ["", "other.test", "test", ".example.test", "127.0.0.1"]) {
+    expect(() => validateSettings({ ...settings, cookieDomain }), cookieDomain).toThrow();
+  }
 });
 
 test("configuration rejects insecure issuers and empty secrets", () => {
