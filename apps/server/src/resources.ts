@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Clock, Effect, Schema } from "effect";
 import { normalizeError, type Sql } from "./database.ts";
 import { APIError } from "better-auth/api";
@@ -25,6 +24,10 @@ const ResourceRow = Schema.Struct({
 const decodeResourceRow = Schema.decodeUnknownEffect(ResourceRow);
 
 const accessRows = Schema.decodeUnknownEffect(Schema.Array(ClientAccess));
+
+const clientIds = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ clientId: Schema.String })),
+);
 
 type ResourceValue = typeof Resource.Type;
 
@@ -132,39 +135,20 @@ export function resourceStore(
     return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
   });
 
+  // The provider validates identifiers (RFC 8707) and rejects duplicates.
   const validate = (input: ResourceValue): ResourceValue => {
     const identifier = input.identifier.trim();
     const name = input.name.trim();
     const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
-    let uri: URL;
-
-    try {
-      uri = new URL(identifier);
-    } catch {
-      throw new APIError("BAD_REQUEST", { message: "Invalid Resource identifier" });
-    }
-
-    if (
-      !["http:", "https:"].includes(uri.protocol) ||
-      identifier.includes("#") ||
-      identifier.includes("?") ||
-      uri.username ||
-      uri.password
-    )
-      throw new APIError("BAD_REQUEST", {
-        message:
-          "Resource identifiers must be HTTP or HTTPS URLs without credentials, query or fragment",
-      });
 
     if (
       !name ||
-      !scopes.length ||
       scopes.some(
         (scope) => !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope) || protocolScopes.includes(scope),
       )
     )
       throw new APIError("BAD_REQUEST", {
-        message: "Resources require a name and nonempty custom scopes",
+        message: "Resources require a name and well-formed custom scopes",
       });
 
     return { identifier, name, scopes };
@@ -213,19 +197,9 @@ export function resourceStore(
     publish(yield* list());
   });
 
-  const initialize = Effect.fn("Resources.initialize")(function* () {
-    // This resource is application policy, present even before owner setup.
-    const now = yield* Clock.currentTimeMillis;
-    yield* sql`INSERT OR IGNORE INTO oauthResource
-      (id, identifier, name, allowedScopes, accessTokenTtl, disabled, createdAt, updatedAt, policyVersion)
-      VALUES (${randomUUID()}, ${reservedIdentifier}, 'Clanker Auth administration', ${JSON.stringify([...protocolScopes, mcpScope])}, 300, 0, ${now}, ${now}, 1)`;
-    publish(yield* list());
-  });
-
   return {
     list,
     get,
-    initialize,
     access,
     hasAccess: Effect.fn("Resources.hasAccess")(function* (clientId: string, identifier: string) {
       const rows =
@@ -237,9 +211,6 @@ export function resourceStore(
     synchronize,
     create: Effect.fn("Resources.create")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
-
-      if (yield* get(resource.identifier))
-        return yield* Effect.fail(new APIError("CONFLICT", { message: "Resource already exists" }));
       yield* providerCall(() =>
         getAuth().api.adminCreateOAuthResource({
           headers,
@@ -247,7 +218,6 @@ export function resourceStore(
             identifier: resource.identifier,
             name: resource.name,
             allowedScopes: [...protocolScopes, ...resource.scopes],
-            accessTokenTtl: 300,
           },
         }),
       );
@@ -255,13 +225,12 @@ export function resourceStore(
       // against its currently supported scopes. Keep defaults current after writes.
       yield* synchronize();
 
-      const clients = yield* Schema.decodeUnknownEffect(
-        Schema.Array(Schema.Struct({ clientId: Schema.String })),
-      )(
-        yield* sql`SELECT clientId FROM clientOnboarding WHERE clientId IN (SELECT clientId FROM oauthClient)`,
+      // Automatically registered clients may request any resource, subject to consent.
+      const automatic = yield* clientIds(
+        yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NULL ORDER BY clientId`,
       );
 
-      for (const client of clients) {
+      for (const client of automatic) {
         yield* providerCall(() =>
           getAuth().api.adminLinkClientResource({
             headers,
@@ -330,13 +299,6 @@ export function resourceStore(
 
       if (!clients.length)
         return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
-
-      if ((yield* sql`SELECT 1 FROM clientOnboarding WHERE clientId = ${clientId}`).length)
-        return yield* Effect.fail(
-          new APIError("BAD_REQUEST", {
-            message: "Automatically onboarded Clients use owner consent for Resource access",
-          }),
-        );
       yield* validateSelection(identifiers);
       const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
 

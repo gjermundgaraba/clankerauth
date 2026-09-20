@@ -2,8 +2,6 @@
 
 Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification and browser sessions. Verifies JWT access tokens and API keys and runs browser login with encrypted server-held credentials. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
 
-This is a breaking replacement for the Promise SDK. There is no legacy API or framework-neutral HTTP adapter. Requires Effect `4.0.0-rc.116` and Node 26 or later.
-
 ## Install
 
 Published to GitHub Packages. Configure the scope and keep the credential in your user-level `~/.npmrc`:
@@ -107,7 +105,7 @@ const write = Effect.gen(function* () {
 
 Declare `Forbidden` in that action/group's error schemas. Middleware authenticates the request; it does not infer per-action policy or filter MCP tool discovery.
 
-A principal contains `subject`, `scopes`, and `actor`: either `{ kind: "client", clientId, generation }` or `{ kind: "key", keyId }`. The generation is the client's grant generation at issuance; the issuer rotates it on revocation and re-registration. The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects.
+A principal contains `subject`, `scopes`, and `actor`: either `{ kind: "client", clientId }` or `{ kind: "key", keyId }`. The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects.
 
 JWTs are checked against issuer, audience, EdDSA signature, token type, required claims, expiry and scopes. Sender-constrained tokens are rejected. JWKS lookups are cached for ten minutes. Unknown keys trigger one refresh and resolution retry, with a thirty-second cooldown to bound provider traffic. Failed miss-triggered refreshes also cool down and return 503; still-valid cached keys remain usable. Initial lookup failures are not retained. Removed keys can remain trusted until cache expiry. API keys are checked online on **every request**, so revocation is effective immediately. A resource that accepts only OAuth access tokens sets `apiKeys: false`; key-shaped bearers then fail as `Unauthorized` without contacting the issuer. Verification has a five-second deadline.
 

@@ -60,11 +60,7 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
   withIssuer(async (verifier, issuer) => {
     const token = await issuer.sign();
     const principal = await run(verifier.verify(`Bearer ${token}`));
-    assert.deepEqual(principal.actor, {
-      kind: "client",
-      clientId: "fixture",
-      generation: "fixture-generation",
-    });
+    assert.deepEqual(principal.actor, { kind: "client", clientId: "fixture" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(issuer.count(), 0);
 

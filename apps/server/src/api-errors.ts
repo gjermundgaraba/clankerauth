@@ -1,4 +1,4 @@
-import { Effect, Schema, SchemaAST } from "effect";
+import { Effect, Option, Schema, SchemaAST } from "effect";
 import { type Headers, HttpServerResponse } from "effect/unstable/http";
 import { isAPIError } from "better-auth/api";
 import {
@@ -10,24 +10,39 @@ import {
   NotFound,
   ServiceUnavailable,
   TooManyRequests,
-  Unauthorized,
 } from "@clankerauth/api";
 
 const isApiError = (cause: unknown): cause is (typeof errors)[number]["Type"] =>
   errors.some((schema) => Schema.is(schema)(cause));
+
+// Better Auth core errors carry `message`; the OAuth provider uses `error_description`.
+const ProviderErrorBody = Schema.Struct({
+  message: Schema.optionalKey(Schema.String),
+  error_description: Schema.optionalKey(Schema.String),
+});
+
+const describe = Schema.decodeUnknownOption(ProviderErrorBody);
 
 /** Idempotent: already-public errors pass through unchanged. */
 export function apiError(cause: unknown) {
   if (isApiError(cause)) return cause;
 
   if (isAPIError(cause)) {
-    const body = { error: cause.body?.message ?? "Request could not be completed" };
+    const body = {
+      error: Option.getOrElse(
+        Option.flatMap(describe(cause.body), (value) =>
+          Option.fromNullishOr(value.message ?? value.error_description),
+        ),
+        () => "Request could not be completed",
+      ),
+    };
 
     switch (cause.statusCode) {
       case 400:
+      case 422:
         return new BadRequest(body);
+      // Owner routes are already authenticated: a provider 401 refuses an operation.
       case 401:
-        return new Unauthorized({ error: "Authentication required" });
       case 403:
         return new Forbidden(body);
       case 404:

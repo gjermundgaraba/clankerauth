@@ -5,10 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeJwt } from "jose";
 import { test } from "vite-plus/test";
 import { nodeHandler } from "../src/app.ts";
 import { initialize, openAuth } from "../src/auth.ts";
+import { testSettings } from "./settings.ts";
 import { createNodeServer } from "../src/node-http.ts";
 import { Effect, Exit, Redacted, Schema, Scope } from "effect";
 import {
@@ -42,11 +42,11 @@ type CallBody =
       readonly scopes: readonly string[];
     }
   | {
-      readonly name: string;
-      readonly redirect: string;
+      readonly client_name: string;
+      readonly redirect_uris: readonly string[];
       readonly resources: readonly string[];
-      readonly confidential: boolean;
-      readonly native: boolean;
+      readonly token_endpoint_auth_method: string;
+      readonly application_type: string;
     }
   | {
       readonly name: string;
@@ -75,13 +75,7 @@ const startServer = async () => {
   const url = `http://127.0.0.1:${port}`;
 
   const service = await Effect.runPromise(
-    openAuth({
-      baseURL: url,
-      secret: Redacted.make(randomBytes(32).toString("hex")),
-      database: join(directory, "issuer.sqlite"),
-      host: "127.0.0.1",
-      port,
-    }),
+    openAuth(testSettings({ baseURL: url, database: join(directory, "issuer.sqlite"), port })),
   );
 
   await Effect.runPromise(initialize(service));
@@ -165,12 +159,12 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     );
 
     const registration = await issuer.call("/api/administration/createClient", {
-      name: "Notes web",
-      redirect: browserCallback,
+      client_name: "Notes web",
+      redirect_uris: [browserCallback],
       resources: [resource],
-      confidential: true,
+      token_endpoint_auth_method: "client_secret_basic",
       // Loopback HTTP redirects are only valid for native clients; production uses HTTPS web clients.
-      native: true,
+      application_type: "native",
     });
 
     assert.equal(registration.status, 201, await registration.clone().text());
@@ -241,11 +235,7 @@ test("first-party browser login, verification of tokens and keys, and logout aga
     const principal = await run(verifier.verify(`Bearer ${token}`));
     // Tokens carry protocol scopes too; resource servers check for the scopes they define.
     assert.deepEqual(principal.scopes, ["openid", "offline_access", "notes:read", "notes:write"]);
-    assert.deepEqual(principal.actor, {
-      kind: "client",
-      clientId: client.client_id,
-      generation: decodeJwt(token).grant_generation,
-    });
+    assert.deepEqual(principal.actor, { kind: "client", clientId: client.client_id });
 
     const { verifier: other } = await run(
       withHttp(Resource.make({ issuer: issuer.issuer, resource: `${origin}/mcp`, scopes: [] })),

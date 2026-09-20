@@ -81,12 +81,29 @@ export const errors = [
 
 export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
 
+export const ClientAuthMethod = Schema.Literals([
+  "none",
+  "client_secret_basic",
+  "client_secret_post",
+]);
+
+export const ApplicationType = Schema.Literals(["web", "native"]);
+
+/** Provider vocabulary: the server passes these fields through unchanged. */
 export const ClientInput = Schema.Struct({
-  name: Schema.String,
-  redirect: Schema.String,
+  client_name: Schema.String,
+  redirect_uris: Schema.Array(Schema.String),
   resources: Schema.Array(Schema.String),
-  confidential: Schema.Boolean,
-  native: Schema.Boolean,
+  token_endpoint_auth_method: ClientAuthMethod,
+  application_type: ApplicationType,
+});
+
+/** The provider's update endpoint cannot change the authentication method. */
+export const ClientUpdateInput = Schema.Struct({
+  client_id: Schema.String,
+  client_name: Schema.String,
+  redirect_uris: Schema.Array(Schema.String),
+  application_type: ApplicationType,
 });
 
 export const ClientId = Schema.Struct({ client_id: Schema.String });
@@ -103,6 +120,7 @@ export const Client = Schema.Struct({
   client_name: Schema.optional(Schema.String),
   redirect_uris: Schema.Array(Schema.String),
   token_endpoint_auth_method: Schema.optional(Schema.String),
+  application_type: Schema.optional(Schema.NullOr(Schema.String)),
   scope: Schema.optional(Schema.String),
   grant_types: Schema.optional(Schema.Array(Schema.String)),
 });
@@ -182,7 +200,7 @@ export const IssuerActions = ActionGroup.make(
     mcp: false,
   }),
   Action.make("setupOwner", {
-    description: "Create the first owner account. Requires the configured browser origin.",
+    description: "Create the first owner account.",
     input: SetupInput,
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
     mcp: false,
@@ -221,8 +239,13 @@ export const Administration = ActionGroup.make(
     input: ClientInput,
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
   }),
+  Action.make("updateClient", {
+    description: "Rename a first-party client or change its redirect URIs and application type.",
+    input: ClientUpdateInput,
+    success: Client,
+  }),
   Action.make("deleteClient", {
-    description: "Delete an OAuth client.",
+    description: "Delete a first-party OAuth client.",
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
@@ -242,7 +265,7 @@ export const Administration = ActionGroup.make(
     success: ClientCredentials,
   }),
   Action.make("setClientAccess", {
-    description: "Set the resources a managed client may access.",
+    description: "Set the resources a client may request.",
     input: ClientAccessInput,
     success: ClientAccessResult,
   }),

@@ -185,7 +185,7 @@ const withFixture = async (
               Effect.succeed({
                 subject: "owner",
                 scopes: ["notes:read"],
-                actor: { kind: "client", clientId: "web-client", generation: "g1" },
+                actor: { kind: "client", clientId: "web-client" },
               }),
           }).pipe(
             Effect.provideService(SessionStore, {
@@ -593,7 +593,7 @@ test("cookie authentication checks mutation origins, yields to bearer, and suppl
             ? Effect.succeed({
                 subject: "owner",
                 scopes: ["notes:read"],
-                actor: { kind: "client", clientId: "web-client", generation: "g1" },
+                actor: { kind: "client", clientId: "web-client" },
               })
             : Effect.fail(new Unauthorized({ message: "Invalid fixture token" })),
       },

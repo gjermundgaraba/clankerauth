@@ -137,7 +137,8 @@ label {
   margin-bottom: 20px;
 }
 input,
-select {
+select,
+textarea {
   display: block;
   width: 100%;
   padding: 12px 13px;
@@ -151,7 +152,8 @@ select {
   min-height: 45px;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: 2px solid #829e66;
   outline-offset: 2px;
 }

@@ -4,11 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Redacted, Effect, Exit, Schema, Scope } from "effect";
+import { DatabaseSync } from "node:sqlite";
+import { Effect, Exit, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { nodeHandler } from "../src/app.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
+import { testSettings } from "./settings.ts";
 import { createNodeServer } from "../src/node-http.ts";
 
 let directory: string;
@@ -26,13 +28,9 @@ let closing: Promise<void> | undefined;
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-http-lifecycle-"));
   service = await Effect.runPromise(
-    openAuth({
-      baseURL: "https://issuer.example",
-      secret: Redacted.make("test-only-secret-with-at-least-32-characters"),
-      database: join(directory, "auth.sqlite"),
-      host: "127.0.0.1",
-      port: 3000,
-    }),
+    openAuth(
+      testSettings({ baseURL: "https://issuer.example", database: join(directory, "auth.sqlite") }),
+    ),
   );
   await Effect.runPromise(initialize(service));
   scope = Scope.makeUnsafe();
@@ -103,10 +101,10 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   const destroy = vi.spyOn(service.database, "destroy");
   const context = await service.auth.$context;
   const hash = context.password.hash;
+  // Sign-up hashes inside the provider's transaction, which holds the connection.
   vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
     entered.resolve();
     await release.promise;
-    await Effect.runPromise(service.sql`SELECT 1`);
 
     return hash(password);
   });
@@ -130,6 +128,10 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
     release.resolve();
     await closing;
     expect(destroy).toHaveBeenCalledTimes(1);
+    // The disconnected request still committed the account before the database closed.
+    const stored = new DatabaseSync(join(directory, "auth.sqlite"));
+    expect(stored.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 1 });
+    stored.close();
   } finally {
     release.resolve();
   }
@@ -226,27 +228,46 @@ test("POST preserves provider body bytes and content type", async () => {
 });
 
 test.each([
-  ["malformed JSON", "{", 400, false],
-  ["missing resource", "{}", 400, false],
-  ["non-string resource", '{"resource":42}', 400, false],
-  ["unknown resource", '{"resource":"https://unknown.example"}', 400, false],
-  ["known resource", '{"resource":"https://issuer.example/mcp"}', 200, true],
+  ["missing resource", "", 400, false],
+  ["unknown resource", "?resource=https://unknown.example", 400, false],
   [
-    "unrelated overflowing number",
-    '{"resource":"https://issuer.example/mcp","extra":1e400}',
-    200,
-    true,
+    "several resources",
+    "?resource=https://issuer.example/mcp&resource=https://issuer.example/mcp",
+    400,
+    false,
   ],
-])("OAuth resource admission: %s", async (_name, body, status, admitted) => {
+  ["known resource", "?resource=https://issuer.example/mcp", 200, true],
+])("authorization resource admission: %s", async (_name, query, status, admitted) => {
+  const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
+  const response = await fetch(`${url}/api/auth/oauth2/authorize${query}`);
+  expect(response.status).toBe(status);
+  await response.text();
+  expect(handler).toHaveBeenCalledTimes(admitted ? 1 : 0);
+});
+
+test("bodies above 64 KiB are disconnected before reaching the provider", async () => {
+  const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
+
+  await expect(
+    fetch(`${url}/api/auth/oauth2/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: `grant_type=${"x".repeat(65536)}`,
+    }),
+  ).rejects.toThrow();
+  expect(handler).not.toHaveBeenCalled();
+});
+
+test("token requests reach the provider without resource pre-checks", async () => {
   const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
 
   const response = await fetch(`${url}/api/auth/oauth2/token`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=refresh_token",
   });
 
-  expect(response.status).toBe(status);
+  expect(response.status).toBe(200);
   await response.text();
-  expect(handler).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  expect(handler).toHaveBeenCalledTimes(1);
 });

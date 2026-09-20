@@ -1,58 +1,42 @@
 # Provider integration
 
-The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.5. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration and regressions.
+The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.5, unpatched. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration.
 
 Better Auth documents Node's built-in SQLite and its Kysely adapter. This service uses the exported `NodeSqliteDialect` with `DatabaseSync`, then shares the Kysely instance with Better Auth and a small Effect tagged-query helper. WAL, foreign keys and a five-second busy timeout are enabled. Kysely owns connection reservation, transactions and cleanup. See [SQLite integration](https://better-auth.com/docs/adapters/sqlite) and [database concepts](https://better-auth.com/docs/concepts/database).
 
-The provider owns OAuth protocol handling, credential hashing, consent, resource CRUD, client/resource links, client registration, secret rotation and client deletion. Owner-authenticated application routes call its supported server APIs; native administrative endpoints are not publicly mounted. The provider documentation describes client and resource administration, registration and protocol options in [OAuth Provider](https://better-auth.com/docs/plugins/oauth-provider).
+The provider owns OAuth protocol handling, credential hashing, consent, resource CRUD, client/resource links, client registration, secret rotation, client updates and client deletion. Owner-authenticated application routes call its supported server APIs; native administrative endpoints are not publicly mounted. The provider documentation describes client and resource administration, registration and protocol options in [OAuth Provider](https://better-auth.com/docs/plugins/oauth-provider).
 
 Application-specific behavior remains where the provider does not directly express this product's policy:
 
-- The dashboard lists all clients, including automatic clients without an owner association. Global block and revoke controls maintain onboarding policy and clear stored authorization for a client identifier.
-- Resource scope changes synchronize client scope ceilings, and automatic clients can request resources added after registration. This is dynamic application policy layered over provider resources and links.
-- First-run account creation and the permanent setup marker commit in one local Kysely transaction. The marker records completed setup; it is not a runtime role system.
-- Routes enforce the single-resource request contract, exact configured origin, sole-account setup and the allowed protocol endpoint surface.
+- The dashboard lists every client row, including automatic clients without an owner association. Onboarding is derived from provider columns: a client discovery identifier means CIMD, a missing owner means DCR, otherwise the client is managed.
+- Resource scope changes synchronize client scope ceilings, and automatic clients are linked to resources added after registration. The owner may unlink any client from any resource.
+- First-run account creation calls the provider's email sign-up, so validation matches sign-in and the owner is signed in by the same response. The sign-up route itself is not mounted, a user-creation database hook rejects any second account, and setup requests are serialized in process, so the owner is simply the only user; there is no separate marker or role system.
+- The built-in administration resource is seeded through the provider's `resources` option in its default insert-only mode, so the owner's later name edits survive restarts.
+- Routes enforce the single-resource authorization contract, sole-account setup and the allowed protocol endpoint surface.
 - Managed clients are registered with the provider's `skip_consent` flag at creation. The owner's session lasts 30 days and slides with use; together these make sign-in at one first-party application sign-in at all of them.
+- Dynamic registrations that omit `application_type` while using a non-HTTPS redirect URI are registered as native clients, because the provider's web default forbids loopback callbacks that MCP clients rely on.
 
 ## Client and resource lifecycle
 
-Resources, scopes and client access are stored in SQLite. Fresh installations contain the built-in administration resource; restarts preserve edits. Resource identifiers remain stable; names and ordinary resource scopes can change. The built-in administration scope is fixed. Managed clients may be registered without resource access and linked later. Each authorization and token request targets exactly one resource, with independent consent; new scopes require consent before issuance.
+Resources, scopes and client access are stored in SQLite. Fresh installations contain the built-in administration resource; restarts preserve edits. Resource identifiers remain stable; names and ordinary resource scopes can change, and a resource may define no custom scopes. The built-in administration scope is fixed. Managed clients may be registered without resource access and linked later. Each authorization request targets exactly one resource, with independent consent; token requests may omit `resource`, in which case the provider reuses the resource bound to the code or refresh token. New scopes require consent before issuance.
 
 Client/resource unlinking is a policy change. It prevents new authorization and refresh while unlinked, retaining consent, codes and credentials. Relinking may permit those retained authorizations again. Removing a scope narrows newly issued tokens to the resource's current allowed scopes without deleting grants; a refresh may still succeed with fewer scopes. Restoring scopes can make retained authorization usable again. Deleting a resource removes its client links through provider behavior; there is no application dependency blocker or custom grant cleanup.
 
-**Revoke authorization** explicitly clears stored consent, codes and credentials. **Block client** also disables authorization for that identifier until unblocked, including across CIMD metadata rediscovery. Unblocking does not restore old grants. To change a client redirect URI, delete and re-register. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants. Administration MCP verifies JWTs offline with the shared SDK and checks the client row, including its grant generation, on every request, so blocking, revocation, deletion and re-registration take effect immediately. Generation checks also protect new issuance and refresh from concurrent revocation.
+**Block client** sets the provider's `disabled` flag, which the provider enforces at authorization, token exchange, refresh and introspection, and preserves across CIMD metadata rediscovery. Blocking also clears stored consent, codes and credentials. **Revoke authorization** clears them without blocking. Neither can recall an already-issued JWT access token: resource servers, including administration MCP, accept it until it expires, at most fifteen minutes. Administration MCP additionally checks on every request that the token's client still exists and is not blocked. Managed clients can be renamed and have their redirect URIs or application type changed through the provider's update API; automatic clients are owned by their registration or metadata and cannot be edited by the owner. Secret rotation invalidates the previous secret immediately. Deleting a client removes its stored grants.
 
 ## Concurrency and transactions
 
-Run only one process/Service instance against a database. Requests run concurrently; there is no service-wide FIFO queue. The provider's individual operations and database transactions define consistency. Refresh persistence checks the captured client grant generation, rotates the parent with CAS and inserts its replacement in one provider transaction. Revocation either precedes that transaction and prevents issuance, or follows it and deletes the committed credentials. Clients must still serialize refresh and replace their stored credential atomically.
+Run only one process/Service instance against a database. Requests run concurrently; there is no service-wide FIFO queue. The provider's individual operations and database transactions define consistency. Refresh tokens rotate on use with a thirty-second reuse window: a retried refresh inside the window replays the same replacement, while a replay outside it revokes the token family. Replay invalidation covers all refresh grants for the same client ID and user ID, across sessions and resources, plus associated opaque access rows. Other clients' grants remain separate.
 
-Replay invalidation covers all refresh grants for the same client ID and user ID, across sessions and resources, plus associated opaque access rows. Other clients' grants remain separate. Revocation of an already-rotated parent responds `400 invalid_request` in this provider version.
+Administrative policy changes do not turn a multi-step provider request already in progress into a single transaction. Workflows that call several provider APIs can commit earlier steps before a later step fails; refresh the dashboard to inspect the stored state before retrying. Local block and revoke writes each use one transaction, and first-run account creation runs inside the provider's sign-up transaction. Those transactions preserve domain errors and roll back failed writes; they do not encompass concurrent provider workflows.
 
-Administrative policy changes likewise do not turn a multi-step provider request already in progress into a single transaction. Workflows that call several provider APIs can commit earlier steps before a later step fails; refresh the dashboard to inspect the stored state before retrying. Local block and revoke writes each use one transaction, as does first-run account creation with its setup marker. Those transactions preserve domain errors and roll back failed writes; they do not encompass concurrent provider workflows.
-
-## Provider patch and shutdown
-
-The [version-pinned pnpm patch](../patches/@better-auth__oauth-provider@1.7.5.patch) contains these integration changes:
-
-- Refresh-token client binding is checked before replay-family invalidation, preventing a rotated token from client A from deleting client B's family.
-- Access-token signing and refresh writes both settle before an issuance error propagates, allowing graceful shutdown to drain outstanding provider writes.
-- The provider schema includes an internal `oauthClient.grantGeneration` string. Application triggers assign a random 128-bit generation on every client insertion, including recreation of the same identifier. Revocation and security-relevant CIMD metadata changes replace it. Deletion removes it with the client; cleanup retains no historical generation records.
-- Authorization-code and refresh exchanges capture that generation using the provider-resolved client identity before loading or consuming the grant. This supports assertion-only `private_key_jwt` and all provider-supported Basic authentication casing, without parsing credentials in application hooks.
-- Refresh persistence validates the generation inside its short transaction. JWTs carry the captured `grant_generation`, and a final generation check rejects an exchange invalidated during signing or other asynchronous work. Unrelated clients' metadata changes do not abort the exchange.
-
-Provider cryptography remains unchanged; the JWT gains an application grant-generation claim. Only database persistence is transactional: client discovery, signing, hashing and token formatting remain outside that transaction. Failed issuance may still consume a code or leave a completed grant after an unrelated signing failure, but cannot resurrect credentials across revocation. The patch is specific to this service's authorization-code and refresh grant configuration and requires the application generation triggers.
-
-This pre-release requires a fresh database; old counter tables, trigger definitions and tokens are not migrated.
+## Shutdown
 
 Graceful shutdown closes admission and tracks all admitted application work, including disconnected requests, until completion before closing SQLite. Late admission receives 503.
 
-## API-key listing patch
+## API keys
 
-The [API-key provider patch](../patches/@better-auth__api-key@1.7.5.patch) reads database listings in explicit pages before the provider applies configuration filtering and public pagination. The pinned provider otherwise inherits Better Auth's 100-row default, even when its caller requests a larger limit. The dashboard's listing must include every owner key. Regression coverage creates 101 keys and checks complete listings, total counts, pagination beyond the first page, and omission of plaintext credentials.
-
-## API-key rate-limit window
-
-The API-key provider patch stores `rateLimitWindowStart` separately from `lastRequest`. The counter resets at the end of a fixed one-minute window, including the exact boundary; successful requests update activity without moving the window. Guarded database updates preserve the per-key maximum under concurrent verification, and the stored window survives restart. New keys have a null window start and begin their first counting window on verification. Tests cover sustained traffic, concurrent bursts, the boundary, and restart. The pinned provider otherwise counts until a full inactivity interval has elapsed.
+The API-key plugin is used unpatched. Its per-key rate limit counts up to 1,000 verifications per key until a full minute of inactivity has elapsed. Its listing reads one database page and paginates in memory, so the dashboard shows at most the first 100 keys.
 
 ## Effect boundaries
 

@@ -1,12 +1,12 @@
-import { Effect, Redacted } from "effect";
+import { Effect } from "effect";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
-import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { webApplication as application } from "./web-application.ts";
 import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
+import { testSettings } from "./settings.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
@@ -22,14 +22,13 @@ let handle: ReturnType<typeof application>;
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-cors-"));
   service = await Effect.runPromise(
-    openAuth({
-      baseURL,
-      secret: Redacted.make(randomBytes(32).toString("hex")),
-      database: join(directory, "auth.sqlite"),
-      host: "127.0.0.1",
-      port: 3000,
-      mcpAllowedOrigins: [clientOrigin],
-    }),
+    openAuth(
+      testSettings({
+        baseURL,
+        database: join(directory, "auth.sqlite"),
+        mcpAllowedOrigins: [clientOrigin],
+      }),
+    ),
   );
   await Effect.runPromise(initialize(service));
   handle = application(service);
@@ -138,7 +137,7 @@ test("MCP rejects unlisted origins before authentication and accepts originless 
   expect(native.headers.has("access-control-allow-origin")).toBe(false);
 });
 
-test("an allowed external browser uses bearer MCP while dashboard cookie CSRF stays separate", async () => {
+test("an allowed external browser uses bearer MCP while the dashboard API exposes no CORS grant", async () => {
   const credentials = { email: "owner@example.internal", password: "test-only password123" };
   await Effect.runPromise(createOwner(service, credentials));
 
@@ -184,7 +183,8 @@ test("an allowed external browser uses bearer MCP while dashboard cookie CSRF st
     }),
   );
 
-  expect(dashboard.status).toBe(403);
+  // The SameSite cookie authenticates the owner; no CORS grant is exposed for the dashboard API.
+  expect(dashboard.status).toBe(200);
   expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
 
   const missingSession = await handle(
@@ -217,7 +217,9 @@ test("discovery middleware cannot bypass public CORS or security headers", async
 
     expect(response.status).toBe(method === "OPTIONS" ? 204 : 200);
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe(
+      method === "GET" ? "public, max-age=300" : "no-store",
+    );
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     await response.body?.cancel();
   }

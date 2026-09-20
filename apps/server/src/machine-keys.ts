@@ -73,7 +73,13 @@ export function machineKeys(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      const result = yield* provider(() => service.auth.api.listApiKeys({ headers }));
+      // The plugin pages in memory over one database read, so listings stop at its page size.
+      const result = yield* provider(() =>
+        service.auth.api.listApiKeys({
+          headers,
+          query: { sortBy: "createdAt", sortDirection: "asc" },
+        }),
+      );
 
       return { keys: result.apiKeys.map(summary) };
     }),
@@ -86,13 +92,8 @@ export function machineKeys(service: Service) {
           ? null
           : (Date.parse(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
 
-      if (
-        expiresIn !== null &&
-        (!Number.isFinite(expiresIn) || expiresIn < 1 || expiresIn > 86400 * 365)
-      )
-        return yield* Effect.fail(
-          new BadRequest({ error: "Expiry must be in the future and within one year" }),
-        );
+      if (expiresIn !== null && (!Number.isFinite(expiresIn) || expiresIn < 1))
+        return yield* Effect.fail(new BadRequest({ error: "Expiry must be in the future" }));
 
       const key = yield* provider(() =>
         service.auth.api.createApiKey({

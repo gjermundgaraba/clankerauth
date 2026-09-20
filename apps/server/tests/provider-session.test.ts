@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vite-plus/test";
-import { Redacted, Effect, Fiber } from "effect";
-import { randomBytes } from "node:crypto";
+import { Effect, Fiber } from "effect";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOwner, initialize, openAuth } from "../src/auth.ts";
+import { testSettings } from "./settings.ts";
 import { providerSession } from "../src/provider-session.ts";
 
 test.each([false, true])(
@@ -13,13 +13,12 @@ test.each([false, true])(
     const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-session-"));
 
     const service = await Effect.runPromise(
-      openAuth({
-        baseURL: "https://auth.example.internal",
-        database: join(directory, "auth.sqlite"),
-        secret: Redacted.make(randomBytes(32).toString("hex")),
-        host: "127.0.0.1",
-        port: 3000,
-      }),
+      openAuth(
+        testSettings({
+          baseURL: "https://auth.example.internal",
+          database: join(directory, "auth.sqlite"),
+        }),
+      ),
     );
 
     const allowDeletion = Promise.withResolvers<void>();
@@ -69,13 +68,12 @@ test("cancellation releases a temporary provider session that lasts at most one 
   const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-cancellation-"));
 
   const service = await Effect.runPromise(
-    openAuth({
-      baseURL: "https://auth.example.internal",
-      database: join(directory, "auth.sqlite"),
-      secret: Redacted.make(randomBytes(32).toString("hex")),
-      host: "127.0.0.1",
-      port: 3000,
-    }),
+    openAuth(
+      testSettings({
+        baseURL: "https://auth.example.internal",
+        database: join(directory, "auth.sqlite"),
+      }),
+    ),
   );
 
   let request: Fiber.Fiber<never, unknown> | undefined;

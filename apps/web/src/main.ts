@@ -1,6 +1,8 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
+  ApplicationType,
+  ClientAuthMethod,
   Http,
   type Client,
   type ClientCredentials,
@@ -122,7 +124,8 @@ function setup() {
             },
           })
           .pipe(
-            Effect.tap(() => Effect.sync(() => location.replace("/login?setup=complete"))),
+            // Setup signs the owner in; the dashboard opens directly.
+            Effect.tap(() => Effect.sync(() => location.replace("/"))),
             Effect.catchTag("Conflict", () => Effect.sync(() => location.replace("/login"))),
           ),
       );
@@ -137,13 +140,6 @@ function login() {
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
     <p id="message" role="alert"></p><button>Sign in <span>→</span></button></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#login")!;
-
-  if (new URLSearchParams(location.search).get("setup") === "complete") {
-    const confirmation = document.createElement("p");
-    confirmation.setAttribute("role", "status");
-    confirmation.textContent = "Account created. Sign in to continue.";
-    form.before(confirmation);
-  }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -195,7 +191,7 @@ async function consent() {
     <div class="resource"><span class="eyebrow">ONLY FOR THIS RESOURCE</span>${resources.map((r) => `<code>${escape(r)}</code>`).join("")}</div>
     <h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><span>✓</span><code>${escape(scope)}</code></li>`).join("")}</ul>
     ${query.has("claims") ? `<h3>Additional identity claims</h3><pre>${escape(query.get("claims")!)}</pre>` : ""}
-    <p class="help">Access tokens expire after five minutes. Offline access lets the Client renew them until you revoke its authorization.</p>
+    <p class="help">Access tokens expire after fifteen minutes. Offline access lets the Client renew them until you revoke its authorization.</p>
     <p id="message" role="alert"></p><form id="consent"><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#consent")!;
   form.addEventListener("submit", (event) => {
@@ -234,10 +230,28 @@ function selectedResources(form: HTMLFormElement): string[] {
 function resourceFields(fields: FormData) {
   const scopes = [...new Set(textField(fields, "scopes").split(/\s+/).filter(Boolean))];
 
-  if (!scopes.length) throw new Error("Add at least one custom Scope.");
-
   return { name: textField(fields, "name"), scopes };
 }
+
+function redirectUris(fields: FormData) {
+  const uris = [...new Set(textField(fields, "redirect_uris").split(/\s+/).filter(Boolean))];
+
+  if (!uris.length) throw new Error("Add at least one redirect URI.");
+
+  return uris;
+}
+
+const authMethodLabels: Record<typeof ClientAuthMethod.Type, string> = {
+  none: "Public client (PKCE only)",
+  client_secret_basic: "Confidential client · HTTP Basic secret",
+  client_secret_post: "Confidential client · secret in request body",
+};
+
+const authMethodField = (fields: FormData) =>
+  Schema.decodeUnknownSync(ClientAuthMethod)(textField(fields, "token_endpoint_auth_method"));
+
+const applicationTypeField = (fields: FormData) =>
+  Schema.decodeUnknownSync(ApplicationType)(fields.has("native") ? "native" : "web");
 
 function keyGrants(form: HTMLFormElement) {
   const grants: Record<string, string[]> = {};
@@ -306,7 +320,7 @@ async function refreshDashboard() {
 }
 
 const scopeHelp =
-  "Separate scopes with spaces. openid, profile, email and offline_access are reserved.";
+  "Optional. Separate scopes with spaces. openid, profile, email and offline_access are reserved.";
 
 const onboardingLabel = {
   managed: "Managed registration · first party, no consent screen",
@@ -354,12 +368,12 @@ const resourceCard = (resource: ResourceView, dependents: readonly ClientView[])
   <p class="help dependencies">Managed Clients with access: ${dependents.length ? dependents.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
   ${resource.builtIn ? '<p class="help">Built-in administration resource. OAuth access tokens are required; its scopes and identifier are fixed.</p>' : ""}
   <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label>
-  ${resource.builtIn ? "" : `<label>Scopes<input name="scopes" required value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p>`}
+  ${resource.builtIn ? "" : `<label>Scopes<input name="scopes" value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p>`}
   <button>Save resource</button></form></details>
   ${resource.builtIn ? "" : `<button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`}</article>`;
 
 const resourceForm = () =>
-  `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later.</p><label>Scopes<input name="scopes" required placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
+  `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
 
 const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
   `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(new Date(key.expiresAt).toLocaleString())}` : "Valid until revoked"}</p>${Object.entries(
@@ -375,7 +389,7 @@ const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
   <div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`;
 
 const keyForm = (resources: readonly ResourceView[]) =>
-  `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">At most one year ahead; blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
+  `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
 
 const clientCard = (
   client: ClientView,
@@ -385,20 +399,21 @@ const clientCard = (
   const managed = isManaged(client);
   const id = escape(client.client_id);
 
-  const eligible = managed
-    ? resources
-        .flatMap((resource) =>
-          allowed.includes(resource.identifier)
-            ? [
-                `<div class="allowed-resource"><strong>${escape(resource.name)}</strong>${resourceSummary(resource)}</div>`,
-              ]
-            : [],
-        )
-        .join("") || '<p class="help">No Resource access configured.</p>'
-    : '<p class="help">Any configured Resource. Each needs your consent.</p>';
+  const eligible =
+    resources
+      .flatMap((resource) =>
+        allowed.includes(resource.identifier)
+          ? [
+              `<div class="allowed-resource"><strong>${escape(resource.name)}</strong>${resourceSummary(resource)}</div>`,
+            ]
+          : [],
+      )
+      .join("") || '<p class="help">No Resource access configured.</p>';
 
-  const access = managed
-    ? `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">Removing access stops new authorization and refresh; use Revoke authorization to clear issued grants.</p><button>Save access</button></form></details>`
+  const access = `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">${managed ? "" : "Automatic Clients receive access to new Resources; each still needs your consent. "}Removing access stops new authorization and refresh; use Revoke authorization to clear issued grants.</p><button>Save access</button></form></details>`;
+
+  const edit = managed
+    ? `<details><summary>Edit client</summary><form data-client-edit="${id}"><label>Client name<input name="name" required maxlength="100" value="${escape(client.client_name ?? "")}"></label><label>Redirect URIs (one per line)<textarea name="redirect_uris" required rows="3">${escape(client.redirect_uris.join("\n"))}</textarea></label><label class="checkbox"><input type="checkbox" name="native" ${client.application_type === "native" ? "checked" : ""}>Native / desktop client (loopback redirect)</label><p class="help">The authentication method is fixed at registration.</p><button>Save client</button></form></details>`
     : "";
 
   const actions = [
@@ -410,12 +425,18 @@ const clientCard = (
     managed ? `<button class="danger" data-delete="${id}">Delete client</button>` : "",
   ].join("");
 
-  return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URI<code>${escape(client.redirect_uris.join(", "))}</code></label>
-  <h3>${managed ? "Allowed Resources" : "Resources eligible for consent"}</h3>${eligible}${access}<div class="actions">${actions}</div></article>`;
+  return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URIs${client.redirect_uris.map((uri) => `<code>${escape(uri)}</code>`).join("")}</label>
+  <h3>${managed ? "Allowed Resources" : "Resources eligible for consent"}</h3>${eligible}${access}${edit}<div class="actions">${actions}</div></article>`;
 };
 
 const registerForm = (resources: readonly ResourceView[]) =>
-  `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Exact redirect URI<input name="redirect" type="url" required placeholder="https://app.internal/callback"></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label class="checkbox"><input type="checkbox" name="confidential">Confidential client (can securely store a secret)</label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
+  `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Redirect URIs (one per line)<textarea name="redirect_uris" required rows="3" placeholder="https://app.internal/callback"></textarea></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label>Client authentication<select name="token_endpoint_auth_method">${Object.entries(
+    authMethodLabels,
+  )
+    .map(([value, label]) => `<option value="${value}">${label}</option>`)
+    .join(
+      "",
+    )}</select></label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
 
 async function dashboard() {
   const [data, keyData] = await Promise.all([
@@ -470,7 +491,7 @@ async function dashboard() {
     ${columns(
       "Clients",
       data.clients.length,
-      "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking and blocking take effect immediately for this server’s administration MCP. Other resource servers may accept issued access tokens for up to five minutes.",
+      "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking or blocking stops new authorization and refresh at once; already-issued access tokens stay valid until they expire, at most fifteen minutes.",
       data.clients
         .map((client) => clientCard(client, resources, allowed(client.client_id)))
         .join("") ||
@@ -508,11 +529,11 @@ async function dashboard() {
     const result = await request(
       api.administration.createClient({
         payload: {
-          name: textField(fields, "name"),
-          redirect: textField(fields, "redirect"),
+          client_name: textField(fields, "name"),
+          redirect_uris: redirectUris(fields),
           resources: selectedResources(target),
-          native: fields.has("native"),
-          confidential: fields.has("confidential"),
+          application_type: applicationTypeField(fields),
+          token_endpoint_auth_method: authMethodField(fields),
         },
       }),
     );
@@ -595,6 +616,22 @@ async function dashboard() {
             scopes: resource.builtIn
               ? resource.scopes
               : resourceFields(new FormData(target)).scopes,
+          },
+        }),
+      );
+      await refreshDashboard();
+    });
+
+  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-client-edit]"))
+    onSubmit(edit, async (target) => {
+      const fields = new FormData(target);
+      await request(
+        api.administration.updateClient({
+          payload: {
+            client_id: target.dataset.clientEdit!,
+            client_name: textField(fields, "name"),
+            redirect_uris: redirectUris(fields),
+            application_type: applicationTypeField(fields),
           },
         }),
       );

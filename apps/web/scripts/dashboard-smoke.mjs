@@ -240,8 +240,10 @@ try {
   assert.equal(await emptyRegister.getByRole("button").isEnabled(), true);
   assert.equal(await emptyRegister.locator('[name="resources"]').count(), 0);
   await emptyRegister.locator('[name="name"]').fill(created.client_name);
-  await emptyRegister.locator('[name="redirect"]').fill(created.redirect_uris[0]);
-  await emptyRegister.locator('[name="confidential"]').check();
+  await emptyRegister.locator('[name="redirect_uris"]').fill(created.redirect_uris[0]);
+  await emptyRegister
+    .locator('[name="token_endpoint_auth_method"]')
+    .selectOption("client_secret_basic");
   await emptyRegister.getByRole("button").click();
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
   await waitForIdle();
@@ -354,9 +356,9 @@ try {
 
   const register = page.locator("#register");
   await register.locator('[name="name"]').fill(created.client_name);
-  await register.locator('[name="redirect"]').fill(created.redirect_uris[0]);
+  await register.locator('[name="redirect_uris"]').fill(created.redirect_uris.join("\n"));
   await register.locator(`[name="resources"][value="${resource.identifier}"]`).check();
-  await register.locator('[name="confidential"]').check();
+  await register.locator('[name="token_endpoint_auth_method"]').selectOption("client_secret_basic");
 
   const clientListStarted = page.waitForRequest(
     (request) =>
@@ -368,17 +370,21 @@ try {
   await clientListStarted;
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
   assert.equal(await register.locator('[name="name"]').inputValue(), "");
-  assert.equal(await register.locator('[name="redirect"]').inputValue(), "");
+  assert.equal(await register.locator('[name="redirect_uris"]').inputValue(), "");
   assert.equal(
     await register.locator(`[name="resources"][value="${resource.identifier}"]`).isChecked(),
     false,
   );
-  assert.equal(await register.locator('[name="confidential"]').isChecked(), false);
+  assert.equal(await register.locator('[name="token_endpoint_auth_method"]').inputValue(), "none");
   await register.dispatchEvent("submit");
   releaseClientList.resolve();
   await waitForSaved();
   assert.equal(count("POST /api/administration/createClient"), 2);
   assert.deepEqual(registrations[1].resources, [resource.identifier]);
+  assert.deepEqual(registrations[1].redirect_uris, created.redirect_uris);
+  assert.equal(registrations[1].token_endpoint_auth_method, "client_secret_basic");
+  assert.equal(registrations[1].client_name, created.client_name);
+  assert.equal(registrations[1].application_type, "web");
   assert.match(await page.locator("#credentials").textContent(), /fixture-first-secret/);
 
   data = { ...data, clients: [existing, created] };
@@ -428,7 +434,8 @@ try {
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
   await waitForIdle();
   assert.match(await page.locator(".client").textContent(), /Client ID Metadata Document/);
-  assert.equal(await page.locator("[data-client-access], [data-delete], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-client-edit], [data-delete], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-client-access]").count(), 1);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
   await page.getByRole("button", { name: "Revoke authorization", exact: true }).click();
   await waitForIdle();
@@ -445,7 +452,7 @@ try {
   await page.reload();
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
   assert.match(await page.locator(".client").textContent(), /Dynamic registration/);
-  assert.equal(await page.locator("[data-client-access], [data-delete], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-client-edit], [data-delete], [data-rotate]").count(), 0);
 
   // API keys preserve explicit scope selection and show plaintext only until acknowledged.
   const keyForm = page.locator("#key-create");

@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Effect, Layer, Option, Result, Schema } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import {
   HttpPlatform,
@@ -12,8 +12,6 @@ import { APIError } from "better-auth/api";
 import type { Service } from "./auth.ts";
 import { actionRoutes } from "./action-api.ts";
 import { requestPolicy } from "./node-http.ts";
-
-const ResourceRequest = Schema.Struct({ resource: Schema.String });
 
 const publicPaths = new Set([
   "/sign-in/email",
@@ -47,8 +45,23 @@ const corsPaths = new Set([
   "/.well-known/openid-configuration",
 ]);
 
+/** Public, unauthenticated documents resource servers and clients may cache briefly. */
+const cacheablePaths = new Set([
+  "/jwks",
+  "/.well-known/oauth-protected-resource/mcp",
+  "/.well-known/oauth-authorization-server",
+  "/.well-known/oauth-authorization-server/api/auth",
+  "/.well-known/openid-configuration",
+]);
+
+const spaRoutes = new Set(["/", "/login", "/consent", "/setup"]);
+
+const assetPath = /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/;
+
 const json = (body: typeof Schema.Json.Type, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status });
+
+const notFound = json({ error: "Not found" }, 404);
 
 const mcpMethods = ["GET", "POST", "DELETE"];
 
@@ -97,21 +110,15 @@ export function application(
     const path = url.pathname.replace(/^\/api\/auth/, "");
 
     if (!publicPaths.has(path) && path !== "/.well-known/oauth-authorization-server/api/auth")
-      return json({ error: "Not found" }, 404);
+      return notFound;
 
-    // Our one-resource policy is enforced before entering the OAuth provider.
-    if (path === "/oauth2/authorize" || path === "/oauth2/token") {
-      let resources: string[];
-
-      if (request.method === "GET") resources = url.searchParams.getAll("resource");
-      else if (request.headers["content-type"]?.includes("application/json")) {
-        const body = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-          yield* request.text,
-        );
-
-        const resource = Schema.decodeUnknownOption(ResourceRequest)(body);
-        resources = Option.isSome(resource) ? [resource.value.resource] : [];
-      } else resources = new URLSearchParams(yield* request.text).getAll("resource");
+    // Application policy: every authorization targets exactly one configured resource.
+    // The provider validates the resource on token requests itself.
+    if (path === "/oauth2/authorize") {
+      const resources =
+        request.method === "GET"
+          ? url.searchParams.getAll("resource")
+          : new URLSearchParams(yield* request.text).getAll("resource");
 
       if (
         resources.length !== 1 ||
@@ -156,6 +163,7 @@ export function application(
     return HttpServerResponse.fromWeb(response);
   }).pipe(Effect.catch(errorResponse));
 
+  // The built dashboard: one HTML document and its hashed script and stylesheet.
   const staticRoutes = HttpRouter.use((router) =>
     Effect.gen(function* () {
       const platform = yield* HttpPlatform.HttpPlatform;
@@ -165,33 +173,34 @@ export function application(
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
 
-          if (request.method !== "GET" && request.method !== "HEAD")
-            return json({ error: "Not found" }, 404);
+          if (request.method !== "GET" && request.method !== "HEAD") return notFound;
           const path = new URL(request.url, settings.baseURL).pathname;
 
-          const file = ["/", "/login", "/consent", "/setup"].includes(path)
+          const file = spaRoutes.has(path)
             ? "index.html"
-            : /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(path)
+            : assetPath.test(path)
               ? path.slice(1)
               : undefined;
 
-          if (!file) return json({ error: "Not found" }, 404);
+          if (!file) return notFound;
 
-          return yield* platform.fileResponse(resolve(staticRoot, file), {
-            contentType: file.endsWith(".js")
-              ? "text/javascript"
-              : file.endsWith(".css")
-                ? "text/css"
-                : "text/html; charset=utf-8",
-          });
-        }).pipe(Effect.catch(errorResponse)),
+          return yield* platform
+            .fileResponse(resolve(staticRoot, file), {
+              contentType: file.endsWith(".js")
+                ? "text/javascript"
+                : file.endsWith(".css")
+                  ? "text/css"
+                  : "text/html; charset=utf-8",
+            })
+            .pipe(Effect.catch(() => Effect.succeed(notFound)));
+        }),
       );
     }),
   );
 
   const policy = HttpRouter.middleware(
     (handler) =>
-      requestPolicy(settings.baseURL)(
+      requestPolicy({ baseURL: settings.baseURL, trustProxy: settings.trustProxy })(
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const pathname = new URL(request.url, settings.baseURL).pathname;
@@ -272,9 +281,19 @@ export function application(
             }
           }
 
+          const cacheable = request.method === "GET" && response.status === 200;
+
+          const cacheControl = !cacheable
+            ? "no-store"
+            : pathname.startsWith("/assets/")
+              ? "public, max-age=31536000, immutable"
+              : cacheablePaths.has(path)
+                ? "public, max-age=300"
+                : "no-store";
+
           response = response.pipe(
             HttpServerResponse.setHeaders({
-              "cache-control": "no-store",
+              "cache-control": cacheControl,
               "referrer-policy": "no-referrer",
               "x-content-type-options": "nosniff",
               "x-frame-options": "DENY",

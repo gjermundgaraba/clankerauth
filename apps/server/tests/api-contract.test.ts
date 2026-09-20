@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
-import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Redacted, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 import { Api, BadRequest } from "@clankerauth/api";
 import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
-import { validateSettings, type Settings } from "../src/config.ts";
+import { testSettings } from "./settings.ts";
+import type { Settings } from "../src/config.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 
@@ -25,12 +25,9 @@ describe("API integration", () => {
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "clankerauth-contract-"));
-    settings = validateSettings({
+    settings = testSettings({
       baseURL: "http://localhost:3000",
-      secret: Redacted.make(randomBytes(32).toString("hex")),
       database: join(directory, "auth.sqlite"),
-      host: "127.0.0.1",
-      port: 3000,
     });
     service = await Effect.runPromise(openAuth(settings));
     await Effect.runPromise(initialize(service));
@@ -101,11 +98,11 @@ describe("API integration", () => {
 
       const created = yield* api.administration.createClient({
         payload: {
-          name: "Contract test client",
-          redirect: "http://127.0.0.1:9876/callback",
+          client_name: "Contract test client",
+          redirect_uris: ["http://127.0.0.1:9876/callback"],
           resources: [resource],
-          native: true,
-          confidential: true,
+          application_type: "native",
+          token_endpoint_auth_method: "client_secret_basic",
         },
       });
 
@@ -113,11 +110,11 @@ describe("API integration", () => {
 
       const publicClient = yield* api.administration.createClient({
         payload: {
-          name: "Public contract client",
-          redirect: "http://127.0.0.1:9876/callback",
+          client_name: "Public contract client",
+          redirect_uris: ["http://127.0.0.1:9876/callback"],
           resources: [],
-          native: true,
-          confidential: false,
+          application_type: "native",
+          token_endpoint_auth_method: "none",
         },
       });
 
@@ -277,11 +274,33 @@ describe("API integration", () => {
         { client_id, resource: `${settings.baseURL}/mcp` },
         { client_id, resource },
       ]);
+      // The owner may narrow an automatic client's resource access.
+      expect(
+        yield* api.administration.setClientAccess({ payload: { client_id, resources: [] } }),
+      ).toEqual({ clientAccess: [] });
+      expect(
+        yield* api.administration.setClientAccess({
+          payload: { client_id, resources: [`${settings.baseURL}/mcp`, resource] },
+        }),
+      ).toEqual({
+        clientAccess: [
+          { client_id, resource: `${settings.baseURL}/mcp` },
+          { client_id, resource },
+        ],
+      });
+      // The provider refuses to edit clients the owner does not own.
       expect(
         (yield* Effect.flip(
-          api.administration.setClientAccess({ payload: { client_id, resources: [] } }),
+          api.administration.updateClient({
+            payload: {
+              client_id,
+              client_name: "Renamed",
+              redirect_uris: ["http://127.0.0.1:9876/callback"],
+              application_type: "native",
+            },
+          }),
         ))._tag,
-      ).toBe("BadRequest");
+      ).toBe("Forbidden");
       expect(yield* api.administration.revokeClient({ payload: { client_id } })).toEqual({
         revoked: true,
       });
@@ -310,26 +329,18 @@ describe("API integration", () => {
         { client_id, resource: `${settings.baseURL}/mcp` },
       ]);
 
-      // Retained policy and nullable live metadata are distinct cases. An owned
-      // automatic client must also appear only once in the combined listing.
-      const retainedId = "https://retained.example/client.json";
-      yield* service.sql`INSERT INTO clientOnboarding (clientId, source, blocked) VALUES (${retainedId}, 'cimd', 1)`;
-      yield* service.sql`UPDATE clientOnboarding SET source = 'cimd' WHERE clientId = ${client_id}`;
-      yield* service.sql`UPDATE oauthClient SET userId = ${yield* service.owner()}, name = NULL, tokenEndpointAuthMethod = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
-      const combined = (yield* api.administration.listClients({ payload: {} })).clients;
-      expect(combined).toHaveLength(2);
-      expect(combined.find((client) => client.client_id === retainedId)).toEqual({
-        client_id: retainedId,
-        onboarding: "cimd",
-        blocked: true,
-        redirect_uris: [],
-      });
-      expect(combined.find((client) => client.client_id === client_id)).toEqual({
-        client_id,
-        onboarding: "cimd",
-        blocked: false,
-        redirect_uris: ["http://127.0.0.1:9876/callback"],
-      });
+      // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
+      // and nullable live metadata is omitted rather than invented.
+      yield* service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
+      expect((yield* api.administration.listClients({ payload: {} })).clients).toEqual([
+        {
+          client_id,
+          onboarding: "cimd",
+          blocked: false,
+          redirect_uris: ["http://127.0.0.1:9876/callback"],
+          application_type: null,
+        },
+      ]);
 
       for (const invalidRedirects of ["null", "[42]"]) {
         yield* service.sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
@@ -386,11 +397,11 @@ describe("API integration", () => {
 
       const client = yield* api.administration.createClient({
         payload: {
-          name: "Failure test",
-          redirect: "http://127.0.0.1:9876/callback",
+          client_name: "Failure test",
+          redirect_uris: ["http://127.0.0.1:9876/callback"],
           resources: [],
-          native: true,
-          confidential: false,
+          application_type: "native",
+          token_endpoint_auth_method: "none",
         },
       });
 

@@ -99,6 +99,8 @@ export async function startDisposableIssuer({
           database: join(directory, "issuer.sqlite"),
           host: "127.0.0.1",
           port,
+          trustProxy: false,
+          allowInsecureHttp: false,
         },
         { cimdTransport },
       ),
@@ -130,7 +132,13 @@ export async function startDisposableIssuer({
           return yield* Effect.gen(function* () {
             for (const resource of resources) yield* admin.createResource(resource);
 
-            return yield* admin.create({ ...client, confidential: true, native: true });
+            return yield* admin.create({
+              client_name: client.name,
+              redirect_uris: [client.redirect],
+              resources: client.resources,
+              token_endpoint_auth_method: "client_secret_basic",
+              application_type: "native",
+            });
           }).pipe(
             Effect.provideService(CurrentOwner, {
               userId,

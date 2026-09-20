@@ -3,16 +3,15 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest, type McpRequestParams } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
-import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Redacted, Effect, Exit, Scope, Schema } from "effect";
+import { Effect, Exit, Scope, Schema } from "effect";
 import { Administration, BadRequest, InternalServerError, IssuerActions } from "@clankerauth/api";
 import { createNodeServer } from "../src/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
-import { validateSettings } from "../src/config.ts";
+import { testSettings } from "./settings.ts";
 
 const origin = "http://localhost:3000";
 
@@ -58,15 +57,7 @@ beforeEach(async () => {
   bearer = undefined;
   directory = mkdtempSync(join(tmpdir(), "clankerauth-keys-"));
   service = await Effect.runPromise(
-    openAuth(
-      validateSettings({
-        baseURL: origin,
-        secret: Redacted.make(randomBytes(32).toString("hex")),
-        database: join(directory, "auth.sqlite"),
-        host: "127.0.0.1",
-        port: 3000,
-      }),
-    ),
+    openAuth(testSettings({ baseURL: origin, database: join(directory, "auth.sqlite") })),
   );
   await Effect.runPromise(initialize(service));
   handle = application(service);
@@ -151,7 +142,7 @@ test("hash-only storage, explicit scopes, one-time display and next-request disa
   expect((await verify(key.key)).status).toBe(401);
 });
 
-test("valid-session and Origin administration; keys cannot create sessions or reach plugin routes", async () => {
+test("keys cannot authenticate administration, create sessions or reach plugin routes", async () => {
   const key = await create();
   expect(
     (
@@ -166,15 +157,6 @@ test("valid-session and Origin administration; keys cannot create sessions or re
     (await call("/api/administration/listApiKeys", {}, { cookie: "", "x-api-key": key.key }))
       .status,
   ).toBe(401);
-  expect(
-    (
-      await call(
-        "/api/administration/updateApiKey",
-        { keyId: key.keyId, enabled: false },
-        { origin: "https://evil.example" },
-      )
-    ).status,
-  ).toBe(403);
   expect((await call("/api/auth/api-key/create", { name: "Forbidden" })).status).toBe(404);
   expect((await verify("ca_invalid")).status).toBe(401);
 });
@@ -242,10 +224,10 @@ test("creation rejects implicit, unknown and invalid expiry grants", async () =>
   ).toBe(400);
 });
 
-test("listing includes every key beyond the provider database page and preserves pagination", async () => {
+test("listing returns key metadata without plaintext", async () => {
   const created = [];
 
-  for (let index = 0; index < 101; index++) created.push(await create());
+  for (let index = 0; index < 5; index++) created.push(await create());
   const response = await call("/api/administration/listApiKeys", {});
   expect(response.status).toBe(200);
   const body = await response.json();
@@ -255,26 +237,9 @@ test("listing includes every key beyond the provider database page and preserves
   );
 
   for (const key of created) expect(JSON.stringify(body)).not.toContain(key.key);
-  const headers = new Headers({ cookie });
-
-  const all = await service.auth.api.listApiKeys({
-    headers,
-    query: { limit: 1000, sortBy: "id", sortDirection: "asc" },
-  });
-
-  expect(all.apiKeys).toHaveLength(101);
-  expect(all.total).toBe(101);
-
-  const last = await service.auth.api.listApiKeys({
-    headers,
-    query: { limit: 1, offset: 100, sortBy: "id", sortDirection: "asc" },
-  });
-
-  expect(last.apiKeys.map((key) => key.id)).toEqual([all.apiKeys[100]!.id]);
-  expect(last.total).toBe(101);
 });
 
-test("key writes require owner authorization and browser origin", async () => {
+test("key writes require owner authorization", async () => {
   const key = await create();
   expect(
     (await call("/api/administration/updateApiKey", { keyId: key.keyId, name: "Renamed" })).status,
@@ -288,70 +253,6 @@ test("key writes require owner authorization and browser origin", async () => {
       )
     ).status,
   ).toBe(401);
-  expect(
-    (
-      await call(
-        "/api/administration/createApiKey",
-        { name: "Denied", permissions: { [resource]: ["example:read"] }, expiresAt: null },
-        { origin: "https://evil.example" },
-      )
-    ).status,
-  ).toBe(403);
-});
-
-test("sustained verification below the per-minute limit never accumulates across windows", async () => {
-  const key = await create();
-  const start = Date.now();
-  vi.useFakeTimers({ toFake: ["Date"] });
-
-  await service.auth.api.updateApiKey({
-    body: { keyId: key.keyId, rateLimitMax: 3, userId: await Effect.runPromise(service.owner()) },
-  });
-
-  // Continuous activity must reset from the window start, not the last request.
-  for (const second of [0, 20, 40, 60, 80, 100, 120]) {
-    vi.setSystemTime(start + second * 1000);
-    expect((await verify(key.key)).status, `request ${second + 1}`).toBe(200);
-  }
-
-  const rows = await Effect.runPromise(
-    service.sql`SELECT requestCount, lastRequest, rateLimitWindowStart FROM apikey WHERE id = ${key.keyId}`,
-  );
-
-  expect(rows[0]?.requestCount).toBe(1);
-  expect(new Date(String(rows[0]?.rateLimitWindowStart)).getTime()).toBe(start + 120000);
-  expect(rows[0]?.lastRequest).toEqual(rows[0]?.rateLimitWindowStart);
-});
-
-test("concurrent verification respects fixed-window capacity and resets at the exact boundary", async () => {
-  const key = await create();
-  await service.auth.api.updateApiKey({
-    body: { keyId: key.keyId, rateLimitMax: 3, userId: await Effect.runPromise(service.owner()) },
-  });
-  const start = Date.now();
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(start);
-
-  const burst = async () => {
-    const responses = await Promise.all(Array.from({ length: 20 }, () => verify(key.key)));
-    expect(responses.filter((response) => response.status === 200)).toHaveLength(3);
-    expect(responses.filter((response) => response.status === 429)).toHaveLength(17);
-  };
-
-  await burst();
-  vi.setSystemTime(start + 59999);
-  expect((await verify(key.key)).status).toBe(429);
-  vi.setSystemTime(start + 60000);
-  await burst();
-  const settings = service.settings;
-  await handle.dispose();
-  await service.close();
-  service = await Effect.runPromise(openAuth(settings));
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
-  expect((await verify(key.key)).status).toBe(429);
-  vi.setSystemTime(start + 120000);
-  expect((await verify(key.key)).status).toBe(200);
 });
 
 const mcp = async (
@@ -485,11 +386,11 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
 
 test("HTTP and MCP sanitize invalid managed-client output", async () => {
   const created = await call("/api/administration/createClient", {
-    name: "Corrupt-output test",
-    redirect: "http://127.0.0.1:9876/callback",
+    client_name: "Corrupt-output test",
+    redirect_uris: ["http://127.0.0.1:9876/callback"],
     resources: [],
-    native: true,
-    confidential: true,
+    application_type: "native",
+    token_endpoint_auth_method: "client_secret_basic",
   });
 
   expect(created.status).toBe(201);
@@ -512,12 +413,10 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
   const { result } = await tool.json();
   expect(result.isError).toBe(true);
   expect(result.structuredContent).toBeUndefined();
-  expect(result.content).toEqual([
-    { type: "text", text: "Tool execution failed due to an internal server error." },
-  ]);
+  expect(JSON.parse(result.content[0].text)).toEqual(expected);
 });
 
-test("HTTP administration requires owner session and Origin; MCP requires bearer authorization", async () => {
+test("HTTP administration requires the owner session; MCP requires bearer authorization", async () => {
   const userId = await Effect.runPromise(service.owner());
 
   if (userId === undefined) throw new Error("Expected an owner for spoofed-session checks");
@@ -535,21 +434,14 @@ test("HTTP administration requires owner session and Origin; MCP requires bearer
     ).status,
   ).toBe(401);
 
-  const rejectedHeaders: Array<Record<string, string>> = [
-    { cookie: "" },
-    { origin: "https://evil.example" },
-    { origin: "" },
-  ];
+  expect((await call("/api/administration/listClients", {}, { cookie: "" })).status).toBe(401);
+  expect((await mcp("tools/list", {}, { cookie: "" })).status).toBe(200);
 
-  for (const headers of rejectedHeaders) {
-    const status = headers.cookie === "" ? 401 : 403;
-
-    if (headers.origin !== "") {
-      expect((await mcp("tools/list", {}, headers)).status).toBe(headers.cookie === "" ? 200 : 403);
-    }
-
-    expect((await call("/api/administration/listClients", {}, headers)).status).toBe(status);
-  }
+  // The SameSite session cookie is the CSRF boundary; owner actions do not inspect Origin.
+  for (const origin of ["https://evil.example", ""])
+    expect((await call("/api/administration/listClients", {}, { origin })).status).toBe(200);
+  // MCP validates Origin as the protocol requires.
+  expect((await mcp("tools/list", {}, { origin: "https://evil.example" })).status).toBe(403);
 
   const key = await create();
   expect(

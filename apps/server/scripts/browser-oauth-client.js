@@ -88,11 +88,11 @@ window.mcpTest = {
     return client.callTool({
       name: "createClient",
       arguments: {
-        name: "Created by browser MCP",
-        redirect: "https://managed.example.internal/callback",
+        client_name: "Created by browser MCP",
+        redirect_uris: ["https://managed.example.internal/callback"],
         resources: [serverUrl.href],
-        confidential: false,
-        native: false,
+        token_endpoint_auth_method: "none",
+        application_type: "web",
       },
     });
   },

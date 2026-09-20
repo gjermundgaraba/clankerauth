@@ -8,34 +8,31 @@ const settings = {
   database: ":memory:",
   host: "127.0.0.1",
   port: 3000,
+  trustProxy: false,
+  allowInsecureHttp: false,
 };
 
-const load = (origins?: string) =>
+const load = (extra: Record<string, string> = {}) =>
   Effect.runPromise(
     loadSettings.pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromUnknown(
-            origins === undefined
-              ? {
-                  AUTH_BASE_URL: settings.baseURL,
-                  BETTER_AUTH_SECRET: Redacted.value(settings.secret),
-                }
-              : {
-                  AUTH_BASE_URL: settings.baseURL,
-                  BETTER_AUTH_SECRET: Redacted.value(settings.secret),
-                  MCP_ALLOWED_ORIGINS: origins,
-                },
-          ),
+          ConfigProvider.fromUnknown({
+            AUTH_BASE_URL: settings.baseURL,
+            BETTER_AUTH_SECRET: Redacted.value(settings.secret),
+            ...extra,
+          }),
         ),
       ),
     ),
   );
 
+const loadOrigins = (origins: string) => load({ MCP_ALLOWED_ORIGINS: origins });
+
 test("MCP browser origins default to no additional origins", async () => {
   expect(validateSettings(settings).mcpAllowedOrigins).toEqual([]);
   expect((await load()).mcpAllowedOrigins).toEqual([]);
-  expect((await load("  ")).mcpAllowedOrigins).toEqual([]);
+  expect((await loadOrigins("  ")).mcpAllowedOrigins).toEqual([]);
 });
 
 test("MCP browser origins accept exact HTTPS and loopback origins and deduplicate", async () => {
@@ -52,7 +49,9 @@ test("MCP browser origins accept exact HTTPS and loopback origins and deduplicat
       mcpAllowedOrigins: [...origins, "https://client.example.test"],
     }).mcpAllowedOrigins,
   ).toEqual(origins);
-  expect((await load(` ${origins.join(", ")}, ${origins[0]} `)).mcpAllowedOrigins).toEqual(origins);
+  expect((await loadOrigins(` ${origins.join(", ")}, ${origins[0]} `)).mcpAllowedOrigins).toEqual(
+    origins,
+  );
 });
 
 test.each([
@@ -82,8 +81,29 @@ test("MCP browser environment configuration rejects empty entries and invalid or
     "https://client.example.test, ,https://other.example.test",
     "https://client.example.test, *",
   ]) {
-    await expect(load(origins)).rejects.toThrow();
+    await expect(loadOrigins(origins)).rejects.toThrow();
   }
+});
+
+test("proxy trust and plain HTTP are opt-in", async () => {
+  const defaults = await load();
+  expect(defaults.trustProxy).toBe(false);
+  expect(defaults.allowInsecureHttp).toBe(false);
+  const enabled = await load({ TRUST_PROXY: "true", ALLOW_INSECURE_HTTP: "true" });
+  expect(enabled.trustProxy).toBe(true);
+  expect(enabled.allowInsecureHttp).toBe(true);
+  expect(() => validateSettings({ ...settings, baseURL: "http://auth.internal" })).toThrow();
+  expect(
+    validateSettings({ ...settings, baseURL: "http://auth.internal", allowInsecureHttp: true })
+      .baseURL,
+  ).toBe("http://auth.internal");
+  expect(
+    validateSettings({
+      ...settings,
+      mcpAllowedOrigins: ["http://client.internal"],
+      allowInsecureHttp: true,
+    }).mcpAllowedOrigins,
+  ).toEqual(["http://client.internal"]);
 });
 
 test("configuration rejects insecure issuers and empty secrets", () => {

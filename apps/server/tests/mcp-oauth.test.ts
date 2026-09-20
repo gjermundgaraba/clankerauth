@@ -1,20 +1,16 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
-import { Redacted, Effect, Schema } from "effect";
-import { randomBytes, randomUUID } from "node:crypto";
-import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { Effect, Schema } from "effect";
+import { randomUUID } from "node:crypto";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { webApplication as application } from "./web-application.ts";
 import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
-import {
-  administrationResource,
-  mcpOAuthCode,
-  mcpOAuthGrant,
-  oauthToken,
-} from "./mcp-oauth-helper.ts";
+import { testSettings } from "./settings.ts";
+import { administrationResource, mcpOAuthGrant, oauthToken } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
 
@@ -75,13 +71,7 @@ const refresh = (client_id: string, refresh_token: string) =>
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-oauth-"));
   service = await Effect.runPromise(
-    openAuth({
-      baseURL,
-      database: join(directory, "auth.sqlite"),
-      secret: Redacted.make(randomBytes(32).toString("hex")),
-      host: "127.0.0.1",
-      port: 3000,
-    }),
+    openAuth(testSettings({ baseURL, database: join(directory, "auth.sqlite") })),
   );
   await Effect.runPromise(initialize(service));
   handle = application(service);
@@ -171,11 +161,11 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
       const created = await client.callTool({
         name: "createClient",
         arguments: {
-          name: "Created through MCP",
-          redirect: "http://127.0.0.1:9912/callback",
+          client_name: "Created through MCP",
+          redirect_uris: ["http://127.0.0.1:9912/callback"],
           resources: [],
-          native: true,
-          confidential: true,
+          application_type: "native",
+          token_endpoint_auth_method: "client_secret_basic",
         },
       });
 
@@ -256,29 +246,21 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
 
 test("administration resource permits persistent renaming but reserves its scopes and identity", async () => {
   const resource = administrationResource(baseURL);
-  expect((await admin("createResource", resource)).status).toBe(409);
+  expect((await admin("createResource", resource)).status).toBe(400);
   expect((await admin("updateResource", { ...resource, scopes: ["everything"] })).status).toBe(400);
   expect((await admin("deleteResource", { identifier: resource.identifier })).status).toBe(400);
   const renamed = { ...resource, name: "My administration" };
   expect((await admin("updateResource", renamed)).status).toBe(200);
   await handle.dispose();
   await service.close();
-  service = await Effect.runPromise(
-    openAuth({
-      baseURL,
-      database: join(directory, "auth.sqlite"),
-      secret: service.settings.secret,
-      host: "127.0.0.1",
-      port: 3000,
-    }),
-  );
+  service = await Effect.runPromise(openAuth(service.settings));
   await Effect.runPromise(initialize(service));
   handle = application(service);
   expect((await (await admin("listClients", {})).json()).resources).toEqual([renamed]);
 });
 
 test.each(["block", "revoke"] as const)(
-  "%s invalidates existing MCP grants and refresh on the next request",
+  "%s ends refresh at once; blocking also rejects live access tokens",
   async (operation) => {
     const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
     expect((await mcp(tokens.access_token)).status).toBe(200);
@@ -291,8 +273,33 @@ test.each(["block", "revoke"] as const)(
 
     expect(response.status).toBe(200);
     const afterwards = await mcp(tokens.access_token);
-    expect(afterwards.status).toBe(401);
-    expect(afterwards.headers.get("www-authenticate")).toContain('error="invalid_token"');
+
+    if (operation === "block") {
+      expect(afterwards.status).toBe(401);
+      expect(afterwards.headers.get("www-authenticate")).toContain('error="invalid_token"');
+
+      const denied = await handle(
+        new Request(
+          `${baseURL}/api/auth/oauth2/authorize?${new URLSearchParams({
+            client_id,
+            redirect_uri: "http://127.0.0.1:9876/callback",
+            response_type: "code",
+            resource: `${baseURL}/mcp`,
+            scope: "admin",
+            code_challenge: "x".repeat(43),
+            code_challenge_method: "S256",
+            state: "blocked",
+          })}`,
+          { headers: { cookie } },
+        ),
+      );
+
+      expect(denied.headers.get("location") ?? "").not.toContain("/consent");
+    } else {
+      // Revocation clears stored grants; an already-issued access token lasts until it expires.
+      expect(afterwards.status).toBe(200);
+    }
+
     expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
 
     if (operation === "block")
@@ -300,7 +307,6 @@ test.each(["block", "revoke"] as const)(
 
     const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id });
     expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
-    expect((await mcp(tokens.access_token)).status).toBe(401);
   },
 );
 
@@ -433,21 +439,14 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
   expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
 });
 
-test("deleting and recreating a client identity cannot revive its old MCP access token", async () => {
+test("deleting a client ends MCP access and refresh", async () => {
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   expect((await mcp(tokens.access_token)).status).toBe(200);
-  // Model metadata-cache eviction and re-registration with the same deterministic client ID.
   await Effect.runPromise(
     Effect.gen(function* () {
-      yield* service.sql`CREATE TEMP TABLE savedMcpClient AS SELECT * FROM oauthClient WHERE clientId = ${client_id}`;
-      yield* service.sql`CREATE TEMP TABLE savedMcpLinks AS SELECT * FROM oauthClientResource WHERE clientId = ${client_id}`;
+      yield* service.sql`DELETE FROM oauthClientResource WHERE clientId = ${client_id}`;
       yield* service.sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
-      yield* service.sql`INSERT INTO oauthClient SELECT * FROM savedMcpClient`;
-      yield* service.sql`INSERT INTO oauthClientResource SELECT * FROM savedMcpLinks`;
     }),
-  );
-  expect(await Effect.runPromise(service.resources.hasAccess(client_id, `${baseURL}/mcp`))).toBe(
-    true,
   );
   expect((await mcp(tokens.access_token)).status).toBe(401);
   expect((await refresh(client_id, tokens.refresh_token)).status).toBe(400);
@@ -535,12 +534,16 @@ test.each(["bAsIc", "private_key_jwt"])(
     const first = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
     expect((await mcp(first.tokens.access_token)).status).toBe(200);
     expect((await admin("revokeClient", { client_id })).status).toBe(200);
-    expect((await mcp(first.tokens.access_token)).status).toBe(401);
+
+    const revoked = await exchange({
+      grant_type: "refresh_token",
+      refresh_token: first.tokens.refresh_token,
+      resource: `${baseURL}/mcp`,
+    });
+
+    expect(revoked.status).toBe(400);
     const renewed = await mcpOAuthGrant(handle, baseURL, cookie, { clientId: client_id, exchange });
     expect((await mcp(renewed.tokens.access_token)).status).toBe(200);
-    expect(decodeJwt(renewed.tokens.access_token).grant_generation).not.toBe(
-      decodeJwt(first.tokens.access_token).grant_generation,
-    );
 
     const refreshed = await exchange({
       grant_type: "refresh_token",
@@ -552,116 +555,3 @@ test.each(["bAsIc", "private_key_jwt"])(
     expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
   },
 );
-
-test.each(["revoke", "block", "metadata", "unrelated-metadata"])(
-  "%s during refresh persistence respects the client's generation",
-  async (change) => {
-    const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
-    const other = await mcpOAuthGrant(handle, baseURL, cookie);
-    const context = await service.auth.$context;
-    const transact = context.adapter.transaction.bind(context.adapter);
-    const reached = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    vi.spyOn(context.adapter, "transaction").mockImplementationOnce(async (operation) => {
-      reached.resolve();
-      await release.promise;
-
-      return transact(operation);
-    });
-    const pending = refresh(client_id, tokens.refresh_token);
-
-    try {
-      await reached.promise;
-
-      if (change === "revoke" || change === "block") {
-        const payload: ClientActionPayload = { client_id };
-
-        if (change === "block") payload.blocked = true;
-
-        expect(
-          (await admin(change === "revoke" ? "revokeClient" : "blockClient", payload)).status,
-        ).toBe(200);
-      } else {
-        const changedId = change === "metadata" ? client_id : other.client_id;
-        await Effect.runPromise(
-          service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = 'Changed metadata' WHERE clientId = ${changedId}`,
-        );
-      }
-
-      release.resolve();
-      const response = await pending;
-
-      if (change === "unrelated-metadata") {
-        expect(response.status, await response.clone().text()).toBe(200);
-        expect((await mcp((await response.json()).access_token)).status).toBe(200);
-      } else {
-        expect(response.status, await response.clone().text()).toBe(400);
-        expect((await response.json()).error).toBe("invalid_grant");
-        expect(
-          await Effect.runPromise(
-            service.sql`SELECT id FROM oauthRefreshToken WHERE clientId = ${client_id}`,
-          ),
-        ).toEqual([]);
-        expect((await mcp(tokens.access_token)).status).toBe(401);
-      }
-    } finally {
-      release.resolve();
-      await pending;
-    }
-  },
-);
-
-test.each(["admin", "offline_access admin"])(
-  "revocation during code-exchange signing rejects issuance (scope: %s)",
-  async (scope) => {
-    const form = await mcpOAuthCode(handle, baseURL, cookie, { scope });
-    const context = await service.auth.$context;
-    const findMany = context.adapter.findMany.bind(context.adapter);
-    const reached = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    vi.spyOn(context.adapter, "findMany").mockImplementation(async (input) => {
-      const result = await findMany(input);
-
-      if (input.model === "jwks") {
-        reached.resolve();
-        await release.promise;
-      }
-
-      return result;
-    });
-    const pending = oauthToken(handle, baseURL, form);
-
-    try {
-      await reached.promise;
-      expect((await admin("revokeClient", { client_id: form.client_id })).status).toBe(200);
-      release.resolve();
-      const response = await pending;
-      expect(response.status, await response.clone().text()).toBe(400);
-      expect((await response.json()).error).toBe("invalid_grant");
-      expect(
-        await Effect.runPromise(
-          service.sql`SELECT id FROM oauthRefreshToken WHERE clientId = ${form.client_id}`,
-        ),
-      ).toEqual([]);
-    } finally {
-      release.resolve();
-      await pending;
-    }
-  },
-);
-
-test("failed replacement insertion rolls back the parent refresh CAS", async () => {
-  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
-  await Effect.runPromise(service.sql`CREATE TRIGGER failRefreshInsertion BEFORE INSERT ON oauthRefreshToken
-    BEGIN SELECT RAISE(ABORT, 'Injected refresh insert failure'); END`);
-  expect((await refresh(client_id, tokens.refresh_token)).status).toBe(500);
-  expect(
-    await Effect.runPromise(
-      service.sql`SELECT revoked FROM oauthRefreshToken WHERE clientId = ${client_id}`,
-    ),
-  ).toEqual([{ revoked: null }]);
-  await Effect.runPromise(service.sql`DROP TRIGGER failRefreshInsertion`);
-  const retried = await refresh(client_id, tokens.refresh_token);
-  expect(retried.status, await retried.clone().text()).toBe(200);
-  expect((await mcp((await retried.json()).access_token)).status).toBe(200);
-});

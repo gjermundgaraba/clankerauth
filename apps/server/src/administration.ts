@@ -1,77 +1,71 @@
 import { Effect, Schema } from "effect";
 import { apiError, provider } from "./api-errors.ts";
-import {
-  BadRequest,
-  type ClientInput,
-  type ClientBlockInput,
-  type ClientId,
-  type ClientAccessInput,
-  type Resource,
-  type ResourceId,
-  type SetupInput,
+import type {
+  ClientInput,
+  ClientUpdateInput,
+  ClientBlockInput,
+  ClientId,
+  ClientAccessInput,
+  Resource,
+  ResourceId,
+  SetupInput,
 } from "@clankerauth/api";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
+import { ResponseCookies } from "./response-cookies.ts";
 import { createOwner, type Service } from "./auth.ts";
+
+const ClientRow = Schema.Struct({
+  clientId: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  redirectUris: Schema.fromJsonString(Schema.Array(Schema.String)),
+  tokenEndpointAuthMethod: Schema.NullOr(Schema.String),
+  applicationType: Schema.NullOr(Schema.String),
+  scopes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
+  grantTypes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
+  disabled: Schema.NullOr(Schema.Number),
+  clientDiscoveryId: Schema.NullOr(Schema.String),
+  userId: Schema.NullOr(Schema.String),
+});
+
+const decodeClients = Schema.decodeUnknownEffect(Schema.Array(ClientRow));
 
 export function administration(service: Service) {
   const { auth, settings } = service;
 
   return {
     setup: Effect.fn("Administration.setup")(function* (input: typeof SetupInput.Type) {
-      yield* createOwner(service, input).pipe(Effect.mapError(apiError));
+      const cookies = yield* createOwner(service, input).pipe(Effect.mapError(apiError));
+      yield* (yield* ResponseCookies).add(cookies);
 
       return { created: true };
     }),
+    // The provider lists only the session owner's clients; automatic clients have no owner.
     list: Effect.fn("Administration.list")(function* () {
-      const { providerHeaders, email } = yield* CurrentOwner;
-      const headers = yield* providerHeaders;
-
-      const managed = yield* provider(() => auth.api.getOAuthClients({ headers }));
+      const { email } = yield* CurrentOwner;
 
       const rows = yield* service.sql`
-        SELECT p.clientId AS client_id, p.source AS onboarding, p.blocked,
-          c.name, c.tokenEndpointAuthMethod, c.scopes, c.grantTypes,
-          CASE WHEN c.clientId IS NULL THEN '[]' ELSE c.redirectUris END AS redirectUris
-        FROM clientOnboarding p LEFT JOIN oauthClient c ON c.clientId = p.clientId
+        SELECT clientId, name, redirectUris, tokenEndpointAuthMethod, applicationType, scopes,
+          grantTypes, disabled, clientDiscoveryId, userId
+        FROM oauthClient ORDER BY createdAt, clientId
       `.pipe(Effect.mapError(apiError));
 
-      const automatic = (yield* Schema.decodeUnknownEffect(
-        Schema.Array(
-          Schema.Struct({
-            client_id: Schema.String,
-            onboarding: Schema.Literals(["dcr", "cimd"]),
-            blocked: Schema.Number,
-            name: Schema.NullOr(Schema.String),
-            redirectUris: Schema.fromJsonString(Schema.Array(Schema.String)),
-            tokenEndpointAuthMethod: Schema.NullOr(Schema.String),
-            scopes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
-            grantTypes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
-          }),
-        ),
-      )(rows).pipe(Effect.mapError(apiError))).map((row) => ({
-        client_id: row.client_id,
-        onboarding: row.onboarding,
-        blocked: row.blocked !== 0,
+      const clients = (yield* decodeClients(rows).pipe(Effect.mapError(apiError))).map((row) => ({
+        client_id: row.clientId,
+        onboarding:
+          row.clientDiscoveryId !== null
+            ? ("cimd" as const)
+            : row.userId === null
+              ? ("dcr" as const)
+              : ("managed" as const),
+        blocked: row.disabled === 1,
         client_name: row.name ?? undefined,
         redirect_uris: row.redirectUris,
         token_endpoint_auth_method: row.tokenEndpointAuthMethod ?? undefined,
+        application_type: row.applicationType,
         scope: row.scopes?.join(" "),
         grant_types: row.grantTypes ?? undefined,
       }));
-
-      const automaticIds = new Set(automatic.map((client) => client.client_id));
-
-      const clients = [
-        ...(managed ?? [])
-          .filter((client) => !automaticIds.has(client.client_id))
-          .map((client) => ({
-            ...client,
-            onboarding: "managed" as const,
-            blocked: client.disabled === true,
-          })),
-        ...automatic,
-      ];
 
       const catalog = yield* Effect.all({
         resources: service.resources.list(),
@@ -92,11 +86,6 @@ export function administration(service: Service) {
     create: Effect.fn("Administration.create")(function* (input: typeof ClientInput.Type) {
       const { providerHeaders } = yield* CurrentOwner;
 
-      if (!input.name.trim() || input.name.length > 100)
-        return yield* Effect.fail(
-          new BadRequest({ error: "Client names require 1–100 characters" }),
-        );
-
       const scopes = yield* service.resources
         .scopesFor(input.resources)
         .pipe(Effect.mapError(apiError));
@@ -108,10 +97,10 @@ export function administration(service: Service) {
         auth.api.adminCreateOAuthClient({
           headers,
           body: {
-            client_name: input.name.trim(),
-            redirect_uris: [input.redirect],
-            token_endpoint_auth_method: input.confidential ? "client_secret_basic" : "none",
-            application_type: input.native ? "native" : "web",
+            client_name: input.client_name,
+            redirect_uris: [...input.redirect_uris],
+            token_endpoint_auth_method: input.token_endpoint_auth_method,
+            application_type: input.application_type,
             grant_types: ["authorization_code", "refresh_token"],
             scope: scopes.join(" "),
             // Owner-registered clients are first party: no consent screen.
@@ -130,6 +119,24 @@ export function administration(service: Service) {
       );
 
       return client;
+    }),
+    update: Effect.fn("Administration.update")(function* (input: typeof ClientUpdateInput.Type) {
+      const { providerHeaders } = yield* CurrentOwner;
+      const headers = yield* providerHeaders;
+
+      return yield* provider(() =>
+        auth.api.updateOAuthClient({
+          headers,
+          body: {
+            client_id: input.client_id,
+            update: {
+              client_name: input.client_name,
+              redirect_uris: [...input.redirect_uris],
+              application_type: input.application_type,
+            },
+          },
+        }),
+      );
     }),
     access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
       const { providerHeaders } = yield* CurrentOwner;
@@ -177,12 +184,12 @@ export function administration(service: Service) {
     revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
       yield* CurrentOwner;
 
-      return yield* service.onboarding.revoke(input.client_id).pipe(Effect.mapError(apiError));
+      return yield* service.clients.revoke(input.client_id).pipe(Effect.mapError(apiError));
     }),
     block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
       yield* CurrentOwner;
 
-      return yield* service.onboarding
+      return yield* service.clients
         .block(input.client_id, input.blocked)
         .pipe(Effect.mapError(apiError));
     }),

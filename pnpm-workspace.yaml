@@ -23,6 +23,7 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.5
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.82.0
+  zod: 4.6.4
 
 overrides:
   vite@*: "catalog:"
@@ -32,9 +33,6 @@ peerDependencyRules:
     vite: "*"
   allowAny:
     - vite
-patchedDependencies:
-  "@better-auth/api-key@1.7.5": patches/@better-auth__api-key@1.7.5.patch
-  "@better-auth/oauth-provider@1.7.5": patches/@better-auth__oauth-provider@1.7.5.patch
 # Registry releases wait one day unless explicitly approved below.
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:

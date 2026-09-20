@@ -103,7 +103,7 @@ try {
 
   assert.equal(setup.status, 201);
   assert.deepEqual(await setup.json(), { created: true });
-  assert.equal(setup.headers.has("set-cookie"), false);
+  assert.equal(setup.headers.has("set-cookie"), true);
   const signedIn = await login(password);
   assert.equal(signedIn.status, 200);
 

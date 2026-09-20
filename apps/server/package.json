@@ -27,7 +27,8 @@
     "better-call": "catalog:",
     "effect": "catalog:",
     "jose": "catalog:",
-    "kysely": "catalog:"
+    "kysely": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",

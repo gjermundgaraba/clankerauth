@@ -2,7 +2,7 @@ import { Context, Effect, Match, Schema, type Scope } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { CurrentPrincipal, type Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
-import { Forbidden, Unauthorized } from "@clankerauth/api";
+import { Unauthorized } from "@clankerauth/api";
 import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
 import { providerSession } from "./provider-session.ts";
 import type { Service } from "./auth.ts";
@@ -20,7 +20,7 @@ export class CurrentOwner extends Context.Service<
 const fail = (error: ReturnType<typeof apiError>) =>
   Effect.flatMap(apiErrorResponse(error), Effect.fail);
 
-/** Dashboard HTTP: the issuer session cookie and the configured Origin. */
+/** Dashboard HTTP: the issuer's SameSite session cookie. */
 export const sessionOwner = (service: Service) =>
   Authentication.middleware(
     CurrentOwner,
@@ -31,9 +31,6 @@ export const sessionOwner = (service: Service) =>
 
       if (!session)
         return yield* Effect.fail(new Unauthorized({ error: "Owner session required" }));
-
-      if (request.headers.origin !== service.settings.baseURL)
-        return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
 
       return {
         providerHeaders: Effect.succeed(headers),
@@ -46,9 +43,8 @@ export const sessionOwner = (service: Service) =>
 const OwnerRow = Schema.Struct({ id: Schema.String, email: Schema.String });
 
 /** MCP: combine with the resource middleware that verifies the bearer token and
- * supplies CurrentPrincipal. The token's grant generation must match the live
- * client row, so block, revoke, delete and re-registration all take effect on
- * the next request, answered with an invalid_token challenge.
+ * supplies CurrentPrincipal. The token's client must still exist and not be blocked;
+ * revocation of already-issued access tokens takes effect at their expiry.
  */
 export const bearerOwner = (service: Service, resource: Resource.Resource) => {
   const rejected = () => new Unauthorized({ error: "Owner authorization required" });
@@ -61,13 +57,8 @@ export const bearerOwner = (service: Service, resource: Resource.Resource) => {
       if (principal.actor.kind !== "client") return yield* Effect.fail(rejected());
 
       const rows = yield* service.sql`SELECT u.id, u.email FROM user u
-      JOIN serviceOwner o ON o.userId = u.id
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
-      WHERE o.id = 1 AND u.id = ${principal.subject} AND c.disabled IS NOT 1
-        AND c.grantGeneration = ${principal.actor.generation}
-        AND NOT EXISTS (SELECT 1 FROM clientOnboarding p WHERE p.clientId = c.clientId AND p.blocked = 1)`.pipe(
-        Effect.mapError(apiError),
-      );
+      WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`.pipe(Effect.mapError(apiError));
 
       if (!rows[0]) return yield* Effect.fail(rejected());
 

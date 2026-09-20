@@ -8,17 +8,12 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { OpenApi } from "effect/unstable/httpapi";
-import {
-  Http,
-  Administration,
-  IssuerActions,
-  Forbidden,
-  InternalServerError,
-} from "@clankerauth/api";
+import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/api";
 import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { bearerOwner, sessionOwner } from "./current-owner.ts";
+import { responseCookies } from "./response-cookies.ts";
 import { mcpResource, mcpScope } from "./resources.ts";
 import type { Service } from "./auth.ts";
 
@@ -31,6 +26,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
       const owner = Administration.implement({
         listClients: admin.list,
         createClient: admin.create,
+        updateClient: admin.update,
         deleteClient: admin.delete,
         revokeClient: admin.revoke,
         blockClient: admin.block,
@@ -53,15 +49,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
               () => new InternalServerError({ error: "Request could not be completed" }),
             ),
           ),
-        setupOwner: (input) =>
-          Effect.gen(function* () {
-            const request = yield* HttpServerRequest.HttpServerRequest;
-
-            if (request.headers.origin !== service.settings.baseURL)
-              return yield* Effect.fail(new Forbidden({ error: "Invalid origin" }));
-
-            return yield* admin.setup(input);
-          }),
+        setupOwner: admin.setup,
         verifyApiKey: ({ resource }) =>
           Effect.gen(function* () {
             const request = yield* HttpServerRequest.HttpServerRequest;
@@ -103,13 +91,13 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
           "/openapi.json",
           HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
         ),
-        Http.layer(issuer),
+        Http.layer(issuer).pipe(Layer.provide(responseCookies.layer)),
       );
 
       const mcpRoutes = ActionMcp.layerHttp(
         {
           name: "clankerauth-admin",
-          version: "0.3.0",
+          version: "0.4.0",
           path: "/mcp",
           // Keep the existing protocol allowlist; native streaming does not expand it.
           protocols: [

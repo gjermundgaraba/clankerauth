@@ -119,7 +119,7 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
   const audience = "https://notes.example/api";
 
   const sign = (kid: string, key: CryptoKey) =>
-    new SignJWT({ client_id: "web", grant_generation: "g1", scope: "read" })
+    new SignJWT({ client_id: "web", scope: "read" })
       .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid })
       .setIssuer(issuer)
       .setAudience(audience)

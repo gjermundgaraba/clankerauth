@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-node",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Effect-native Clanker Auth verification and browser sessions, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
