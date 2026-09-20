@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@better-auth/oauth-provider": "catalog:",
-    "@clankerauth/api": "workspace:*",
+    "@clankerauth/admin-api": "workspace:*",
     "better-auth": "catalog:",
     "effect": "catalog:",
     "playwright": "catalog:",

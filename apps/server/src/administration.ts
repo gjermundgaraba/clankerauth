@@ -9,7 +9,7 @@ import type {
   Resource,
   ResourceId,
   SetupInput,
-} from "@clankerauth/api";
+} from "@clankerauth/admin-api";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
 import { ResponseCookies } from "./response-cookies.ts";

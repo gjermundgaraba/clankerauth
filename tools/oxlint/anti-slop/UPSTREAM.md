@@ -37,7 +37,7 @@ Registered in root `vite.config.ts` under `lint.jsPlugins`, with matching `lint.
   are not blanket-exempt from tagged-construction rules. Independent protocol
   fixtures may use a documented, narrow exception when encoding the expected
   value would make the contract assertion circular.
-- `packages/node` is now Effect-native, so Effect rules remain enabled there.
+- `packages/sdk` is now Effect-native, so Effect rules remain enabled there.
 
 ## Regression tests
 

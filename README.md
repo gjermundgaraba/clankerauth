@@ -77,7 +77,7 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
 
-[`@gjermundgaraba/clankerauth-node`](packages/node/README.md) provides Effect-native access-token and API-key verification and browser login with server-held tokens. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only; see its README for the breaking replacement of the Promise SDK. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification and browser login with server-held tokens. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only; see its README for the breaking replacement of the Promise SDK. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
 
 ## Develop
 
@@ -89,10 +89,10 @@ vp run ready    # format, lint, types, builds, all tests
 vp run test:lint # lint-policy regression fixtures
 ```
 
-- `packages/api`: custom API contracts defined with effect-actions, shared by server and dashboard.
+- `packages/admin-api`: the issuer administration contract defined with effect-actions, shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
-- `packages/node`: the `@gjermundgaraba/clankerauth-node` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
+- `packages/sdk`: the `@gjermundgaraba/clankerauth-sdk` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
 - `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it. A `v*` tag publishes both packages at that version.
 
 ### effect-actions integration

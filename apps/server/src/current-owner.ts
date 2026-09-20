@@ -1,8 +1,8 @@
 import { Context, Effect, Match, Schema, type Scope } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { CurrentPrincipal, type Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
-import { Unauthorized } from "@clankerauth/api";
+import { CurrentPrincipal, type Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import { Unauthorized } from "@clankerauth/admin-api";
 import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
 import { providerSession } from "./provider-session.ts";
 import type { Service } from "./auth.ts";

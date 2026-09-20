@@ -4,9 +4,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN npm install -g "$(node -p "require('./package.json').packageManager")"
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/web/package.json ./apps/web/package.json
-COPY packages/api/package.json ./packages/api/package.json
+COPY packages/admin-api/package.json ./packages/admin-api/package.json
 COPY packages/dev/package.json ./packages/dev/package.json
-COPY packages/node/package.json ./packages/node/package.json
+COPY packages/sdk/package.json ./packages/sdk/package.json
 COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 COPY . .

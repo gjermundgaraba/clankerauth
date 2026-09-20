@@ -8,7 +8,7 @@ import {
   type ClientCredentials,
   type MachineKey,
   type ResourceSummary,
-} from "@clankerauth/api";
+} from "@clankerauth/admin-api";
 import { Effect, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";

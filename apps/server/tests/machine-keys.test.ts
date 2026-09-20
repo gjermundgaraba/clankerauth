@@ -7,7 +7,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Exit, Scope, Schema } from "effect";
-import { Administration, BadRequest, InternalServerError, IssuerActions } from "@clankerauth/api";
+import {
+  Administration,
+  BadRequest,
+  InternalServerError,
+  IssuerActions,
+} from "@clankerauth/admin-api";
 import { createNodeServer } from "../src/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";

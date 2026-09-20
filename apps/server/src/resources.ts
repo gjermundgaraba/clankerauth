@@ -3,7 +3,7 @@ import { normalizeError, type Sql } from "./database.ts";
 import { APIError } from "better-auth/api";
 import type { Auth } from "better-auth";
 import type { oauthProvider } from "@better-auth/oauth-provider";
-import { ClientAccess, Resource } from "@clankerauth/api";
+import { ClientAccess, Resource } from "@clankerauth/admin-api";
 
 export const mcpScope = "admin";
 

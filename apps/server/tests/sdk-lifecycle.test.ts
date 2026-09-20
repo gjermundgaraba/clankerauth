@@ -16,8 +16,8 @@ import {
   SessionStore,
   Unauthorized,
   Forbidden,
-} from "@gjermundgaraba/clankerauth-node";
-import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+} from "@gjermundgaraba/clankerauth-sdk";
+import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { LoginResponse, memoryStore, run, webBrowser, withHttp } from "./sdk-support.ts";
 
 const origin = "http://127.0.0.1:7337";
@@ -56,7 +56,7 @@ type CallBody =
   | { readonly keyId: string; readonly enabled: boolean };
 
 const startServer = async () => {
-  const directory = await mkdtemp(join(tmpdir(), "clankerauth-node-"));
+  const directory = await mkdtemp(join(tmpdir(), "clankerauth-sdk-"));
 
   let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();

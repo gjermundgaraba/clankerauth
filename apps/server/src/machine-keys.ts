@@ -8,7 +8,7 @@ import {
   type ApiKeyId,
   type ApiKeyInput,
   type ApiKeyUpdate,
-} from "@clankerauth/api";
+} from "@clankerauth/admin-api";
 import type { Service } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";

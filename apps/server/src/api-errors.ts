@@ -10,7 +10,7 @@ import {
   NotFound,
   ServiceUnavailable,
   TooManyRequests,
-} from "@clankerauth/api";
+} from "@clankerauth/admin-api";
 
 const isApiError = (cause: unknown): cause is (typeof errors)[number]["Type"] =>
   errors.some((schema) => Schema.is(schema)(cause));

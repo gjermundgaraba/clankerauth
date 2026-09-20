@@ -26,7 +26,7 @@
     "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
-    "@clankerauth/api": "workspace:*",
+    "@clankerauth/admin-api": "workspace:*",
     "@clankerauth/server": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@opentelemetry/api": "catalog:",

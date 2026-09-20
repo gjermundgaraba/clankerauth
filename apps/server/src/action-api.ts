@@ -8,8 +8,8 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { OpenApi } from "effect/unstable/httpapi";
-import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/api";
-import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/admin-api";
+import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { administration } from "./administration.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { bearerOwner, sessionOwner } from "./current-owner.ts";

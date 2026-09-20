@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { Schema } from "effect";
-import { BadRequest, InternalServerError } from "@clankerauth/api";
+import { BadRequest, InternalServerError } from "@clankerauth/admin-api";
 
 test("encoded error expectations preserve exact wire assertions", async () => {
   const expected = Schema.encodeSync(InternalServerError)(

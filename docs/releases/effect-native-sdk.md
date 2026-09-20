@@ -40,4 +40,4 @@ Operational refresh errors now remain 503 outcomes rather than being disguised a
 
 External consuming repositories were intentionally not changed. Migrate their dependency versions, composition roots, error handling and persistence adapters before adopting this release. Remove Promise/Effect round trips rather than wrapping the retired API.
 
-See [the package README](../../packages/node/README.md) for integration examples. The issuer verifies administration MCP tokens with this SDK; its dashboard keeps the issuer session.
+See [the package README](../../packages/sdk/README.md) for integration examples. The issuer verifies administration MCP tokens with this SDK; its dashboard keeps the issuer session.

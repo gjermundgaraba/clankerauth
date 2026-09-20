@@ -1,12 +1,12 @@
 {
-  "name": "@gjermundgaraba/clankerauth-node",
+  "name": "@gjermundgaraba/clankerauth-sdk",
   "version": "0.4.0",
   "description": "Effect-native Clanker Auth verification and browser sessions, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gjermundgaraba/clankerauth.git",
-    "directory": "packages/node"
+    "directory": "packages/sdk"
   },
   "files": [
     "dist"

@@ -1,8 +1,8 @@
 import { onTestFinished } from "vite-plus/test";
 import { Cause, Effect, Exit, Schema, Layer } from "effect";
 import { FetchHttpClient, HttpServerRequest, HttpRouter, HttpServer } from "effect/unstable/http";
-import { SessionStore, type BrowserSession } from "@gjermundgaraba/clankerauth-node";
-import { BrowserActions } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { SessionStore, type BrowserSession } from "@gjermundgaraba/clankerauth-sdk";
+import { BrowserActions } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 
 export const LoginResponse = Schema.Struct({ url: Schema.String });
 

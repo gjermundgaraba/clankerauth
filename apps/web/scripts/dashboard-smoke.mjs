@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { ServiceUnavailable } from "@clankerauth/api";
+import { ServiceUnavailable } from "@clankerauth/admin-api";
 import { chromium } from "playwright";
 import { preview } from "vite";
 

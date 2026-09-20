@@ -1,4 +1,4 @@
-# @gjermundgaraba/clankerauth-node
+# @gjermundgaraba/clankerauth-sdk
 
 Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification and browser sessions. Verifies JWT access tokens and API keys and runs browser login with encrypted server-held credentials. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
 
@@ -9,7 +9,7 @@ Published to GitHub Packages. Configure the scope and keep the credential in you
 ```sh
 echo '@gjermundgaraba:registry=https://npm.pkg.github.com' >> .npmrc
 echo '//npm.pkg.github.com/:_authToken=${GH_TOKEN}' >> ~/.npmrc
-vp add @gjermundgaraba/clankerauth-node
+vp add @gjermundgaraba/clankerauth-sdk
 ```
 
 Install Effect in the application:
@@ -26,7 +26,7 @@ Core consumers do not need effect-actions or `skipLibCheck`.
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { McpProtocol } from "effect/unstable/ai";
-import { Verifier } from "@gjermundgaraba/clankerauth-node";
+import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
 const makeVerifier = Verifier.make({
   issuer: "https://auth.internal/api/auth",
@@ -52,7 +52,7 @@ Register a resource in the Clanker Auth dashboard. Its identifier is the exact a
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { McpProtocol } from "effect/unstable/ai";
-import { Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 
 // Http and app are your effect-actions HTTP binding and implemented group.
@@ -91,8 +91,8 @@ An action reads identity from `CurrentPrincipal` and enforces its own permission
 
 ```ts
 import { Effect } from "effect";
-import { Forbidden } from "@gjermundgaraba/clankerauth-node";
-import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { Forbidden } from "@gjermundgaraba/clankerauth-sdk";
+import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 
 const write = Effect.gen(function* () {
   const principal = yield* CurrentPrincipal;
@@ -126,8 +126,8 @@ Map expected database failures to `StoreError({ operation, cause })` at your per
 
 ```ts
 import { Effect, Layer, Redacted } from "effect";
-import { BrowserSession } from "@gjermundgaraba/clankerauth-node";
-import { BrowserActions, Resource } from "@gjermundgaraba/clankerauth-node/effect-actions";
+import { BrowserSession } from "@gjermundgaraba/clankerauth-sdk";
+import { BrowserActions, Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 
 // Inside application construction, with HttpClient and SessionStore provided:
 const browser =
@@ -159,7 +159,7 @@ This example's construction fragment belongs inside `Effect.gen`. Supply configu
 - `POST /auth/browser/session`: returns the subject, scopes and issuer, or `Unauthorized`.
 - `POST /auth/browser/logout`: ends the local session and attempts provider revocation.
 
-Login, session and logout are effect-actions, with JSON bodies (`{}` for session and logout). Browser clients import the pure `Http` contract from `@gjermundgaraba/clankerauth-node/browser-api`. Only the OAuth callback is an ordinary HTTP endpoint. The callback uses the exact configured URL; action routes live under `/auth/browser`. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback returns the sanitized HTTP error to avoid a redirect loop. Login destinations must be same-origin paths other than the callback pathname. The host sets request-body limits, for example `HttpIncomingMessage.MaxBodySize` on Effect's Node server (Clanker Auth's own adapter uses 64 KiB). Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
+Login, session and logout are effect-actions, with JSON bodies (`{}` for session and logout). Browser clients import the pure `Http` contract from `@gjermundgaraba/clankerauth-sdk/browser-api`. Only the OAuth callback is an ordinary HTTP endpoint. The callback uses the exact configured URL; action routes live under `/auth/browser`. Callback failures redirect to the origin root with an `auth_error` query parameter; a root-mounted callback returns the sanitized HTTP error to avoid a redirect loop. Login destinations must be same-origin paths other than the callback pathname. The host sets request-body limits, for example `HttpIncomingMessage.MaxBodySize` on Effect's Node server (Clanker Auth's own adapter uses 64 KiB). Responses are non-cacheable and use `Referrer-Policy: no-referrer`.
 
 Tokens always remain in the server-side session store, never in browser JavaScript.
 

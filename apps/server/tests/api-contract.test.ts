@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
-import { Api, BadRequest } from "@clankerauth/api";
+import { Api, BadRequest } from "@clankerauth/admin-api";
 import { webApplication as application } from "./web-application.ts";
 import { initialize, openAuth, type Service } from "../src/auth.ts";
 import { testSettings } from "./settings.ts";

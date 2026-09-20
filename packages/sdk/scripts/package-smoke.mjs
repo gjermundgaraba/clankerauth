@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 
 const { name, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 
-const directory = await mkdtemp(join(tmpdir(), "clankerauth-node-install-"));
+const directory = await mkdtemp(join(tmpdir(), "clankerauth-sdk-install-"));
 
 try {
   // pnpm resolves the workspace catalog protocol in the packed manifest; npm would not.
@@ -42,7 +42,7 @@ import { HttpClient } from "effect/unstable/http";
 import {
   Verifier, BrowserSession, SessionStore, ConfigurationError,
   type AuthenticationError, type Principal,
-} from "@gjermundgaraba/clankerauth-node";
+} from "@gjermundgaraba/clankerauth-sdk";
 const verification: Effect.Effect<Principal, AuthenticationError | ConfigurationError, HttpClient.HttpClient> =
   Verifier.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/api" })
     .pipe(Effect.flatMap(verifier => verifier.verifyToken("token")));
@@ -135,8 +135,8 @@ void makeBrowser;
     join(directory, "integration.ts"),
     `
 import { Effect } from "effect";
-import { BrowserActions, Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-node/effect-actions";
-import { Http } from "@gjermundgaraba/clankerauth-node/browser-api";
+import { BrowserActions, Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import { Http } from "@gjermundgaraba/clankerauth-sdk/browser-api";
 const make = Resource.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/api", scopes: [] });
 const subject = Effect.map(CurrentPrincipal, principal => principal.subject);
 void make;
