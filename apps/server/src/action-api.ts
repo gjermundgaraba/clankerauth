@@ -58,13 +58,13 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
       // Owner administration needs the dashboard session; issuer actions have
       // their own access rules and must work before anyone has signed in.
       const httpRoutes = Layer.mergeAll(
-        Http.layer(owner).pipe(Layer.provide(sessionOwner(service).layer)),
+        Http.layer({}, owner).pipe(Layer.provide(sessionOwner(service).layer)),
         HttpRouter.add(
           "GET",
           "/openapi.json",
           HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
         ),
-        Http.layer(issuer).pipe(Layer.provide(responseCookies.layer)),
+        Http.layer({}, issuer).pipe(Layer.provide(responseCookies.layer)),
       );
 
       const mcpRoutes = ActionMcp.layerHttp(

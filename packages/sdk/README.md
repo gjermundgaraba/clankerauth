@@ -68,9 +68,18 @@ const routes = Layer.unwrap(
 
     return Layer.mergeAll(
       notes.discovery.layer,
-      Http.layer(app, notes.session).pipe(Layer.provide(Resource.middleware(notes).layer)),
+      Http.layer({ before: notes.authorize }, app, notes.session).pipe(
+        Layer.provide(Resource.middleware(notes).layer),
+      ),
       ActionMcp.layerHttp(
-        { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
+        {
+          name: "notes",
+          version: "1.0.0",
+          path: "/mcp",
+          protocols: [McpProtocol.v2026_07_28],
+          errors: authenticationErrors,
+          before: notes.authorize,
+        },
         app,
       ).pipe(Layer.provide(Resource.middleware(notes).layer)),
     );
@@ -97,8 +106,12 @@ const Notes = ActionGroup.make(
   Action.make("write", { description: "Write a note", access: "write", success: Note }),
 );
 
-// Declared on the surface, because the surface is what renders them.
+// Declared on the surface, because the surface is what renders them — including the
+// hook's own refusals, which is why the group no longer lists `InsufficientScope`.
 const Http = ActionHttp.make({ apiPath: "/api", errors: authenticationErrors }, Notes, Session);
+
+// And bound once per surface, so no handler and no group can forget it.
+const routes = Http.layer({ before: notes.authorize }, Notes.implement(handlers), notes.session);
 ```
 
 `scopes.read` is required at verification, so a read needs nothing further. `scopes.write` is what an `access: "write"` action additionally needs; leave it out and every action passes, which is how a single-scope application is expressed. `InsufficientScope` is a 403 naming **only** the missing scope, so a refusal never enumerates the resource's permissions.
@@ -106,6 +119,8 @@ const Http = ActionHttp.make({ apiPath: "/api", errors: authenticationErrors }, 
 A forward-auth browser token carries **every** scope the resource defines, because the issuer mints it for the signed-in owner and not for a program. The write scope therefore gates agents and API keys, not the owner at a keyboard: give a read-only agent or key only `scopes.read` and the same rule refuses its writes.
 
 An action reads identity from `CurrentPrincipal`, which contains `subject`, `scopes`, `actor` — either `{ kind: "client", clientId }` or `{ kind: "key", keyId }` — and `expiresAt`: an access token's verified `exp` in epoch milliseconds, so a host bounding a connection to its credential never decodes the token again. It is `undefined` for an API key, which carries no token lifetime and is re-verified on every request; choose your own bound for those.
+
+A hook refusal is a plain declared error: effect-actions encodes it with the schema's status and `Cache-Control: no-store`, and adds no `WWW-Authenticate`. Challenge headers come from admission — `Resource.middleware` and `admit` — which is what a client onboarding through RFC 9728 reads. No current client reads the header on a scope refusal, because an MCP denial is a tool error.
 
 Middleware authenticates the request and the hook authorizes it; neither filters MCP tool discovery.
 

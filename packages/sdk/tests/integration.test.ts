@@ -23,7 +23,7 @@ import { withHttp } from "./support.ts";
 const resourceId = `${publicUrl}/`;
 
 const Actions = ActionGroup.make(
-  { name: "notes", errors: [InsufficientScope] },
+  { name: "notes" },
   Action.make("identity", {
     description: "Fixture action",
     access: "read",
@@ -52,17 +52,26 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     ),
   );
 
-  const app = Actions.implement(
-    { identity: () => identity, write: () => Effect.succeed("written") },
-    { before: resource.authorize },
-  );
+  const app = Actions.implement({
+    identity: () => identity,
+    write: () => Effect.succeed("written"),
+  });
 
   const web = HttpRouter.toWebHandler(
     Layer.mergeAll(
       resource.discovery.layer,
-      Http.layer(app, resource.session).pipe(Layer.provide(Resource.middleware(resource).layer)),
+      Http.layer({ before: resource.authorize }, app, resource.session).pipe(
+        Layer.provide(Resource.middleware(resource).layer),
+      ),
       ActionMcp.layerHttp(
-        { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
+        {
+          name: "notes",
+          version: "1.0.0",
+          path: "/mcp",
+          protocols: [McpProtocol.v2026_07_28],
+          errors: authenticationErrors,
+          before: resource.authorize,
+        },
         app,
       ).pipe(Layer.provide(Resource.middleware(resource).layer)),
     ).pipe(Layer.provide(HttpServer.layerServices)),
