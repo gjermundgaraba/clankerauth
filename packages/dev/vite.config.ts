@@ -3,6 +3,17 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export default defineConfig({
+  // Declared here rather than as a package script so it can opt out of the task cache:
+  // `vp pack` clears dist before every build, and a replayed cache writes no files, so a
+  // cached declaration emit would leave the package without `edge.d.ts` and `testing.d.ts`.
+  run: {
+    tasks: {
+      build: {
+        command: "vp pack && tsc -p tsconfig.types.json && node scripts/assets.mjs",
+        cache: false,
+      },
+    },
+  },
   pack: {
     entry: ["src/index.ts", "src/edge.ts", "src/testing.ts"],
     platform: "node",

@@ -31,7 +31,6 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack && tsc -p tsconfig.types.json && node scripts/assets.mjs",
     "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
