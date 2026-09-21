@@ -55,6 +55,7 @@ import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { McpProtocol } from "effect/unstable/ai";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import { authenticationErrors } from "@gjermundgaraba/clankerauth-sdk/errors";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 
 // Http and app are your effect-actions HTTP binding and implemented group.
@@ -98,7 +99,9 @@ An application names its scopes once and writes no authorization code. Each acti
 ```ts
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { authenticationErrors } from "@gjermundgaraba/clankerauth-sdk/errors";
+import { Session } from "@gjermundgaraba/clankerauth-sdk/session";
 
 const Notes = ActionGroup.make(
   { name: "notes" },

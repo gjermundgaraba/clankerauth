@@ -40,6 +40,15 @@ try {
   const manifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
   assert.equal(manifest.version, version);
   assert.deepEqual(manifest.dependencies ?? {}, {});
+
+  // Every entry point ships declarations; a build that emits only some of them is
+  // invisible until a consumer imports the one that is missing.
+  for (const [entry, target] of Object.entries(manifest.exports))
+    assert.ok(
+      (await readFile(join(installed, target.types), "utf8")).length > 0,
+      `Entry point ships no declarations: ${entry}`,
+    );
+
   const notices = await readFile(join(installed, "dist/THIRD_PARTY_NOTICES.txt"), "utf8");
   const headings = new Set(notices.split("\n---\n\n").map((section) => section.split("\n")[0]));
 

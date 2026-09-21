@@ -130,6 +130,42 @@ test("admission verifies outside a router and renders a ready-to-send refusal", 
   }
 });
 
+test("a resource that accepts only access tokens refuses a key by shape alone", async () => {
+  const issuer = await startIssuer();
+
+  try {
+    const resource = await Effect.runPromise(
+      withHttp(
+        Resource.make({
+          issuer: issuer.issuer,
+          publicUrl: new URL(publicUrl),
+          scopes: guarded,
+          apiKeys: false,
+        }),
+      ),
+    );
+
+    const refused = await Effect.runPromise(resource.admit(`Bearer ${issuer.key}`, "read"));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.refusal.status, 401);
+    assert.deepEqual(
+      JSON.parse(refused.refusal.body),
+      Schema.encodeSync(Unauthorized)(new Unauthorized({ message: "Authentication required" })),
+    );
+    // The issuer would have accepted this key. It was never asked: the prefix decides.
+    assert.equal(issuer.count(), 0);
+
+    // Access tokens still verify, which is the only credential such a resource takes.
+    const accepted = await Effect.runPromise(
+      resource.admit(`Bearer ${await issuer.sign({}, "")}`, "read"),
+    );
+
+    assert.equal(accepted.ok, true);
+  } finally {
+    await issuer.close();
+  }
+});
+
 test("one resource at the origin root covers every surface an MCP client asks about", async () => {
   const issuer = await startIssuer();
 

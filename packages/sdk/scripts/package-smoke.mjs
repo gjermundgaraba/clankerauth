@@ -53,7 +53,15 @@ try {
   assert.equal(manifest.sideEffects, false);
   assert.equal(manifest.peerDependenciesMeta["@gjermundgaraba/effect-actions"].optional, true);
   assert.equal(manifest.dependencies["@gjermundgaraba/effect-actions"], undefined);
-  await readFile(join(installed, "dist/index.d.ts"), "utf8");
+
+  // Every entry point ships declarations; a build that emits only some of them is
+  // invisible until a consumer imports the one that is missing.
+  for (const [entry, target] of Object.entries(manifest.exports))
+    assert.ok(
+      (await readFile(join(installed, target.types), "utf8")).length > 0,
+      `Entry point ships no declarations: ${entry}`,
+    );
+
   await writeFile(
     join(directory, "consumer.ts"),
     `

@@ -10,13 +10,11 @@ npm install --save-dev @gjermundgaraba/clankerauth-dev
 import { startDisposableIssuer } from "@gjermundgaraba/clankerauth-dev";
 
 const issuer = await startDisposableIssuer({
-  resources: [
-    { identifier: "http://127.0.0.1:8080/mcp", name: "Notes MCP", scopes: ["notes:read"] },
-  ],
+  resources: [{ identifier: "http://127.0.0.1:8080/", name: "Notes", scopes: ["notes:read"] }],
   client: {
     name: "Notes console",
     redirect: "http://localhost:5173/callback",
-    resources: ["http://127.0.0.1:8080/mcp"],
+    resources: ["http://127.0.0.1:8080/"],
   },
 });
 
@@ -61,7 +59,7 @@ To develop an app behind forward auth, pass a `cookieDomain`:
 
 ```ts
 const issuer = await startDisposableIssuer({
-  resources: [{ identifier: "http://app.notes.localhost:8080/api", name: "Notes", scopes: [] }],
+  resources: [{ identifier: "http://app.notes.localhost:8080/", name: "Notes", scopes: [] }],
   client: { name: "Notes console", redirect: "http://localhost:5173/callback", resources: [] },
   cookieDomain: "notes.localhost",
 });

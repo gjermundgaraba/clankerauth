@@ -78,7 +78,7 @@ const claims = await verifyAccessTokenRequest(requestToResourceInput(request), {
   jwksUrl: "https://auth.internal/api/auth/jwks",
   verifyOptions: {
     issuer: "https://auth.internal/api/auth",
-    audience: "https://notes.internal/mcp",
+    audience: "https://notes.internal/",
     algorithms: ["EdDSA"],
     typ: "at+jwt",
   },
@@ -95,7 +95,7 @@ POST /api/issuer/verifyApiKey
 Authorization: Bearer ca_…
 Content-Type: application/json
 
-{ "resource": "https://notes.internal/mcp" }
+{ "resource": "https://notes.internal/" }
 ```
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
@@ -189,7 +189,7 @@ curl "$AUTH_BASE_URL/api/administration/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See [the breaking 0.6.0 release notes](docs/releases/0.6.0.md) before upgrading an issuer or SDK.
+See [the breaking 0.7.0 release notes](docs/releases/0.7.0.md) before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 
