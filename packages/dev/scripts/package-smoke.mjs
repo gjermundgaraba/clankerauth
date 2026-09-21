@@ -51,10 +51,9 @@ try {
     assert.ok(headings.has(heading), `Missing bundled dependency notice: ${heading}`);
   }
 
-  const test = (await readFile(join(root, "tests/lifecycle.test.mjs"), "utf8")).replace(
-    '"../dist/index.mjs"',
-    JSON.stringify(name),
-  );
+  const test = (await readFile(join(root, "tests/lifecycle.test.mjs"), "utf8"))
+    .replace('"../dist/index.mjs"', JSON.stringify(name))
+    .replace('"../dist/edge.mjs"', JSON.stringify(`${name}/edge`));
 
   await writeFile(join(directory, "installed.test.mjs"), test);
 

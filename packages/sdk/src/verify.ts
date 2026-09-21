@@ -17,6 +17,13 @@ export interface Principal {
   readonly actor:
     | { readonly kind: "client"; readonly clientId: string }
     | { readonly kind: "key"; readonly keyId: string };
+  /**
+   * When this credential stops being valid, in epoch milliseconds: an access token's
+   * verified `exp`, so a host never decodes the token again. `undefined` for an API
+   * key, which has no token lifetime and is re-verified against the issuer on every
+   * request; a host that caches a key decision must choose its own bound.
+   */
+  readonly expiresAt: number | undefined;
 }
 
 export interface Options {
@@ -54,6 +61,7 @@ const Claims = Schema.Struct({
   sub: Schema.NonEmptyString,
   client_id: Schema.NonEmptyString,
   scope: Schema.String,
+  exp: Schema.Finite,
 });
 
 const KeyResponse = Schema.Struct({
@@ -189,6 +197,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       subject: claims.sub,
       scopes: claims.scope.split(" ").filter(Boolean),
       actor: { kind: "client", clientId: claims.client_id },
+      // `jwtVerify` already checked this claim against the current time.
+      expiresAt: claims.exp * 1000,
     } satisfies Principal;
   });
 
@@ -228,6 +238,9 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       subject: body.ownerId,
       scopes: body.scopes,
       actor: { kind: "key", keyId: body.keyId },
+      // A key's own expiry is enforced above, on every verification; it is not a
+      // lifetime a caller may hold a decision for.
+      expiresAt: undefined,
     } satisfies Principal;
   }, Effect.scoped);
 

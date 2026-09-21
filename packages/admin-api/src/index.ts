@@ -196,6 +196,7 @@ export const IssuerActions = ActionGroup.make(
   { name: "issuer", errors, schemaError },
   Action.make("setupStatus", {
     description: "Check whether the issuer needs its first owner account.",
+    access: "read",
     success: Schema.Struct({ required: Schema.Boolean }),
     mcp: false,
   }),
@@ -207,6 +208,7 @@ export const IssuerActions = ActionGroup.make(
   }),
   Action.make("verifyApiKey", {
     description: "Verify the bearer API key against one resource and return its granted scopes.",
+    access: "read",
     input: Schema.Struct({ resource: Schema.String }),
     success: Schema.Struct({
       keyId: Schema.String,
@@ -231,8 +233,8 @@ export const Administration = ActionGroup.make(
   { name: "administration", errors, schemaError },
   Action.make("listClients", {
     description: "List clients, resources and access grants.",
+    access: "read",
     success: ClientListResult,
-    mcp: { readOnly: true },
   }),
   Action.make("createClient", {
     description: "Register a first-party OAuth client. Returns its secret once when confidential.",
@@ -287,8 +289,8 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("listApiKeys", {
     description: "List API key metadata without secret values.",
+    access: "read",
     success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
-    mcp: { readOnly: true },
   }),
   Action.make("createApiKey", {
     description: "Create a scoped API key. Returns its secret once.",

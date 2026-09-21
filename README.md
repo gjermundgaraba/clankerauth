@@ -49,6 +49,8 @@ Discovery is served at `/.well-known/oauth-authorization-server/api/auth`. There
 
 Browser applications need no OAuth code of their own. Put them behind Caddy or Traefik with forward auth pointed at this issuer, and add the app's API as a **Resource**. On every browser request the proxy asks `/forward-auth`; a signed-in owner gets a fifteen-minute access token for that resource in an `Authorization` header, which the proxy copies upstream. Anyone else is sent through the issuer, which signs them in if needed, and back to the page they asked for; only page navigations (`Sec-Fetch-Mode: navigate`) are redirected, and any other request, such as a script's `fetch`, is answered `401` so the app can reload instead of chasing a cross-origin redirect. The app verifies the token exactly as it verifies MCP and API-key bearer tokens below. Requests that already carry an `Authorization` header (MCP clients, API keys) bypass forward auth, and an MCP endpoint and the discovery documents under `/.well-known` stay public so MCP clients receive the 401 challenge they onboard from; one origin then serves browsers and agents alike.
 
+Register **one** resource per application, identified by its public origin root with the trailing slash: `https://notes.home.example/`. That one resource covers `/api`, `/mcp` and any socket, so the app publishes one RFC 9728 document at `/.well-known/oauth-protected-resource`, verifies one audience, and the proxy needs one `forward_auth` block.
+
 ```caddyfile
 notes.home.example {
   @browser {
@@ -56,14 +58,14 @@ notes.home.example {
     not path /mcp /mcp/* /.well-known/*
   }
   forward_auth @browser https://auth.home.example {
-    uri /forward-auth?resource=https://notes.home.example/api
+    uri /forward-auth?resource=https://notes.home.example/
     copy_headers Authorization
   }
   reverse_proxy notes:8080
 }
 ```
 
-Set `AUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, here `home.example`; forward auth is served only when it is set. The owner's issuer session cookie never leaves the issuer host. After login the browser passes through `/forward-auth/continue`, which sets a separate forward cookie on that domain: the session sealed under the server secret, meaningful only to `/forward-auth`. Apps behind the proxy therefore see the forward cookie and the access token, and neither can administer the issuer; an app could at most use the cookie to obtain tokens for other resources under the same domain, which in a single-owner network are the owner's own. Sign-out at the issuer or at `https://auth.home.example/forward-auth/logout?rd=<page>` invalidates every copy of the cookie; it is a plain link, so any page under the domain can sign the owner out, which a single-owner network accepts. The token's `client_id` is `forward-auth` and it carries all of the resource's scopes. The built-in administration resource is refused. The app verifies a signed token for its own resource rather than trusting proxy headers, so reaching it directly yields only `401`s.
+Set `AUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, here `home.example`; forward auth is served only when it is set. The owner's issuer session cookie never leaves the issuer host. After login the browser passes through `/forward-auth/continue`, which sets a separate forward cookie on that domain: the session sealed under the server secret, meaningful only to `/forward-auth`. Apps behind the proxy therefore see the forward cookie and the access token, and neither can administer the issuer; an app could at most use the cookie to obtain tokens for other resources under the same domain, which in a single-owner network are the owner's own. Sign-out at the issuer or at `https://auth.home.example/forward-auth/logout?rd=<page>` invalidates every copy of the cookie; it is a plain link, so any page under the domain can sign the owner out, which a single-owner network accepts. Logout always ends the session first, so an `rd` outside the cookie domain is answered with a redirect to `/login` rather than an error; only `/forward-auth/continue` refuses an unusable `rd` with 400, because it has nowhere to send the browser afterwards. The token's `client_id` is `forward-auth` and it carries all of the resource's scopes. The built-in administration resource is refused. The app verifies a signed token for its own resource rather than trusting proxy headers, so reaching it directly yields only `401`s.
 
 ## Protect a resource server
 
@@ -98,7 +100,7 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
 
-[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification. Its optional `/effect-actions` integration supplies authentication/discovery middleware. Its API is Effect-only. To test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts a throwaway one with your resources and a client already provisioned.
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names two scopes and writes no authorization code. Its API is Effect-only. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, and ships the development forward-auth edge so no application writes one again.
 
 ## Develop
 
@@ -187,7 +189,7 @@ curl "$AUTH_BASE_URL/api/administration/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See [the breaking 0.4.0 release notes](docs/releases/0.4.0.md) before upgrading an issuer or SDK.
+See [the breaking 0.6.0 release notes](docs/releases/0.6.0.md) before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

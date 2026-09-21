@@ -183,8 +183,8 @@ catalogs:
       specifier: 4.0.0-rc.116
       version: 4.0.0-rc.116
     '@gjermundgaraba/effect-actions':
-      specifier: 0.2.0
-      version: 0.2.0
+      specifier: 0.3.0
+      version: 0.3.0
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -277,7 +277,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.2.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
+        version: 0.3.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.5(@opentelemetry/api@1.9.1)(vitest@4.1.11)
@@ -347,7 +347,7 @@ importers:
     dependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.2.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
+        version: 0.3.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
@@ -391,7 +391,10 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.2.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
+        version: 0.3.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)
+      '@modelcontextprotocol/client':
+        specifier: 2.0.0
+        version: 2.0.0
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.2
@@ -542,8 +545,8 @@ packages:
       effect: ^4.0.0-rc.116
       redis: '>=5.0.0 <7.0.0'
 
-  '@gjermundgaraba/effect-actions@0.2.0':
-    resolution: {integrity: sha512-0DaXUkG421/m5I754cQqy/7yhDJs/zjSHiQ4nKffnkaEwwmWMgiNaDVzY7xwxAVCn/HnfN9Cm5bMp2BFXNaqnw==}
+  '@gjermundgaraba/effect-actions@0.3.0':
+    resolution: {integrity: sha512-6msMn/7gvhmsJy86RESvZt6xJ1I0QHqNlAuonj1nLG6EYugT6J0m/6mH5Q5tSbF3zduta+t5x8QBJ+0gTABQPw==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     peerDependencies:
       '@modelcontextprotocol/client': ^2.0.0
@@ -1946,7 +1949,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@gjermundgaraba/effect-actions@0.2.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)':
+  '@gjermundgaraba/effect-actions@0.3.0(@modelcontextprotocol/client@2.0.0)(effect@4.0.0-rc.116)':
     dependencies:
       effect: 4.0.0-rc.116
     optionalDependencies:

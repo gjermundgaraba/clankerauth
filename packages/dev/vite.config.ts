@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 export default defineConfig({
   pack: {
-    entry: ["src/index.ts"],
+    entry: ["src/index.ts", "src/edge.ts"],
     platform: "node",
     target: "node26",
     format: ["esm"],

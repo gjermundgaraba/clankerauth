@@ -38,6 +38,12 @@ Graceful shutdown closes admission and tracks all admitted application work, inc
 
 The forward-auth routes are native, not provider endpoints. The provider's session cookie stays host-only. `/forward-auth/continue` seals that cookie's value with the provider's `symmetricEncrypt` under the server secret into a second cookie on `AUTH_COOKIE_DOMAIN`; `/forward-auth` unseals it and calls the provider's `getSession` with the original cookie, so the forward cookie resolves to the live session and dies with it. Tokens are signed through a tiny server-only plugin endpoint that calls the JWT plugin's `signJWT` with the same `at+jwt` profile the provider uses for its own access tokens, so resource servers verify both with one JWKS. The `client_id` is the literal `forward-auth`; administration MCP joins tokens to the client table and therefore never accepts one. The request policy strips forwarded host and scheme headers everywhere except the `/forward-auth` check, which uses them only to build and validate the post-login return URL.
 
+`/forward-auth/continue` answers 400 when `rd` is missing or outside the cookie domain, because it has nowhere to send the browser after sign-in. `/forward-auth/logout` never does: it ends the session and clears both cookies first, then redirects to an allowed `rd` or to `/login`.
+
+## One resource per application
+
+Register one resource per application, identified by its public origin root with a trailing slash (`https://notes.home.example/`), rather than one per surface. RFC 9728 then puts its metadata at `/.well-known/oauth-protected-resource`, the MCP client's own resource check accepts it for an endpoint beneath it (it compares origins and treats the configured path as a prefix), and the proxy needs one `forward_auth` block. The identifier must be the form a client sends, `new URL(id).href`; the SDK refuses anything else at construction, because a client that rewrites the identifier would ask for a resource this issuer does not have.
+
 ## API keys
 
 The API-key plugin is used unpatched. Its per-key rate limit counts up to 1,000 verifications per key until a full minute of inactivity has elapsed. Its listing reads one database page and paginates in memory, so the dashboard shows at most the first 100 keys.

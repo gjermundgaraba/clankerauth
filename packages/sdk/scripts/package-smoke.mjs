@@ -106,6 +106,8 @@ void verification;
       subject: "owner",
       scopes: ["notes:read", "notes:write"],
       actor: { kind: "key", keyId: "writer" },
+      // An API key has no token lifetime; it is re-verified on every request.
+      expiresAt: undefined,
     });
     issuer.keys.delete(issuer.key);
     const revoked = await Effect.runPromise(Effect.flip(installedVerifier.verifyToken(issuer.key)));

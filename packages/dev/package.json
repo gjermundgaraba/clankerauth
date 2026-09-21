@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-dev",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Disposable local Clankerauth issuer for application development",
   "license": "MIT",
   "repository": {
@@ -16,13 +16,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
+    },
+    "./edge": {
+      "types": "./dist/edge.d.ts",
+      "import": "./dist/edge.mjs"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack && node scripts/assets.mjs",
+    "build": "vp pack && tsc -p tsconfig.edge.json && node scripts/assets.mjs",
     "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {

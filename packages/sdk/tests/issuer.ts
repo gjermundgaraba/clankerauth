@@ -49,7 +49,8 @@ export const startIssuer = async () => {
     if (Result.isFailure(parsed)) return send(400, "{}");
     const { resource } = parsed.success;
 
-    if (![`${publicUrl}/api`, `${publicUrl}/mcp`].includes(resource)) return send(403, "{}");
+    if (![`${publicUrl}/`, `${publicUrl}/api`, `${publicUrl}/mcp`].includes(resource))
+      return send(403, "{}");
 
     if (malformed) return send(200, JSON.stringify({ keyId: "writer" }));
 

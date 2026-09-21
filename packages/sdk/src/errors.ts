@@ -40,6 +40,16 @@ export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>
   }
 }
 
+/**
+ * A verified credential lacks one scope the requested access needs. It names only
+ * the missing scope, so a refusal never enumerates the resource's permissions.
+ */
+export class InsufficientScope extends Schema.TaggedError<InsufficientScope>()(
+  "InsufficientScope",
+  { scope: Schema.String },
+  { httpApiStatus: 403 },
+) {}
+
 export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
   "ConfigurationError",
   { message: Schema.String },
@@ -54,18 +64,47 @@ export const authenticationErrors = [
 
 export type AuthenticationError = Unauthorized | Forbidden | RateLimited | ProviderUnavailable;
 
-/** Encode one of the declared schemas as JSON with its `httpApiStatus`. Undeclared errors are defects. */
-export const encodeError = <const Schemas extends ReadonlyArray<Schema.Top>>(schemas: Schemas) => {
-  const encode = HttpServerResponse.schemaJson(Schema.Union(schemas));
+/** What `Resource.admit` may refuse with: verification, plus the write-scope check. */
+export const admissionErrors = [...authenticationErrors, InsufficientScope] as const;
 
-  return (error: Schemas[number]["Type"], headers?: Headers.Input) => {
-    const schema = schemas.find((schema) => Schema.is(schema)(error));
+export type AdmissionError = AuthenticationError | InsufficientScope;
 
-    if (schema === undefined) return Effect.die(new Error("Undeclared error"));
+/** An error schema: service-free, so encoding a refusal needs no request context. */
+export type ErrorSchema = Schema.Codec<unknown, unknown, never, never>;
 
-    return encode(error, {
-      status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
-      headers,
-    }).pipe(Effect.orDie);
+/** One declared error as a status and a JSON body. Undeclared errors are defects. */
+export const describeError = <const Schemas extends ReadonlyArray<ErrorSchema>>(
+  schemas: Schemas,
+) => {
+  const encoders = new Map(
+    schemas.map((schema) => [
+      schema,
+      {
+        status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
+        encode: Schema.encodeUnknownEffect(Schema.toCodecJson(schema)),
+      },
+    ]),
+  );
+
+  return (error: Schemas[number]["Type"]) => {
+    const schema = schemas.find((candidate) => Schema.is(candidate)(error));
+    const encoder = schema === undefined ? undefined : encoders.get(schema);
+
+    if (encoder === undefined) return Effect.die(new Error("Undeclared error"));
+
+    return Effect.map(Effect.orDie(encoder.encode(error)), (body) => ({
+      status: encoder.status,
+      body: JSON.stringify(body),
+    }));
   };
+};
+
+/** Encode one of the declared schemas as a JSON response with its `httpApiStatus`. */
+export const encodeError = <const Schemas extends ReadonlyArray<ErrorSchema>>(schemas: Schemas) => {
+  const describe = describeError(schemas);
+
+  return (error: Schemas[number]["Type"], headers?: Headers.Input) =>
+    Effect.map(describe(error), ({ status, body }) =>
+      HttpServerResponse.text(body, { status, headers, contentType: "application/json" }),
+    );
 };

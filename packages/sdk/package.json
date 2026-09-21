@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-sdk",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Effect-native Clanker Auth access-token and API-key verification, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
@@ -34,13 +34,14 @@
   },
   "devDependencies": {
     "@gjermundgaraba/effect-actions": "catalog:",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "0.2.0"
+    "@gjermundgaraba/effect-actions": "0.3.0"
   },
   "peerDependenciesMeta": {
     "@gjermundgaraba/effect-actions": {
