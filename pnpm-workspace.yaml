@@ -23,7 +23,7 @@ catalog:
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.82.0
   zod: 4.6.4
-  "@gjermundgaraba/effect-actions": 0.4.0
+  "@gjermundgaraba/effect-actions": 0.4.1
 
 overrides:
   vite@*: "catalog:"
@@ -46,7 +46,7 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.2"
   - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.2"
   - vite-plus
-  - "@gjermundgaraba/effect-actions@0.4.0"
+  - "@gjermundgaraba/effect-actions@0.4.1"
   - "@effect/platform-node-shared@4.0.0-rc.116"
   - "@effect/platform-node@4.0.0-rc.116"
   - effect@4.0.0-rc.116
