@@ -57,7 +57,6 @@ test("the pre-handler hook refuses only writes, and names only the missing scope
     // A single-scope application names only `read`: verification is the whole policy.
     const single = await resourceFor(issuer.issuer, { read: "notes:read" });
     assert.equal((await decide(single, write, ["notes:read"]))._tag, "Success");
-    assert.equal(single.scopes.write, undefined);
   } finally {
     await issuer.close();
   }

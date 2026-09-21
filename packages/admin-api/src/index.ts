@@ -202,6 +202,7 @@ export const IssuerActions = ActionGroup.make(
   }),
   Action.make("setupOwner", {
     description: "Create the first owner account.",
+    access: "write",
     input: SetupInput,
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
     mcp: false,
@@ -238,52 +239,62 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("createClient", {
     description: "Register a first-party OAuth client. Returns its secret once when confidential.",
+    access: "write",
     input: ClientInput,
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
   }),
   Action.make("updateClient", {
     description: "Rename a first-party client or change its redirect URIs and application type.",
+    access: "write",
     input: ClientUpdateInput,
     success: Client,
   }),
   Action.make("deleteClient", {
     description: "Delete a first-party OAuth client.",
+    access: "write",
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
   Action.make("revokeClient", {
     description: "Revoke a client’s authorization grants.",
+    access: "write",
     input: ClientId,
     success: Schema.Struct({ revoked: Schema.Boolean }),
   }),
   Action.make("blockClient", {
     description: "Block or unblock OAuth authorization for a client.",
+    access: "write",
     input: ClientBlockInput,
     success: Schema.Struct({ blocked: Schema.Boolean }),
   }),
   Action.make("rotateClientSecret", {
     description: "Rotate a confidential client secret. Returns the new secret once.",
+    access: "write",
     input: ClientId,
     success: ClientCredentials,
   }),
   Action.make("setClientAccess", {
     description: "Set the resources a client may request.",
+    access: "write",
     input: ClientAccessInput,
     success: ClientAccessResult,
   }),
   Action.make("createResource", {
     description: "Create an OAuth resource and its scopes.",
+    access: "write",
     input: Resource,
     success: Resource.pipe(HttpApiSchema.status(201)),
   }),
   Action.make("updateResource", {
     description: "Update an OAuth resource and its scopes.",
+    access: "write",
     input: Resource,
     success: Resource,
   }),
   Action.make("deleteResource", {
     description:
       "Delete a resource and its client-resource links. Stored authorization grants and API-key permissions are retained; recreating the resource can restore access.",
+    access: "write",
     input: ResourceId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
@@ -294,6 +305,7 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("createApiKey", {
     description: "Create a scoped API key. Returns its secret once.",
+    access: "write",
     input: ApiKeyInput,
     success: MachineKey.pipe(
       Schema.fieldsAssign({ key: Schema.String }),
@@ -302,11 +314,13 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("updateApiKey", {
     description: "Update an API key’s name, permissions or enabled state.",
+    access: "write",
     input: ApiKeyUpdate,
     success: MachineKey,
   }),
   Action.make("deleteApiKey", {
     description: "Delete an API key.",
+    access: "write",
     input: ApiKeyId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),

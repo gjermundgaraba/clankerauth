@@ -210,8 +210,6 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
     session,
     resource: identifier,
     issuer: options.issuer,
-    publicUrl: options.publicUrl,
-    scopes: options.scopes,
   };
 });
 
