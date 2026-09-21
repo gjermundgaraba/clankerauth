@@ -6,11 +6,7 @@ import { RequestPolicy } from "../src/index.ts";
 
 const publicUrl = new URL("https://notes.example");
 
-const policy = RequestPolicy.make({
-  publicUrl,
-  allowedOrigins: ["wtf://app"],
-  exemptPaths: ["/healthz"],
-});
+const policy = RequestPolicy.make({ publicUrl, allowedOrigins: ["wtf://app"] });
 
 const allows = (target: string, host: string | undefined, origin?: string): boolean =>
   policy.allows({ target, host, origin });
@@ -51,7 +47,7 @@ test("an Origin is optional, but when sent must be the public one or explicitly 
   assert.equal(allows("/api", "notes.example", "https://notes.example/"), false);
 });
 
-test("exempt paths answer without either header, and match exactly", () => {
+test("the one exempt path answers without either header, and matches exactly", () => {
   assert.equal(allows("/healthz", undefined), true);
   assert.equal(allows("/healthz?probe=1", undefined), true);
   assert.equal(allows("/healthz#fragment", undefined), true);

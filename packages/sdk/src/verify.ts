@@ -4,11 +4,12 @@ import type { JWSHeaderParameters } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   ConfigurationError,
-  Forbidden,
+  InsufficientScope,
   ProviderUnavailable,
   RateLimited,
   Unauthorized,
 } from "./errors.ts";
+import type { AuthenticationError } from "./errors.ts";
 import { execute } from "./transport.ts";
 
 export interface Principal {
@@ -37,11 +38,9 @@ export interface Options {
 export interface Verifier {
   readonly verify: (
     authorization: string | null | undefined,
-  ) => Effect.Effect<Principal, VerificationError>;
-  readonly verifyToken: (token: string) => Effect.Effect<Principal, VerificationError>;
+  ) => Effect.Effect<Principal, AuthenticationError>;
+  readonly verifyToken: (token: string) => Effect.Effect<Principal, AuthenticationError>;
 }
-
-export type VerificationError = Unauthorized | Forbidden | RateLimited | ProviderUnavailable;
 
 const Jwks = Schema.Struct({
   keys: Schema.Array(
@@ -210,9 +209,9 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
     const response = yield* execute(client, request);
 
-    if (response.status === 401) return yield* unauthorized();
-
-    if (response.status === 403) return yield* new Forbidden({ message: "Insufficient scope" });
+    // The issuer answers 403 for a key with no grant on this resource. That is the same
+    // case as a token for another audience: the credential is not this resource's.
+    if (response.status === 401 || response.status === 403) return yield* unauthorized();
 
     if (response.status === 429)
       return yield* new RateLimited({ message: "Authentication rate exceeded" });
@@ -252,8 +251,9 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
           : verifyKey(token)
         : verifyJwt(token);
 
-      if (options.requiredScopes?.some((scope) => !principal.scopes.includes(scope)))
-        return yield* new Forbidden({ message: "Insufficient scope" });
+      const missing = options.requiredScopes?.find((scope) => !principal.scopes.includes(scope));
+
+      if (missing !== undefined) return yield* new InsufficientScope({ scope: missing });
 
       return principal;
     },

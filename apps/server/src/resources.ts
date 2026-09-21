@@ -136,11 +136,28 @@ export function resourceStore(
     return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
   });
 
+  // An identifier must already be the string a client sends back. A client asks for
+  // `new URL(metadata.resource).href`, and the access token's audience is that string,
+  // so `https://notes.example` (no slash) would be rewritten and stop matching what is
+  // registered here. Refuse it rather than let a resource server fail at verification.
+  const canonical = (identifier: string) => {
+    try {
+      return new URL(identifier).href === identifier;
+    } catch {
+      return false;
+    }
+  };
+
   // The provider validates identifiers (RFC 8707) and rejects duplicates.
   const validate = (input: ResourceValue): ResourceValue => {
     const identifier = input.identifier.trim();
     const name = input.name.trim();
     const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
+
+    if (!canonical(identifier))
+      throw new APIError("BAD_REQUEST", {
+        message: "Resource identifiers must be absolute URIs in canonical form",
+      });
 
     if (
       !name ||

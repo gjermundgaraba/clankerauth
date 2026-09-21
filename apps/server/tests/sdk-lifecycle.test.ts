@@ -13,8 +13,8 @@ import { testSettings } from "./settings.ts";
 import { createNodeServer } from "../src/node-http.ts";
 import { Effect, Exit, Schema, Scope } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { Unauthorized, Forbidden } from "@gjermundgaraba/clankerauth-sdk";
-import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
+import { Unauthorized } from "@gjermundgaraba/clankerauth-sdk/errors";
 
 const owner = { email: "owner@example.internal", password: randomBytes(24).toString("base64url") };
 
@@ -126,13 +126,10 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       201,
     );
 
-    const { verifier } = await Effect.runPromise(
-      Resource.make({
-        issuer: issuer.issuer,
-        resource,
-        requiredScopes: ["notes:read"],
-        scopes: ["notes:read", "notes:write"],
-      }).pipe(Effect.provide(FetchHttpClient.layer)),
+    const verifier = await Effect.runPromise(
+      Verifier.make({ issuer: issuer.issuer, resource, requiredScopes: ["notes:read"] }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+      ),
     );
 
     // After login the owner continues to the app, which sets the forward cookie; the proxy's
@@ -147,8 +144,8 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.deepEqual(principal.actor, { kind: "client", clientId: forwardClientId });
 
-    const { verifier: other } = await Effect.runPromise(
-      Resource.make({ issuer: issuer.issuer, resource: `${app.origin}/mcp`, scopes: [] }).pipe(
+    const other = await Effect.runPromise(
+      Verifier.make({ issuer: issuer.issuer, resource: `${app.origin}/mcp` }).pipe(
         Effect.provide(FetchHttpClient.layer),
       ),
     );
@@ -172,9 +169,10 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
     assert.equal(machine.subject, principal.subject);
     assert.deepEqual(machine.scopes, ["notes:read"]);
     assert.deepEqual(machine.actor, { kind: "key", keyId });
+    // A key with no grant on that resource is not that resource's credential at all.
     await assert.rejects(
       Effect.runPromise(other.verifyToken(key)),
-      (error) => error instanceof Forbidden,
+      (error) => error instanceof Unauthorized,
     );
     assert.equal(
       (await issuer.call("/api/administration/updateApiKey", { keyId, enabled: false })).status,

@@ -42,7 +42,7 @@ The forward-auth routes are native, not provider endpoints. The provider's sessi
 
 ## One resource per application
 
-Register one resource per application, identified by its public origin root with a trailing slash (`https://notes.home.example/`), rather than one per surface. RFC 9728 then puts its metadata at `/.well-known/oauth-protected-resource`, the MCP client's own resource check accepts it for an endpoint beneath it (it compares origins and treats the configured path as a prefix), and the proxy needs one `forward_auth` block. The identifier must be the form a client sends, `new URL(id).href`; the SDK refuses anything else at construction, because a client that rewrites the identifier would ask for a resource this issuer does not have.
+Register one resource per application, identified by its public origin root with a trailing slash (`https://notes.home.example/`), rather than one per surface. RFC 9728 then puts its metadata at `/.well-known/oauth-protected-resource`, the MCP client's own resource check accepts it for an endpoint beneath it (it compares origins and treats the configured path as a prefix), and the proxy needs one `forward_auth` block. The identifier must be the form a client sends, `new URL(id).href`; the dashboard refuses anything else, because a client that rewrites the identifier would ask for a resource this issuer does not have. The SDK derives it from the application's public URL, so nothing writes it twice.
 
 ## API keys
 

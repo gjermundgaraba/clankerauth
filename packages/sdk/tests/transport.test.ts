@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { test } from "vite-plus/test";
 import { Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ProviderUnavailable } from "../src/index.ts";
+import { ProviderUnavailable } from "../src/errors.ts";
 import { execute } from "../src/transport.ts";
 import { withHttp } from "./support.ts";
 

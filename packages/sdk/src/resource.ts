@@ -1,33 +1,66 @@
-import { Context, Effect, Result } from "effect";
+import { Context, Effect, Result, Schema, SchemaAST } from "effect";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import {
-  admissionErrors,
+  authenticationErrors,
   ConfigurationError,
-  describeError,
-  Forbidden,
   InsufficientScope,
   RateLimited,
   Unauthorized,
 } from "./errors.ts";
-import type { AdmissionError } from "./errors.ts";
+import type { AuthenticationError } from "./errors.ts";
+import { Session } from "./session.ts";
 import * as Verifier from "./verify.ts";
 
-const describe = describeError(admissionErrors);
+const encoders = new Map(
+  authenticationErrors.map((schema) => [
+    schema,
+    {
+      status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
+      encode: Schema.encodeUnknownEffect(Schema.toCodecJson(schema)),
+    },
+  ]),
+);
+
+/** One refusal as its own status and JSON body. An undeclared error is a defect. */
+const describe = (error: AuthenticationError) => {
+  const schema = authenticationErrors.find((candidate) => Schema.is(candidate)(error));
+  const encoder = schema === undefined ? undefined : encoders.get(schema);
+
+  if (encoder === undefined) return Effect.die(new Error("Undeclared error"));
+
+  return Effect.map(Effect.orDie(encoder.encode(error)), (body) => ({
+    status: encoder.status,
+    body: JSON.stringify(body),
+  }));
+};
 
 export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Verifier.Principal>()(
   "@clankerauth/CurrentPrincipal",
 ) {}
 
-export interface Options extends Verifier.Options {
-  readonly scopes: readonly string[];
+/** What this resource's credentials must carry. */
+export interface Scopes {
+  /** Required of every credential, so verification alone admits a read. */
+  readonly read: string;
   /**
-   * The scope a write needs beyond `requiredScopes`. Omit for a single-scope
-   * resource, where verification alone is the whole policy and `authorize` passes
-   * every action.
+   * Additionally required by an `access: "write"` action and by `admit(..., "write")`.
+   * Omit for a single-scope application, where verification is the whole policy.
    */
-  readonly writeScope?: string;
+  readonly write?: string;
+}
+
+export interface Options {
+  readonly issuer: string;
+  /**
+   * The origin browsers and agents reach this application at. The resource is its origin
+   * root, so any path here is discarded: one identifier covers `/api`, `/mcp` and sockets.
+   */
+  readonly publicUrl: URL;
+  readonly scopes: Scopes;
+  /** `false` rejects API keys without consulting the issuer; only OAuth access tokens are accepted. */
+  readonly apiKeys?: boolean;
 }
 
 /**
@@ -45,62 +78,50 @@ export type Admission =
   | { readonly ok: true; readonly principal: Verifier.Principal }
   | { readonly ok: false; readonly refusal: Refusal };
 
-/** One resource: its verifier, discovery, scope policy and refusals. Acquire once per audience. */
+/** One resource: its verifier, discovery, scope policy and refusals. Acquire once per application. */
 export const make = Effect.fn("Resource.make")(function* (options: Options) {
+  // One resource per application, at the public origin root, trailing slash and all.
   // An MCP client sends `new URL(metadata.resource).href`, and the token's audience is
-  // that string. Refuse an identifier that is not already in that form, rather than
-  // normalizing it and leaving the issuer's registered resource to disagree: an origin
-  // root is `https://app.example/`, with the trailing slash.
-  yield* Effect.try({
-    try: () => new URL(options.resource),
-    catch: () => new ConfigurationError({ message: "Resource identifier is not a URL" }),
-  }).pipe(
-    Effect.filterOrFail(
-      (url) => url.href === options.resource,
-      () =>
-        new ConfigurationError({
-          message: `Resource identifier must be canonical: use ${new URL(options.resource).href}`,
-        }),
-    ),
-  );
+  // that string, so deriving it here is what keeps the two in agreement.
+  const identifier = new URL("/", options.publicUrl).href;
+
+  const scopesSupported =
+    options.scopes.write === undefined
+      ? [options.scopes.read]
+      : [options.scopes.read, options.scopes.write];
 
   const discovery = yield* Effect.try({
     try: () =>
       Authentication.protectedResource({
-        resource: options.resource,
+        resource: identifier,
         authorizationServers: [options.issuer],
-        scopesSupported: options.scopes,
+        scopesSupported,
       }),
     catch: () => new ConfigurationError({ message: "Invalid resource metadata configuration" }),
   });
 
-  const verifier = yield* Verifier.make(options);
-
-  const scope = options.requiredScopes?.length ? options.requiredScopes.join(" ") : undefined;
+  const verifier = yield* Verifier.make({
+    issuer: options.issuer,
+    resource: identifier,
+    requiredScopes: [options.scopes.read],
+    apiKeys: options.apiKeys,
+  });
 
   const challengeValue = (error?: "invalid_token" | "insufficient_scope", missing?: string) =>
-    discovery.challenge({ error, scope: missing ?? scope });
-
-  /** Bearer challenge for this resource; no error code when the request carried no credentials. */
-  const challenge = (error?: "invalid_token" | "insufficient_scope") => ({
-    "www-authenticate": challengeValue(error),
-  });
+    discovery.challenge({ error, scope: missing ?? options.scopes.read });
 
   /**
    * The one header besides the content type that a refusal carries: an RFC 6750
    * challenge naming only the missing scope, or an RFC 6585 retry hint.
    */
   const refusalHeader = (
-    error: AdmissionError,
+    error: AuthenticationError,
     credential: boolean,
   ): readonly [string, string] | undefined => {
     if (error instanceof RateLimited) return ["retry-after", "60"];
 
     if (error instanceof InsufficientScope)
       return ["www-authenticate", challengeValue("insufficient_scope", error.scope)];
-
-    if (error instanceof Forbidden)
-      return ["www-authenticate", challengeValue("insufficient_scope")];
 
     // RFC 6750 §3.1: a request that carried no credentials gets no error code.
     if (error instanceof Unauthorized)
@@ -112,16 +133,7 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
   const asRecord = (header: readonly [string, string] | undefined) =>
     header === undefined ? {} : { [header[0]]: header[1] };
 
-  /** The header a caller rendering its own response adds for this failure. */
-  const headers = (error: AdmissionError) => asRecord(refusalHeader(error, true));
-
-  /** The write scope, if one is configured and this principal lacks it. */
-  const missingScope = (principal: Verifier.Principal) =>
-    options.writeScope !== undefined && !principal.scopes.includes(options.writeScope)
-      ? options.writeScope
-      : undefined;
-
-  const refuse = (error: AdmissionError, authorization: string | null | undefined) =>
+  const refuse = (error: AuthenticationError, authorization: string | null | undefined) =>
     Effect.map(describe(error), ({ status, body }): Admission => ({
       ok: false,
       refusal: {
@@ -135,14 +147,20 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
       },
     }));
 
+  /** The write scope, if one is configured and this principal lacks it. */
+  const missingScope = (principal: Verifier.Principal) =>
+    options.scopes.write !== undefined && !principal.scopes.includes(options.scopes.write)
+      ? options.scopes.write
+      : undefined;
+
   /**
    * Verify one Authorization header value outside an Effect router: a Node `upgrade`
-   * handler, a socket, a per-request endpoint. `access: "write"` also demands the
-   * configured write scope, so a socket can require it before it is established.
+   * handler, a socket, a per-request endpoint. `access` is the same declaration an
+   * action carries, so `"write"` demands the write scope before a socket is established.
    */
   const admit = Effect.fn("Resource.admit")(function* (
     authorization: string | null | undefined,
-    access: Action.Access = "read",
+    access: Action.Access,
   ) {
     const verified = yield* Effect.result(verifier.verify(authorization));
 
@@ -157,14 +175,14 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
   });
 
   /**
-   * The effect-actions pre-handler hook. A read needs nothing beyond what verification
-   * already required; a write needs the configured write scope. Without one it passes,
-   * so a single-scope resource has no authorization code at all.
+   * The effect-actions pre-handler hook, bound once per surface. A read needs nothing
+   * beyond what verification already required; a write needs the configured write scope.
+   * Without one it passes, so a single-scope resource has no authorization code at all.
    */
   const authorize = (
     action: Action.Any,
   ): Effect.Effect<void, InsufficientScope, CurrentPrincipal> =>
-    action.access === "read" || options.writeScope === undefined
+    action.access === "read" || options.scopes.write === undefined
       ? Effect.void
       : Effect.flatMap(CurrentPrincipal, (principal) => {
           const missing = missingScope(principal);
@@ -174,16 +192,26 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
             : Effect.fail(new InsufficientScope({ scope: missing }));
         });
 
+  /** The `session` group of `@gjermundgaraba/clankerauth-sdk/session`, already answered. */
+  const session = Session.implement({
+    whoami: () =>
+      Effect.map(CurrentPrincipal, ({ subject, scopes }) => ({
+        subject,
+        issuer: options.issuer,
+        scopes,
+      })),
+  });
+
   return {
     verifier,
     discovery,
-    challenge,
-    headers,
     admit,
     authorize,
-    resource: options.resource,
+    session,
+    resource: identifier,
     issuer: options.issuer,
-    writeScope: options.writeScope,
+    publicUrl: options.publicUrl,
+    scopes: options.scopes,
   };
 });
 
@@ -195,7 +223,8 @@ export const middleware = (resource: Resource) =>
     CurrentPrincipal,
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      const admission = yield* resource.admit(request.headers.authorization);
+      // Read level: an action's own `access` is what the authorization hook then enforces.
+      const admission = yield* resource.admit(request.headers.authorization, "read");
 
       if (admission.ok) return admission.principal;
 

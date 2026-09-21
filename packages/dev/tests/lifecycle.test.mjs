@@ -7,6 +7,7 @@ import { createServer, request } from "node:http";
 import { once } from "node:events";
 import { startDisposableIssuer } from "../dist/index.mjs";
 import { attach, reserveLoopbackPort } from "../dist/edge.mjs";
+import { startFakeIssuer } from "../dist/testing.mjs";
 
 const resource = {
   identifier: "http://127.0.0.1:9876/api",
@@ -542,8 +543,7 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     issuer: issuer.url,
     appOrigin: app,
     resource: forwarded.identifier,
-    backend: backendUrl,
-    socketPaths: ["/sync"],
+    sockets: { backend: backendUrl, paths: ["/sync"] },
     onError: (error) => errors.push(error.message),
   });
 
@@ -593,9 +593,12 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     });
 
   try {
-    // A script's request without a session is refused in place, never redirected.
+    // A script's request without a session is refused in place, never redirected, and
+    // the issuer's own explanation is relayed rather than replaced by an empty body.
     const anonymous = await get("/docs");
     assert.equal(anonymous.status, 401);
+    assert.match(anonymous.headers["content-type"], /application\/json/);
+    assert.deepEqual(JSON.parse(anonymous.body), { error: "unauthenticated" });
     assert.deepEqual(seen, []);
 
     // Public paths never reach the issuer at all.
@@ -671,4 +674,67 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     await stopped;
     await issuer.close();
   }
+});
+
+await test("the fake issuer signs tokens, publishes its key and verifies API keys online", async () => {
+  const resource = "http://app.notes.localhost:9878/";
+  const fake = await startFakeIssuer({ resource, scopes: ["notes:read", "notes:write"] });
+
+  try {
+    const jwks = await (await fetch(`${fake.issuer}/jwks`)).json();
+    assert.equal(jwks.keys.length, 1);
+    assert.equal(jwks.keys[0].alg, "EdDSA");
+    assert.equal(jwks.keys[0].kid, "fixture");
+
+    const token = await fake.sign();
+
+    const [header, claims] = token
+      .split(".")
+      .slice(0, 2)
+      .map((part) => JSON.parse(Buffer.from(part, "base64url").toString()));
+
+    assert.equal(header.typ, "at+jwt");
+    assert.equal(claims.iss, fake.issuer);
+    assert.equal(claims.aud, resource);
+    assert.equal(claims.sub, "owner");
+    assert.equal(claims.scope, "notes:read notes:write");
+
+    // Every claim is the caller's to override, so a test can mint what it needs.
+    const expiring = JSON.parse(
+      Buffer.from((await fake.sign({ exp: 1, scope: "notes:read" })).split(".")[1], "base64url"),
+    );
+
+    assert.equal(expiring.exp, 1);
+    assert.equal(expiring.scope, "notes:read");
+
+    const verify = (key, asked = resource) =>
+      fetch(new URL("/api/issuer/verifyApiKey", fake.issuer), {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({ resource: asked }),
+      });
+
+    const key = fake.apiKey(["notes:read"]);
+    const accepted = await verify(key);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual((await accepted.json()).scopes, ["notes:read"]);
+    assert.equal(fake.verifications(), 1);
+
+    // A key granted on another resource is refused exactly as the real issuer refuses it.
+    const foreign = await verify(fake.apiKey(["notes:read"], "https://other.example/"));
+    assert.equal(foreign.status, 403);
+    assert.deepEqual(await foreign.json(), { error: "No access to this Resource" });
+
+    fake.revoke(key);
+    assert.equal((await verify(key)).status, 401);
+    fake.fail(503);
+    assert.equal((await verify(key)).status, 503);
+    assert.equal((await fetch(`${fake.issuer}/jwks`)).status, 503);
+    fake.fail();
+    assert.equal((await fetch(`${fake.issuer}/jwks`)).status, 200);
+  } finally {
+    await fake.close();
+  }
+
+  await assert.rejects(fetch(`${fake.issuer}/jwks`));
 });

@@ -8,7 +8,13 @@ import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
-import { InsufficientScope, ProviderUnavailable, RateLimited, Unauthorized } from "../src/index.ts";
+import {
+  authenticationErrors,
+  InsufficientScope,
+  ProviderUnavailable,
+  Unauthorized,
+} from "../src/errors.ts";
+import { Session } from "../src/session.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
 import { publicUrl, startIssuer } from "./issuer.ts";
 import { withHttp } from "./support.ts";
@@ -26,11 +32,8 @@ const Actions = ActionGroup.make(
   Action.make("write", { description: "Fixture action", access: "write", success: Schema.String }),
 );
 
-// The surface renders these itself, so a typed client decodes them.
-const Http = ActionHttp.make(
-  { apiPath: "/api", errors: [Unauthorized, RateLimited, ProviderUnavailable] },
-  Actions,
-);
+// The surface renders every refusal itself, so a typed client decodes them.
+const Http = ActionHttp.make({ apiPath: "/api", errors: authenticationErrors }, Actions, Session);
 
 const identity = Effect.map(CurrentPrincipal, (principal) =>
   principal.actor.kind === "key" ? principal.actor.keyId : principal.actor.clientId,
@@ -43,10 +46,8 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     withHttp(
       Resource.make({
         issuer: issuer.issuer,
-        resource: resourceId,
-        scopes: ["notes:read", "notes:write"],
-        requiredScopes: ["notes:read"],
-        writeScope: "notes:write",
+        publicUrl: new URL(publicUrl),
+        scopes: { read: "notes:read", write: "notes:write" },
       }),
     ),
   );
@@ -59,7 +60,7 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
   const web = HttpRouter.toWebHandler(
     Layer.mergeAll(
       resource.discovery.layer,
-      Http.layer(app).pipe(Layer.provide(Resource.middleware(resource).layer)),
+      Http.layer(app, resource.session).pipe(Layer.provide(Resource.middleware(resource).layer)),
       ActionMcp.layerHttp(
         { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
         app,
@@ -73,12 +74,12 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     if (token) headers.set("authorization", `Bearer ${token}`);
 
     return web.handler(
-      new Request(`${publicUrl}/api/notes/${name}`, { method: "POST", headers, body: "{}" }),
+      new Request(`${publicUrl}/api/${name}`, { method: "POST", headers, body: "{}" }),
     );
   };
 
   try {
-    const missing = await call("identity");
+    const missing = await call("notes/identity");
     assert.equal(missing.status, 401);
     assert.equal(missing.headers.get("cache-control"), "no-store");
     assert.match(missing.headers.get("www-authenticate") ?? "", /oauth-protected-resource"/u);
@@ -89,14 +90,23 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     );
 
     const identities = await Promise.all(
-      [issuer.key, issuer.readOnlyKey].map(async (token) => (await call("identity", token)).json()),
+      [issuer.key, issuer.readOnlyKey].map(async (token) =>
+        (await call("notes/identity", token)).json(),
+      ),
     );
 
     assert.deepEqual(identities, ["writer", "reader"]);
-    assert.equal(await (await call("write", issuer.key)).json(), "written");
+    assert.equal(await (await call("notes/write", issuer.key)).json(), "written");
+
+    // The session group is the SDK's own, answered from the verified credential.
+    assert.deepEqual(await (await call("session/whoami", issuer.readOnlyKey)).json(), {
+      subject: "owner",
+      issuer: issuer.issuer,
+      scopes: ["notes:read"],
+    });
 
     // The hook refuses the write and names only the scope the credential lacks.
-    const refused = await call("write", issuer.readOnlyKey);
+    const refused = await call("notes/write", issuer.readOnlyKey);
     assert.equal(refused.status, 403);
     assert.deepEqual(
       await refused.json(),
@@ -142,12 +152,12 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     ]);
 
     issuer.fail(429);
-    const limited = await call("identity", issuer.key);
+    const limited = await call("notes/identity", issuer.key);
     assert.equal(limited.status, 429);
     assert.equal(limited.headers.get("retry-after"), "60");
     assert.equal(limited.headers.get("www-authenticate"), null);
     issuer.fail(503);
-    const unavailable = await call("identity", issuer.key);
+    const unavailable = await call("notes/identity", issuer.key);
     assert.equal(unavailable.status, 503);
     assert.deepEqual(
       await unavailable.json(),

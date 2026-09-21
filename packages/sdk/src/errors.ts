@@ -1,7 +1,12 @@
-import { Effect, Schema, SchemaAST } from "effect";
-import { type Headers, HttpServerResponse } from "effect/unstable/http";
+/**
+ * Every refusal this package produces, as schemas. This entry point is browser-safe:
+ * a shared contract declares these on its surface and a browser client decodes them,
+ * without pulling token verification or its cryptography into the bundle.
+ *
+ * Schemas define public responses. Diagnostic causes are internal, non-enumerable fields.
+ */
+import { Schema } from "effect";
 
-/** Schemas define public responses. Diagnostic causes are internal, non-enumerable fields. */
 export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   "Unauthorized",
   { message: Schema.String },
@@ -14,12 +19,6 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
     Object.defineProperty(this, "cause", { value: options.cause });
   }
 }
-
-export class Forbidden extends Schema.TaggedError<Forbidden>()(
-  "Forbidden",
-  { message: Schema.String },
-  { httpApiStatus: 403 },
-) {}
 
 export class RateLimited extends Schema.TaggedError<RateLimited>()(
   "RateLimited",
@@ -55,56 +54,19 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()
   { message: Schema.String },
 ) {}
 
+/**
+ * What verification, admission and the authorization hook refuse with — one list, so a
+ * surface declares `errors: authenticationErrors` and answers every refusal the same way.
+ */
 export const authenticationErrors = [
   Unauthorized,
-  Forbidden,
+  InsufficientScope,
   RateLimited,
   ProviderUnavailable,
 ] as const;
 
-export type AuthenticationError = Unauthorized | Forbidden | RateLimited | ProviderUnavailable;
-
-/** What `Resource.admit` may refuse with: verification, plus the write-scope check. */
-export const admissionErrors = [...authenticationErrors, InsufficientScope] as const;
-
-export type AdmissionError = AuthenticationError | InsufficientScope;
-
-/** An error schema: service-free, so encoding a refusal needs no request context. */
-export type ErrorSchema = Schema.Codec<unknown, unknown, never, never>;
-
-/** One declared error as a status and a JSON body. Undeclared errors are defects. */
-export const describeError = <const Schemas extends ReadonlyArray<ErrorSchema>>(
-  schemas: Schemas,
-) => {
-  const encoders = new Map(
-    schemas.map((schema) => [
-      schema,
-      {
-        status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
-        encode: Schema.encodeUnknownEffect(Schema.toCodecJson(schema)),
-      },
-    ]),
-  );
-
-  return (error: Schemas[number]["Type"]) => {
-    const schema = schemas.find((candidate) => Schema.is(candidate)(error));
-    const encoder = schema === undefined ? undefined : encoders.get(schema);
-
-    if (encoder === undefined) return Effect.die(new Error("Undeclared error"));
-
-    return Effect.map(Effect.orDie(encoder.encode(error)), (body) => ({
-      status: encoder.status,
-      body: JSON.stringify(body),
-    }));
-  };
-};
-
-/** Encode one of the declared schemas as a JSON response with its `httpApiStatus`. */
-export const encodeError = <const Schemas extends ReadonlyArray<ErrorSchema>>(schemas: Schemas) => {
-  const describe = describeError(schemas);
-
-  return (error: Schemas[number]["Type"], headers?: Headers.Input) =>
-    Effect.map(describe(error), ({ status, body }) =>
-      HttpServerResponse.text(body, { status, headers, contentType: "application/json" }),
-    );
-};
+export type AuthenticationError =
+  | Unauthorized
+  | InsufficientScope
+  | RateLimited
+  | ProviderUnavailable;

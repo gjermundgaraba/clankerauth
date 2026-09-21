@@ -3,7 +3,7 @@ import { test } from "vite-plus/test";
 import { Effect, Schema } from "effect";
 import { checkResourceAllowed } from "@modelcontextprotocol/client";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-import { ConfigurationError, InsufficientScope, Unauthorized } from "../src/index.ts";
+import { InsufficientScope, Unauthorized } from "../src/errors.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
 import { publicUrl, startIssuer } from "./issuer.ts";
 import { withHttp } from "./support.ts";
@@ -20,18 +20,10 @@ const write = Action.make("write", {
   success: Schema.String,
 });
 
-const resourceFor = (issuer: string, writeScope?: string) => {
-  const base = {
-    issuer,
-    resource: `${publicUrl}/`,
-    scopes: ["notes:read", "notes:write"],
-    requiredScopes: ["notes:read"],
-  };
+const resourceFor = (issuer: string, scopes: Resource.Scopes) =>
+  Effect.runPromise(withHttp(Resource.make({ issuer, publicUrl: new URL(publicUrl), scopes })));
 
-  return Effect.runPromise(
-    withHttp(Resource.make(writeScope === undefined ? base : { ...base, writeScope })),
-  );
-};
+const guarded = { read: "notes:read", write: "notes:write" } as const;
 
 const decide = (resource: Resource.Resource, action: Action.Any, scopes: ReadonlyArray<string>) =>
   Effect.runPromise(
@@ -49,12 +41,12 @@ test("the pre-handler hook refuses only writes, and names only the missing scope
   const issuer = await startIssuer();
 
   try {
-    const guarded = await resourceFor(issuer.issuer, "notes:write");
+    const resource = await resourceFor(issuer.issuer, guarded);
 
-    assert.equal((await decide(guarded, read, ["notes:read"]))._tag, "Success");
-    assert.equal((await decide(guarded, write, ["notes:read", "notes:write"]))._tag, "Success");
+    assert.equal((await decide(resource, read, ["notes:read"]))._tag, "Success");
+    assert.equal((await decide(resource, write, ["notes:read", "notes:write"]))._tag, "Success");
 
-    const refused = await decide(guarded, write, ["notes:read"]);
+    const refused = await decide(resource, write, ["notes:read"]);
     assert.equal(refused._tag, "Failure");
     assert.deepEqual(refused.failure, new InsufficientScope({ scope: "notes:write" }));
     assert.deepEqual(
@@ -62,10 +54,10 @@ test("the pre-handler hook refuses only writes, and names only the missing scope
       Schema.encodeSync(InsufficientScope)(new InsufficientScope({ scope: "notes:write" })),
     );
 
-    // A single-scope resource configures no write scope: verification is the policy.
-    const single = await resourceFor(issuer.issuer);
+    // A single-scope application names only `read`: verification is the whole policy.
+    const single = await resourceFor(issuer.issuer, { read: "notes:read" });
     assert.equal((await decide(single, write, ["notes:read"]))._tag, "Success");
-    assert.equal(single.writeScope, undefined);
+    assert.equal(single.scopes.write, undefined);
   } finally {
     await issuer.close();
   }
@@ -75,9 +67,9 @@ test("admission verifies outside a router and renders a ready-to-send refusal", 
   const issuer = await startIssuer();
 
   try {
-    const resource = await resourceFor(issuer.issuer, "notes:write");
+    const resource = await resourceFor(issuer.issuer, guarded);
 
-    const admit = (authorization?: string, access?: Action.Access) =>
+    const admit = (authorization: string | undefined, access: Action.Access = "read") =>
       Effect.runPromise(resource.admit(authorization, access));
 
     const token = await issuer.sign({}, "");
@@ -95,7 +87,7 @@ test("admission verifies outside a router and renders a ready-to-send refusal", 
     assert.equal(byKey.principal.expiresAt, undefined);
 
     // RFC 6750 §3.1: no credential, no error code.
-    const missing = await admit();
+    const missing = await admit(undefined);
     assert.equal(missing.ok, false);
     assert.equal(missing.refusal.status, 401);
     assert.equal(missing.refusal.headers["cache-control"], "no-store");
@@ -143,14 +135,25 @@ test("one resource at the origin root covers every surface an MCP client asks ab
   const issuer = await startIssuer();
 
   try {
-    const resource = await resourceFor(issuer.issuer);
+    // Any path on the public URL is discarded: the resource is the origin root.
+    const resource = await Effect.runPromise(
+      withHttp(
+        Resource.make({
+          issuer: issuer.issuer,
+          publicUrl: new URL(`${publicUrl}/api?x=1`),
+          scopes: guarded,
+        }),
+      ),
+    );
+
+    assert.equal(resource.resource, `${publicUrl}/`);
+    assert.equal(new URL(resource.resource).href, resource.resource);
 
     // RFC 9728: a resource with no path is published at the bare well-known path.
     assert.equal(
       resource.discovery.metadataUrl,
       `${publicUrl}/.well-known/oauth-protected-resource`,
     );
-    assert.match(resource.challenge()["www-authenticate"], /resource_metadata=/u);
 
     // The official client accepts an origin-root resource for any endpoint under it,
     // and sends back exactly the identifier the metadata published.
@@ -171,18 +174,6 @@ test("one resource at the origin root covers every surface an MCP client asks ab
       }),
       false,
     );
-
-    assert.equal(new URL(resource.resource).href, resource.resource);
-
-    // An identifier the client would rewrite is refused at construction.
-    const failure = await Effect.runPromise(
-      Effect.flip(
-        withHttp(Resource.make({ issuer: issuer.issuer, resource: publicUrl, scopes: [] })),
-      ),
-    );
-
-    assert(failure instanceof ConfigurationError);
-    assert.match(failure.message, /canonical/u);
   } finally {
     await issuer.close();
   }

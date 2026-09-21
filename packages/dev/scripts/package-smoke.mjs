@@ -53,7 +53,8 @@ try {
 
   const test = (await readFile(join(root, "tests/lifecycle.test.mjs"), "utf8"))
     .replace('"../dist/index.mjs"', JSON.stringify(name))
-    .replace('"../dist/edge.mjs"', JSON.stringify(`${name}/edge`));
+    .replace('"../dist/edge.mjs"', JSON.stringify(`${name}/edge`))
+    .replace('"../dist/testing.mjs"', JSON.stringify(`${name}/testing`));
 
   await writeFile(join(directory, "installed.test.mjs"), test);
 

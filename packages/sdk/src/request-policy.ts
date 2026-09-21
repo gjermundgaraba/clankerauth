@@ -23,12 +23,13 @@ export interface Options {
    * whose renderer has a private scheme, such as `wtf://app`. No wildcards.
    */
   readonly allowedOrigins?: readonly string[];
-  /**
-   * Exact paths answered without either check, such as `/healthz`. A container probe
-   * reaches the app on its bind address and carries neither header.
-   */
-  readonly exemptPaths?: readonly string[];
 }
+
+/**
+ * The one path answered without either check. A container probe reaches the app on its
+ * bind address and carries neither header, and no application has a second such path.
+ */
+const probePath = "/healthz";
 
 /** One request, as a Node `upgrade` handler or a router middleware sees it. */
 export interface Request {
@@ -59,10 +60,9 @@ const forbidden = HttpServerResponse.text("Forbidden", { status: 403 });
 export const make = (options: Options) => {
   const host = options.publicUrl.host;
   const origins = new Set([options.publicUrl.origin, ...(options.allowedOrigins ?? [])]);
-  const exempt = new Set(options.exemptPaths ?? []);
 
   const allows = (request: Request): boolean => {
-    if (exempt.has(pathOf(request.target))) return true;
+    if (pathOf(request.target) === probePath) return true;
 
     // A request with no Host is not a browser request for this app's origin.
     if (request.host !== host) return false;

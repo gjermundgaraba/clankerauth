@@ -1,8 +1,8 @@
-import { Context, Effect, Match, Schema, type Scope } from "effect";
-import { HttpServerRequest } from "effect/unstable/http";
+import { Context, Effect, Schema, type Scope } from "effect";
+import { type Headers as HttpHeaders, HttpServerRequest } from "effect/unstable/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { CurrentPrincipal, type Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
-import { Unauthorized } from "@clankerauth/admin-api";
+import { errors, Unauthorized } from "@clankerauth/admin-api";
+import type { AdministrationResource } from "./administration-resource.ts";
 import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
 import { providerSession } from "./provider-session.ts";
 import type { Service } from "./auth.ts";
@@ -42,28 +42,45 @@ export const sessionOwner = (service: Service) =>
 
 const OwnerRow = Schema.Struct({ id: Schema.String, email: Schema.String });
 
-/** MCP: combine with the resource middleware that verifies the bearer token and
- * supplies CurrentPrincipal. The token's client must still exist and not be blocked;
- * revocation of already-issued access tokens takes effect at their expiry.
+/** A public error and the headers that refusal carries, such as an RFC 6750 challenge. */
+interface Refusal {
+  readonly error: (typeof errors)[number]["Type"];
+  readonly headers: HttpHeaders.Input;
+}
+
+/**
+ * MCP: the bearer access token for the administration resource, verified here. The
+ * token's client must still exist and not be blocked; revocation of already-issued
+ * access tokens takes effect at their expiry.
  */
-export const bearerOwner = (service: Service, resource: Resource.Resource) => {
-  const rejected = () => new Unauthorized({ error: "Owner authorization required" });
+export const bearerOwner = (service: Service, resource: AdministrationResource) => {
+  const rejected = (): Refusal => ({
+    error: new Unauthorized({ error: "Owner authorization required" }),
+    headers: { "www-authenticate": resource.challenge(true) },
+  });
+
+  const failed = (cause: unknown): Refusal => ({ error: apiError(cause), headers: {} });
 
   return Authentication.middleware(
     CurrentOwner,
     Effect.gen(function* () {
-      const principal = yield* CurrentPrincipal;
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const credential = request.headers.authorization !== undefined;
+
+      const principal = yield* resource.verifier
+        .verify(request.headers.authorization)
+        .pipe(Effect.mapError((error) => resource.refuse(error, credential)));
 
       if (principal.actor.kind !== "client") return yield* Effect.fail(rejected());
 
       const rows = yield* service.sql`SELECT u.id, u.email FROM user u
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
-      WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`.pipe(Effect.mapError(apiError));
+      WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`.pipe(Effect.mapError(failed));
 
       if (!rows[0]) return yield* Effect.fail(rejected());
 
       const owner = yield* Schema.decodeUnknownEffect(OwnerRow)(rows[0]).pipe(
-        Effect.mapError(apiError),
+        Effect.mapError(failed),
       );
 
       return {
@@ -72,17 +89,8 @@ export const bearerOwner = (service: Service, resource: Resource.Resource) => {
         providerHeaders: providerSession(service, owner.id),
       };
     }).pipe(
-      Effect.catch((error) =>
-        Effect.flatMap(
-          apiErrorResponse(
-            error,
-            Match.value(error).pipe(
-              Match.tag("Unauthorized", () => resource.challenge("invalid_token")),
-              Match.orElse(() => ({})),
-            ),
-          ),
-          Effect.fail,
-        ),
+      Effect.catch(({ error, headers }) =>
+        Effect.flatMap(apiErrorResponse(error, headers), Effect.fail),
       ),
     ),
   );

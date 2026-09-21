@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError";
-import { authenticationErrors } from "../src/errors.ts";
 import { TestClock } from "effect/testing";
 import {
   HttpClient,
@@ -12,7 +11,7 @@ import {
   HttpServer,
   HttpServerResponse,
 } from "effect/unstable/http";
-import { ProviderUnavailable, Unauthorized } from "../src/index.ts";
+import { authenticationErrors, ProviderUnavailable, Unauthorized } from "../src/errors.ts";
 import { Resource } from "../src/effect-actions.ts";
 
 test("verification deadlines interrupt the supplied HTTP transport", () =>
@@ -31,8 +30,8 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
 
       const resource = yield* Resource.make({
         issuer: "https://issuer.example/api/auth",
-        resource: "https://notes.example/api",
-        scopes: [],
+        publicUrl: new URL("https://notes.example"),
+        scopes: { read: "notes:read" },
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const fiber = yield* Effect.flip(resource.verifier.verifyToken("ca_test")).pipe(
@@ -55,7 +54,7 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
   const firstKey = { ...(await exportJWK(first.publicKey)), kid: "first", alg: "EdDSA" };
   const secondKey = { ...(await exportJWK(second.publicKey)), kid: "second", alg: "EdDSA" };
   const issuer = "https://issuer.example/api/auth";
-  const audience = "https://notes.example/api";
+  const audience = "https://notes.example/";
 
   const sign = (kid: string, key: CryptoKey) =>
     new SignJWT({ client_id: "web", scope: "read" })
@@ -94,9 +93,11 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
         }),
       );
 
-      const resource = yield* Resource.make({ issuer, resource: audience, scopes: ["read"] }).pipe(
-        Effect.provideService(HttpClient.HttpClient, client),
-      );
+      const resource = yield* Resource.make({
+        issuer,
+        publicUrl: new URL(audience),
+        scopes: { read: "read" },
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const verify = resource.verifier.verifyToken;
       assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
@@ -185,8 +186,8 @@ test("diagnostic causes survive adapters but never enter public error schemas or
 
       const resource = yield* Resource.make({
         issuer: "https://issuer.example",
-        resource: "https://notes.example/api",
-        scopes: [],
+        publicUrl: new URL("https://notes.example"),
+        scopes: { read: "notes:read" },
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const failure = yield* Effect.flip(resource.verifier.verifyToken("ca_test"));

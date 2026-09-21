@@ -373,6 +373,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.116
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
       vite:
         specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-core@0.3.3(@types/node@26.6.2)(typescript@7.0.2)'

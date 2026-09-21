@@ -1,21 +1,15 @@
 import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { McpProtocol } from "effect/unstable/ai";
-import {
-  FetchHttpClient,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { OpenApi } from "effect/unstable/httpapi";
 import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/admin-api";
-import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import manifest from "../package.json" with { type: "json" };
 import { administration } from "./administration.ts";
+import { administrationResource } from "./administration-resource.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { bearerOwner, sessionOwner } from "./current-owner.ts";
 import { responseCookies } from "./response-cookies.ts";
-import { mcpResource, mcpScope } from "./resources.ts";
 import type { Service } from "./auth.ts";
 
 export function actionRoutes(service: Service, mcpAllowedOrigins: readonly string[]) {
@@ -59,29 +53,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
           }),
       });
 
-      // The SDK verifier reads JWKS from this issuer in-process. Provider calls are
-      // tracked for shutdown like external ones: the SDK's deadline can abandon a
-      // call that must still settle.
-      const loopback: typeof fetch = (input, init) => {
-        const request = new Request(input, init);
-        // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
-        request.headers.set("x-clankerauth-peer", "127.0.0.1");
-
-        return service.run(() => service.auth.handler(request));
-      };
-
-      const adminResource = yield* Resource.make({
-        issuer: `${service.settings.baseURL}/api/auth`,
-        resource: mcpResource(service.settings.baseURL),
-        scopes: [mcpScope, "offline_access"],
-        requiredScopes: [mcpScope],
-        // The loopback serves provider routes only, so key verification must never reach the issuer.
-        apiKeys: false,
-      }).pipe(
-        Effect.provide(
-          FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, loopback))),
-        ),
-      );
+      const adminResource = yield* administrationResource(service);
 
       // Owner administration needs the dashboard session; issuer actions have
       // their own access rules and must work before anyone has signed in.
@@ -113,11 +85,7 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
             "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
         },
         owner,
-      ).pipe(
-        Layer.provide(
-          bearerOwner(service, adminResource).combine(Resource.middleware(adminResource)).layer,
-        ),
-      );
+      ).pipe(Layer.provide(bearerOwner(service, adminResource).layer));
 
       // Provider SDK calls do not support interruption. Finish admitted action work
       // before its request scope releases sessions or permits database shutdown.

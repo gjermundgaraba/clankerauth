@@ -7,5 +7,5 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/edge.ts"]
+  "include": ["src/edge.ts", "src/testing.ts"]
 }

@@ -12,6 +12,7 @@
     "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -20,13 +21,17 @@
     "./edge": {
       "types": "./dist/edge.d.ts",
       "import": "./dist/edge.mjs"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.mjs"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack && tsc -p tsconfig.edge.json && node scripts/assets.mjs",
+    "build": "vp pack && tsc -p tsconfig.types.json && node scripts/assets.mjs",
     "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
@@ -35,6 +40,7 @@
     "@clankerauth/web": "workspace:*",
     "@opentelemetry/api": "catalog:",
     "effect": "catalog:",
+    "jose": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },

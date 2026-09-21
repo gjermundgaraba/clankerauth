@@ -29,11 +29,14 @@ export interface CheckOptions {
   readonly timeoutMs?: number;
 }
 
-/** What the issuer decided about one request. */
+/** What the issuer decided about one request, including the refusal it wrote. */
 export interface Decision {
   readonly status: number;
   readonly authorization: string | undefined;
   readonly location: string | undefined;
+  /** The issuer's own response body, relayed verbatim so a refusal reads the same here. */
+  readonly body: Buffer;
+  readonly contentType: string | undefined;
 }
 
 /** The request fields a check reads. A Node `IncomingMessage` already is one. */
@@ -85,11 +88,11 @@ export const check = (options: CheckOptions) => {
           },
         },
         (answer) => {
-          answer.resume();
           const status = answer.statusCode ?? 502;
           const { authorization, location } = answer.headers;
 
           if (status === 204 && authorization === undefined) {
+            answer.resume();
             reject(
               new Error("Forward auth answered 204 without an Authorization header to forward"),
             );
@@ -97,7 +100,18 @@ export const check = (options: CheckOptions) => {
             return;
           }
 
-          resolve({ status, authorization, location });
+          const chunks: Buffer[] = [];
+          answer.on("data", (chunk: Buffer) => chunks.push(chunk));
+          answer.on("error", reject);
+          answer.on("end", () =>
+            resolve({
+              status,
+              authorization,
+              location,
+              body: Buffer.concat(chunks),
+              contentType: answer.headers["content-type"],
+            }),
+          );
         },
       );
 
@@ -109,19 +123,25 @@ export const check = (options: CheckOptions) => {
     });
 };
 
+/** The upgrades this edge owns, and where it proxies them once they are checked. */
+export interface SocketOptions {
+  /** Where a checked upgrade is proxied, such as `http://127.0.0.1:8080`. */
+  readonly backend: string;
+  /**
+   * Paths whose upgrades this edge owns. Everything else, including a development
+   * server's own hot-reload socket, is left untouched.
+   */
+  readonly paths: readonly string[];
+}
+
 export interface EdgeOptions extends CheckOptions {
   /**
    * Path prefixes answered without a check, because their callers bring their own
    * credential or must work without one. Defaults to `/mcp`, `/.well-known`, `/healthz`.
    */
   readonly publicPaths?: readonly string[];
-  /** Where a checked upgrade is proxied, such as `http://127.0.0.1:8080`. */
-  readonly backend?: string;
-  /**
-   * Paths whose upgrades this edge owns. Everything else, including a development
-   * server's own hot-reload socket, is left untouched. Defaults to none.
-   */
-  readonly socketPaths?: readonly string[];
+  /** Omit it and every upgrade is left to whoever else listens. */
+  readonly sockets?: SocketOptions;
   /** Called with anything this edge swallowed, so a dev server can print it. */
   readonly onError?: (error: Error) => void;
 }
@@ -159,11 +179,14 @@ export const middleware = (options: EdgeOptions) => {
           return;
         }
 
-        response.writeHead(
-          decision.status,
-          decision.location === undefined ? {} : { location: decision.location },
-        );
-        response.end();
+        // The issuer's own refusal, relayed verbatim: a browser reads what it wrote.
+        const headers: Record<string, string> = {};
+
+        if (decision.location !== undefined) headers.location = decision.location;
+
+        if (decision.contentType !== undefined) headers["content-type"] = decision.contentType;
+        response.writeHead(decision.status, headers);
+        response.end(decision.body);
       },
       (cause: unknown) => {
         const error = toError(cause);
@@ -193,9 +216,10 @@ export const upgrade = (options: EdgeOptions) => {
 
   return (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
     const path = pathOf(request.url ?? "/");
+    const sockets = options.sockets;
 
-    if (options.backend === undefined || !isUnder(path, options.socketPaths ?? [])) return false;
-    const backend = new URL(options.backend);
+    if (sockets === undefined || !isUnder(path, sockets.paths)) return false;
+    const backend = new URL(sockets.backend);
 
     const fail = (status: number, reason: string, error?: Error) => {
       if (error) options.onError?.(error);
@@ -251,6 +275,10 @@ export const upgrade = (options: EdgeOptions) => {
 
     void ask(request).then(
       (decision) => {
+        // The client can give up while the issuer is deciding. Opening a backend socket
+        // for a connection that is already gone would leak both halves of the handshake.
+        if (socket.destroyed) return;
+
         if (decision.status !== 204 || decision.authorization === undefined) {
           fail(401, "Unauthorized");
 
@@ -259,7 +287,9 @@ export const upgrade = (options: EdgeOptions) => {
 
         proxy(decision.authorization);
       },
-      (cause: unknown) => fail(502, "Bad Gateway", toError(cause)),
+      (cause: unknown) => {
+        if (!socket.destroyed) fail(502, "Bad Gateway", toError(cause));
+      },
     );
 
     return true;

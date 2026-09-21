@@ -1,6 +1,6 @@
 # @gjermundgaraba/clankerauth-sdk
 
-Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification. Verifies JWT access tokens and API keys, including the tokens a reverse proxy obtains through the issuer's forward auth for browser sessions. Optional **effect-actions** integration provides request-scoped identity and OAuth discovery.
+Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification. Verifies JWT access tokens and API keys, including the tokens a reverse proxy obtains through the issuer's forward auth for browser sessions. Optional **effect-actions** integration provides request-scoped identity, OAuth discovery, scope enforcement and a `session` contract a browser page can import on its own.
 
 ## Install
 
@@ -14,6 +14,17 @@ Install Effect in the application:
 vp add effect@4.0.0-rc.116
 ```
 
+## Entry points
+
+| Import                             | Needs effect-actions | Browser safe | What it holds                                     |
+| ---------------------------------- | -------------------- | ------------ | ------------------------------------------------- |
+| `…/clankerauth-sdk`                | no                   | no           | `Verifier`, `RequestPolicy`                       |
+| `…/clankerauth-sdk/errors`         | no                   | **yes**      | the error schemas and `authenticationErrors`      |
+| `…/clankerauth-sdk/session`        | yes                  | **yes**      | the `session` contract, `Principal`, `signOutUrl` |
+| `…/clankerauth-sdk/effect-actions` | yes                  | no           | `Resource`, `CurrentPrincipal`                    |
+
+The package is free of side effects, so a bundler drops what a page does not use. Errors are **not** re-exported from the root: a shared contract imports them from `/errors`, and nothing about that import pulls token verification into a browser bundle.
+
 ## Verify tokens directly
 
 Core consumers do not need effect-actions or `skipLibCheck`.
@@ -21,32 +32,21 @@ Core consumers do not need effect-actions or `skipLibCheck`.
 ```ts
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { McpProtocol } from "effect/unstable/ai";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
 const makeVerifier = Verifier.make({
   issuer: "https://auth.internal/api/auth",
-  resource: "https://notes.internal/api",
+  resource: "https://notes.internal/",
   requiredScopes: ["notes:read"],
 }).pipe(Effect.provide(FetchHttpClient.layer));
 // Acquire once, then use verifier.verify(authorization) or verifier.verifyToken(token).
 ```
 
-## Protect effect-actions routes
-
-Install the optional peer dependency and import the integration subpath:
-
-```sh
-vp add @gjermundgaraba/effect-actions@0.3.0
-```
-
-Core and integration declarations both type-check without `skipLibCheck`.
-
 ## One resource per application
 
 Register **one** resource in the Clanker Auth dashboard, identified by the application's public origin root, written with its trailing slash: `https://notes.internal/`. That one resource covers `/api`, `/mcp` and any socket, with one RFC 9728 document at `/.well-known/oauth-protected-resource` and one `forward_auth` block in the proxy.
 
-The identifier must already be canonical: `new URL(id).href === id`. An MCP client sends `new URL(metadata.resource).href` and the access token's audience is that string, so `https://notes.internal` (no slash) would be rewritten by the client and no longer match the issuer's registered resource. `Resource.make` refuses it with `ConfigurationError` rather than let that fail later. The official client's own `checkResourceAllowed` accepts an origin-root resource for an endpoint beneath it.
+`Resource.make` takes the public URL and derives that identifier itself, so the application never writes it twice and never writes a form an MCP client would rewrite. Any path on the URL is discarded. The official client's own `checkResourceAllowed` accepts an origin-root resource for an endpoint beneath it.
 
 Acquire the resource once at application construction, never per request.
 
@@ -62,15 +62,13 @@ const routes = Layer.unwrap(
   Effect.gen(function* () {
     const notes = yield* Resource.make({
       issuer: "https://auth.internal/api/auth",
-      resource: "https://notes.internal/",
-      scopes: ["notes:read", "notes:write"],
-      requiredScopes: ["notes:read"],
-      writeScope: "notes:write",
+      publicUrl: new URL("https://notes.internal"),
+      scopes: { read: "notes:read", write: "notes:write" },
     });
 
     return Layer.mergeAll(
       notes.discovery.layer,
-      Http.layer(app).pipe(Layer.provide(Resource.middleware(notes).layer)),
+      Http.layer(app, notes.session).pipe(Layer.provide(Resource.middleware(notes).layer)),
       ActionMcp.layerHttp(
         { name: "notes", version: "1.0.0", path: "/mcp", protocols: [McpProtocol.v2026_07_28] },
         app,
@@ -80,38 +78,40 @@ const routes = Layer.unwrap(
 ).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
-Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.116` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Authentication responses use `Cache-Control: no-store`.
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.116` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Every authentication response carries `Cache-Control: no-store`.
 
 The supplied `HttpClient` must not retry credential exchanges or follow redirects. The SDK overrides only FetchHttpClient's redirect policy to reject redirects, preserves other caller-provided fetch defaults, and never installs retry middleware.
 
 ## Scope enforcement
 
-An application names two scopes and writes no authorization code. Each action declares what it does to the resource, and the resource's `authorize` is the group's pre-handler hook: it runs before every handler on every surface — HTTP, MCP, Toolkit, CLI — so no handler can forget it.
+An application names its scopes once and writes no authorization code. Each action declares what it does to the resource, and `resource.authorize` is the surface's pre-handler hook: it runs before every handler on every surface — HTTP, MCP, Toolkit, CLI — so no handler can forget it.
 
 ```ts
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
-import { InsufficientScope } from "@gjermundgaraba/clankerauth-sdk";
+import { authenticationErrors } from "@gjermundgaraba/clankerauth-sdk/errors";
 
 const Notes = ActionGroup.make(
-  { name: "notes", errors: [InsufficientScope] },
+  { name: "notes" },
   Action.make("list", { description: "List notes", access: "read", success: Notes }),
   Action.make("write", { description: "Write a note", access: "write", success: Note }),
 );
 
-// `notes` is the acquired Resource above, configured with `writeScope`.
-const app = Notes.implement(handlers, { before: notes.authorize });
+// Declared on the surface, because the surface is what renders them.
+const Http = ActionHttp.make({ apiPath: "/api", errors: authenticationErrors }, Notes, Session);
 ```
 
-A read needs nothing beyond what verification already required. A write needs the configured `writeScope`; without one, `authorize` passes every action, so a single-scope resource is expressed by leaving it out. `InsufficientScope` is a 403 naming **only** the missing scope, so a refusal never enumerates the resource's permissions. Declare it on the group.
+`scopes.read` is required at verification, so a read needs nothing further. `scopes.write` is what an `access: "write"` action additionally needs; leave it out and every action passes, which is how a single-scope application is expressed. `InsufficientScope` is a 403 naming **only** the missing scope, so a refusal never enumerates the resource's permissions.
 
-An action still reads identity from `CurrentPrincipal`, which contains `subject`, `scopes`, `actor` — either `{ kind: "client", clientId }` or `{ kind: "key", keyId }` — and `expiresAt`: an access token's verified `exp` in epoch milliseconds, so a host bounding a connection to its credential never decodes the token again. It is `undefined` for an API key, which carries no token lifetime and is re-verified on every request; choose your own bound for those.
+A forward-auth browser token carries **every** scope the resource defines, because the issuer mints it for the signed-in owner and not for a program. The write scope therefore gates agents and API keys, not the owner at a keyboard: give a read-only agent or key only `scopes.read` and the same rule refuses its writes.
+
+An action reads identity from `CurrentPrincipal`, which contains `subject`, `scopes`, `actor` — either `{ kind: "client", clientId }` or `{ kind: "key", keyId }` — and `expiresAt`: an access token's verified `exp` in epoch milliseconds, so a host bounding a connection to its credential never decodes the token again. It is `undefined` for an API key, which carries no token lifetime and is re-verified on every request; choose your own bound for those.
 
 Middleware authenticates the request and the hook authorizes it; neither filters MCP tool discovery.
 
 ## Outside the router
 
-A socket, a Node `upgrade` handler or a per-request endpoint verifies the same credential against the same resource, and renders the same refusal, with `admit`:
+A socket, a Node `upgrade` handler or a per-request endpoint verifies the same credential against the same resource, and renders the same refusal, with `admit`. The access level is required, so the call says what the credential is for:
 
 ```ts
 const admission = await Effect.runPromise(notes.admit(request.headers.authorization, "write"));
@@ -125,7 +125,7 @@ if (!admission.ok) {
 connect(admission.principal);
 ```
 
-The refusal carries each error's own status (401/403/429/503), the RFC 6750 challenge including the no-credential case, `Cache-Control: no-store`, and the error's JSON encoding. Passing `"write"` demands the write scope before the socket is established. `Resource.middleware` is built on the same function, so a router and a socket can never answer differently.
+The refusal carries each error's own status (401/403/429/503), the RFC 6750 challenge including the no-credential case, `Cache-Control: no-store`, and the error's JSON encoding. `Resource.middleware` is built on the same function at `"read"`, so a router and a socket can never answer differently.
 
 The resource also exposes `verifier.verify(authorization)` and `verifier.verifyToken(token)` as Effects for callers that render their own responses.
 
@@ -139,7 +139,6 @@ import { RequestPolicy } from "@gjermundgaraba/clankerauth-sdk";
 const policy = RequestPolicy.make({
   publicUrl: new URL("https://notes.internal"),
   allowedOrigins: ["wtf://app"], // a desktop shell's private renderer scheme
-  exemptPaths: ["/healthz"], // a container probe carries neither header
 });
 
 const routes = protectedRoutes.pipe(Layer.provide(policy.middleware.layer));
@@ -156,19 +155,31 @@ if (
 }
 ```
 
-Both checks are raw string comparisons on the headers as sent. Nothing is parsed, so nothing throws and no normalization widens what is accepted: `notes.internal` and `notes.internal:443` are different hosts here, as they are to a browser's cookie. A request with no `Host` is refused unless its path is exempt. An absent `Origin` is allowed; a present one must match exactly. This is not authentication, and it does not set body limits or security headers — those stay the application's.
+Both checks are raw string comparisons on the headers as sent. Nothing is parsed, so nothing throws and no normalization widens what is accepted: `notes.internal` and `notes.internal:443` are different hosts here, as they are to a browser's cookie. A request with no `Host` is refused. An absent `Origin` is allowed; a present one must match exactly. `/healthz` is the one path answered without either check, because a container probe reaches the app on its bind address and carries neither header; it is fixed, not configurable. This is not authentication, and it does not set body limits or security headers — those stay the application's.
+
+## Browser applications
+
+A browser page holds no credential of its own: put it behind a reverse proxy with the issuer's forward auth, described in the Clanker Auth README, and the proxy adds the `Authorization` header this package verifies. What the page does need is who it is signed in as, and a way out:
+
+```ts
+import { Principal, Session, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
+
+// `Session` is the contract; the server answers it with `resource.session`.
+const principal: Principal = await api.session.whoami({ payload: {} });
+link.href = signOutUrl(principal.issuer, `${location.origin}/`);
+```
+
+`Principal` is `{ subject, issuer, scopes }`. `signOutUrl` points at the issuer's `/forward-auth/logout?rd=…`, which ends the issuer session and every app's forward cookie; it is a plain link. On the server, `resource.session` is the same group already implemented from the verified credential — pass it to the HTTP binding beside your own application, and delete the hand-written `whoami`.
+
+## Errors and observability
+
+Schema-tagged errors, all from `@gjermundgaraba/clankerauth-sdk/errors`: `Unauthorized` (401), `InsufficientScope` (403), `RateLimited` (429) and `ProviderUnavailable` (503), collected as `authenticationErrors`. Invalid construction fails with `ConfigurationError`.
+
+There is one 403. A credential that is valid but lacks a scope is `InsufficientScope`; a credential that is not this resource's at all — the wrong audience, or an API key with no grant here, which the issuer answers `403` for — is `Unauthorized`, because from the resource's side those are the same thing.
 
 JWTs are checked against issuer, audience, EdDSA signature, token type, required claims, expiry and scopes. Sender-constrained tokens are rejected. JWKS lookups are cached for ten minutes. Unknown keys trigger one refresh and resolution retry, with a thirty-second cooldown to bound provider traffic. Failed miss-triggered refreshes also cool down and return 503; still-valid cached keys remain usable. Initial lookup failures are not retained. Removed keys can remain trusted until cache expiry. API keys are checked online on **every request**, so revocation is effective immediately. A resource that accepts only OAuth access tokens sets `apiKeys: false`; key-shaped bearers then fail as `Unauthorized` without contacting the issuer. Verification has a five-second deadline.
 
 The bundled issuer does not configure automatic signing-key rotation. Immediate-use rotation is supported, but tokens signed by a new key can be rejected during the thirty-second cooldown after a successful lookup. Publish-before-use avoids that short window; it is not mandatory.
-
-## Browser applications
-
-Browser apps do not use this package. Put them behind a reverse proxy with the issuer's forward auth, described in the Clanker Auth README; the proxy adds an `Authorization` header the same verifier above accepts.
-
-## Errors and observability
-
-Schema-tagged errors: `Unauthorized` (401), `Forbidden` (403), `InsufficientScope` (403), `RateLimited` (429) and `ProviderUnavailable` (503). Invalid construction fails with `ConfigurationError`.
 
 The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
 

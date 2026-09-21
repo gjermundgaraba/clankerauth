@@ -84,8 +84,7 @@ export default defineConfig({
       issuer: "http://auth.notes.localhost:5174",
       appOrigin: "http://app.notes.localhost:5173",
       resource: "http://app.notes.localhost:5173/",
-      backend: "http://127.0.0.1:8080",
-      socketPaths: ["/eventlog"],
+      sockets: { backend: "http://127.0.0.1:8080", paths: ["/eventlog"] },
       onError: (error) => console.error("[forward-auth]", error.message),
     }),
   ],
@@ -96,8 +95,9 @@ Nothing in this package imports Vite, at run time or in its types: the plugin is
 
 - The check uses `node:http`, never `fetch`: `fetch` owns `Sec-Fetch-Mode`, and that header is what tells the issuer whether a request may be redirected through sign-in. The browser's own header is relayed, along with its cookie, plus `x-forwarded-proto`, `-host` and `-uri`.
 - It has a timeout (5 s by default) and **rejects** rather than deciding when the issuer is unreachable, too slow, or answers `204` with no `Authorization` to forward. `middleware` turns a rejection into a 502 and passes the error to `onError`; an empty credential is never forwarded upstream.
+- A refusal is relayed as the issuer wrote it: its status, its `Location`, its body and its content type. A script that is not signed in reads `{"error":"unauthenticated"}` rather than an empty 401.
 - `publicPaths` defaults to `/mcp`, `/.well-known` and `/healthz`, and a request that already carries an `Authorization` header is never checked: agents onboard themselves and probes run.
-- `upgrade` only takes the paths in `socketPaths`, so a development server keeps its own hot-reload socket; it returns `false` for everything else, which on a plain Node server means another listener must answer them. A checked upgrade is proxied to `backend`; a half closing normally ends the other half, and only an error destroys. A socket error is reported through `onError` and never crashes the server.
+- `upgrade` only takes the paths in `sockets.paths`, so a development server keeps its own hot-reload socket; it returns `false` for everything else, which on a plain Node server means another listener must answer them. Omit `sockets` and it takes none. A checked upgrade is proxied to `sockets.backend`; a half closing normally ends the other half, and only an error destroys. A client that gives up while the issuer is deciding is not proxied at all. A socket error is reported through `onError` and never crashes the server.
 - `reserveLoopbackPort()` claims a free port before anything that must know its own origin up front.
 
 The edge's types import `node:http` types, so a TypeScript consumer needs `@types/node`.
@@ -106,5 +106,28 @@ Two optional test hooks help exercise integrations:
 
 - `cimdTransport(input, init)` replaces outbound Client ID Metadata Document retrieval and returns a `Response` or `Promise<Response>`. Its arguments match `fetch`. Use it to serve fixture metadata for HTTPS client IDs without an external server. When omitted, the issuer uses its secure metadata transport.
 - `onRequest({ method, url })` observes actual incoming HTTP requests at the issuer listener, such as discovery, JWKS, dynamic client registration, and token requests. Provisioning is in-process, so the observer sees only the test's own traffic. `url` is a `URL`; headers and bodies are never passed. The callback runs synchronously before handling each request. A thrown error makes that request fail with HTTP 500, so keep observers nonthrowing.
+
+## A fake issuer for tests
+
+`@gjermundgaraba/clankerauth-dev/testing` is the issuer an application test usually wants: the two endpoints a resource server actually calls, and nothing else. It signs with a real EdDSA key and publishes it as JWKS, so every token still travels the resource server's own verifier — signature, issuer, audience, type, claims, scopes — without starting the whole issuer.
+
+```ts
+import { startFakeIssuer } from "@gjermundgaraba/clankerauth-dev/testing";
+
+const auth = await startFakeIssuer({
+  resource: "http://127.0.0.1:8080/",
+  scopes: ["notes:read", "notes:write"],
+});
+
+auth.issuer; // configure the resource server with this
+const token = await auth.sign(); // every claim is overridable: auth.sign({ exp, aud, scope })
+const key = auth.apiKey(["notes:read"]); // and auth.apiKey(scopes, someOtherResource)
+auth.revoke(key); // the next verification is 401, online, as the real issuer behaves
+auth.fail(503); // both endpoints answer this instead; auth.fail() restores them
+auth.verifications(); // how many API-key verifications were served
+await auth.close();
+```
+
+Use it for what a real issuer makes slow or awkward: a token that must expire in two seconds, a key granted on someone else's resource, an outage. Use `startDisposableIssuer` when the protocol itself is what the test is about — sign-in, consent, forward auth, dynamic registration.
 
 MIT licensed. The bundled third-party licenses are listed in `dist/THIRD_PARTY_NOTICES.txt`.

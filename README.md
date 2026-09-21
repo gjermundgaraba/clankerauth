@@ -49,13 +49,13 @@ Discovery is served at `/.well-known/oauth-authorization-server/api/auth`. There
 
 Browser applications need no OAuth code of their own. Put them behind Caddy or Traefik with forward auth pointed at this issuer, and add the app's API as a **Resource**. On every browser request the proxy asks `/forward-auth`; a signed-in owner gets a fifteen-minute access token for that resource in an `Authorization` header, which the proxy copies upstream. Anyone else is sent through the issuer, which signs them in if needed, and back to the page they asked for; only page navigations (`Sec-Fetch-Mode: navigate`) are redirected, and any other request, such as a script's `fetch`, is answered `401` so the app can reload instead of chasing a cross-origin redirect. The app verifies the token exactly as it verifies MCP and API-key bearer tokens below. Requests that already carry an `Authorization` header (MCP clients, API keys) bypass forward auth, and an MCP endpoint and the discovery documents under `/.well-known` stay public so MCP clients receive the 401 challenge they onboard from; one origin then serves browsers and agents alike.
 
-Register **one** resource per application, identified by its public origin root with the trailing slash: `https://notes.home.example/`. That one resource covers `/api`, `/mcp` and any socket, so the app publishes one RFC 9728 document at `/.well-known/oauth-protected-resource`, verifies one audience, and the proxy needs one `forward_auth` block.
+Register **one** resource per application, identified by its public origin root with the trailing slash: `https://notes.home.example/`. That one resource covers `/api`, `/mcp` and any socket, so the app publishes one RFC 9728 document at `/.well-known/oauth-protected-resource`, verifies one audience, and the proxy needs one `forward_auth` block. An identifier must already be canonical (`new URL(id).href === id`): a client sends back exactly what discovery published, and the dashboard refuses a form the client would rewrite, such as `https://notes.home.example` without its slash.
 
 ```caddyfile
 notes.home.example {
   @browser {
     not header Authorization *
-    not path /mcp /mcp/* /.well-known/*
+    not path /mcp /mcp/* /.well-known/* /healthz
   }
   forward_auth @browser https://auth.home.example {
     uri /forward-auth?resource=https://notes.home.example/
@@ -100,7 +100,7 @@ Content-Type: application/json
 
 `200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
 
-[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names two scopes and writes no authorization code. Its API is Effect-only. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, and ships the development forward-auth edge so no application writes one again.
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names its public URL and its scopes and writes no authorization code. Two entry points, `/errors` and `/session`, are browser-safe: a page imports the error schemas, the `whoami` contract and the sign-out URL without pulling verification into its bundle. Its API is Effect-only. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, ships the development forward-auth edge so no application writes one again, and offers a signing fake issuer at `/testing` for tests that only need JWKS and key verification.
 
 ## Develop
 

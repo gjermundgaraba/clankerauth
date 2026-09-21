@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import type { JWTPayload } from "jose";
 import { test } from "vite-plus/test";
 import { Effect } from "effect";
+import { Verifier } from "../src/index.ts";
 import {
-  Verifier,
-  Unauthorized,
-  Forbidden,
+  ConfigurationError,
+  InsufficientScope,
   ProviderUnavailable,
   RateLimited,
-  ConfigurationError,
-} from "../src/index.ts";
+  Unauthorized,
+} from "../src/errors.ts";
 import { publicUrl, startIssuer } from "./issuer.ts";
 import { withHttp } from "./support.ts";
 
@@ -93,9 +93,10 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
     await Effect.runPromise(
       verifier.verifyToken(await issuer.sign({ aud: [resource, "https://reports.internal/api"] })),
     );
-    assert(
-      (await failure(verifier.verifyToken(await issuer.sign({ scope: "notes:write" })))) instanceof
-        Forbidden,
+    // A missing required scope is the one 403: it names only the scope that is missing.
+    assert.deepEqual(
+      await failure(verifier.verifyToken(await issuer.sign({ scope: "notes:write" }))),
+      new InsufficientScope({ scope: "notes:read" }),
     );
   }));
 
@@ -118,8 +119,9 @@ test("malformed credentials, outages and rate limits remain distinct typed outco
     );
     issuer.fail(429);
     assert((await failure(verifier.verifyToken(issuer.key))) instanceof RateLimited);
+    // A key with no grant on this resource is not this resource's credential at all.
     issuer.fail(403);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof Forbidden);
+    assert((await failure(verifier.verifyToken(issuer.key))) instanceof Unauthorized);
     issuer.fail(undefined);
     issuer.malform(true);
     assert((await failure(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
