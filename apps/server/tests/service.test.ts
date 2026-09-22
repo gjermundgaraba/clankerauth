@@ -997,7 +997,7 @@ describe("dashboard resources and client access", () => {
       (await request("/api/administration/createResource", valid, { anonymous: true })).status,
     ).toBe(401);
     expect((await listing()).resources).toEqual([administrationResource(settings.baseURL)]);
-    const context = await service.auth.$context;
+    const { context } = service;
     const ownerId = await Effect.runPromise(service.owner());
 
     if (ownerId === undefined) throw new Error("Missing test owner");

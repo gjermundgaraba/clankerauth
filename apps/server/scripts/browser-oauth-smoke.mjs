@@ -160,14 +160,9 @@ try {
   assert.deepEqual(tokenGrants, ["authorization_code", "refresh_token"]);
   assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("listClients"));
   await page.evaluate(() => window.mcpTest.close());
-
-  // The legacy streamable handshake must also survive cross-origin browser header filtering.
-  assert.equal((await page.evaluate(() => window.mcpTest.connect("legacy"))).connected, true);
-  assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("listClients"));
-  await page.evaluate(() => window.mcpTest.close());
   assert.deepEqual(pageErrors, []);
   console.log(
-    "Cross-origin browser MCP OAuth passed (PKCE, consent, SDK scopes, mutation, refresh, modern and legacy transports).",
+    "Cross-origin browser MCP OAuth passed (PKCE, consent, SDK scopes, mutation, refresh, 2026-07-28 transport).",
   );
 } finally {
   await browser?.close();

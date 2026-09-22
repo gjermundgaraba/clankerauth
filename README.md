@@ -177,8 +177,8 @@ access must authorize again after expiration.
 
 Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with scope `admin`, and their client must still exist and not be blocked. **Block client** and deletion therefore end MCP access on the next request; **Revoke authorization** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
-MCP supports **2026-07-28**, **2025-11-25**, **2025-06-18**, and **2025-03-26**
-transport revisions. OAuth clients must support resource indicators. Effect's native
+MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
+session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
 HTTP server streams responses instead of buffering them; historical two-endpoint
 SSE remains unsupported. Request bodies are limited to 64 KiB; larger uploads are disconnected.
 

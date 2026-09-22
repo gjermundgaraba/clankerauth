@@ -439,6 +439,26 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
   expect(JSON.parse(result.content[0].text)).toEqual(expected);
 });
 
+test("a key with malformed stored permissions fails listing and verification as an internal error", async () => {
+  const key = await create();
+  await Effect.runPromise(
+    issuer.service
+      .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: [42] })} WHERE id = ${key.keyId}`,
+  );
+
+  const expected = Schema.encodeSync(InternalServerError)(
+    new InternalServerError({ error: "Request could not be completed" }),
+  );
+
+  for (const response of [
+    await call("/api/administration/listApiKeys", {}),
+    await verify(key.key),
+  ]) {
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual(expected);
+  }
+});
+
 test("HTTP administration requires the owner session; MCP requires bearer authorization", async () => {
   const userId = await Effect.runPromise(issuer.service.owner());
 
@@ -473,77 +493,69 @@ test("HTTP administration requires the owner session; MCP requires bearer author
   expect((await call("/api/administration/listClients")).status).toBe(404);
 });
 
-test.each(["2026-07-28", "2025-11-25"] as const)(
-  "official %s MCP client uses OAuth bearer authentication through native Effect HTTP",
-  async (protocolVersion) => {
-    const { tokens } = await mcpOAuthGrant(handle, origin, cookie);
-    const scope = Scope.makeUnsafe();
+test("official 2026-07-28 MCP client uses OAuth bearer authentication through native Effect HTTP", async () => {
+  const { tokens } = await mcpOAuthGrant(handle, origin, cookie);
+  const scope = Scope.makeUnsafe();
 
-    const listener = await issuer.run(
-      nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)),
+  const listener = await issuer.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)));
+
+  const server = createNodeServer(listener);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
+    await withMcpClient(
+      {
+        fetch: (request) => fetch(request),
+        versionNegotiation: { mode: { pin: "2026-07-28" } },
+        path: "/mcp",
+        baseUrl: `http://127.0.0.1:${port}`,
+        headers: { authorization: `Bearer ${tokens.access_token}` },
+      },
+      async (client) => {
+        const { tools } = await client.listTools();
+        expect(tools.map((tool) => tool.name).sort()).toEqual(
+          Administration.actions.map((action) => action.name).sort(),
+        );
+        const listing = await client.callTool({ name: "listClients", arguments: {} });
+        expect(listing.isError).toBe(false);
+        expect(listing.structuredContent).toMatchObject({
+          value: {
+            email: "owner@example.internal",
+            resources: [
+              administrationResource(origin),
+              {
+                identifier: resource,
+                name: "Example",
+                scopes: ["example:read", "example:write"],
+                builtIn: false,
+              },
+            ],
+          },
+        });
+
+        const malformed = await client.callTool({
+          name: "updateApiKey",
+          arguments: { keyId: 42 },
+        });
+
+        expect(malformed.isError).toBe(true);
+        expect(malformed.structuredContent).toBeUndefined();
+        expect(malformed.content).toEqual([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("Invalid parameters for tool 'updateApiKey'"),
+          }),
+        ]);
+      },
     );
-
-    const server = createNodeServer(listener);
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-
-    try {
-      const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
-      await withMcpClient(
-        {
-          fetch: (request) => fetch(request),
-          versionNegotiation:
-            protocolVersion === "2026-07-28"
-              ? { mode: { pin: protocolVersion } }
-              : { mode: "legacy" },
-          path: "/mcp",
-          baseUrl: `http://127.0.0.1:${port}`,
-          headers: { authorization: `Bearer ${tokens.access_token}` },
-        },
-        async (client) => {
-          const { tools } = await client.listTools();
-          expect(tools.map((tool) => tool.name).sort()).toEqual(
-            Administration.actions.map((action) => action.name).sort(),
-          );
-          const listing = await client.callTool({ name: "listClients", arguments: {} });
-          expect(listing.isError).toBe(false);
-          expect(listing.structuredContent).toMatchObject({
-            value: {
-              email: "owner@example.internal",
-              resources: [
-                administrationResource(origin),
-                {
-                  identifier: resource,
-                  name: "Example",
-                  scopes: ["example:read", "example:write"],
-                  builtIn: false,
-                },
-              ],
-            },
-          });
-
-          const malformed = await client.callTool({
-            name: "updateApiKey",
-            arguments: { keyId: 42 },
-          });
-
-          expect(malformed.isError).toBe(true);
-          expect(malformed.structuredContent).toBeUndefined();
-          expect(malformed.content).toEqual([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("Invalid parameters for tool 'updateApiKey'"),
-            }),
-          ]);
-        },
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-  },
-);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  }
+});
 
 test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
   const permissions = { [`${origin}/mcp`]: ["admin"] };

@@ -84,7 +84,7 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const destroy = vi.spyOn(service.database, "destroy");
-  const context = await service.auth.$context;
+  const { context } = service;
   const hash = context.password.hash;
   // Sign-up hashes inside the provider's transaction, which holds the connection.
   vi.spyOn(context.password, "hash").mockImplementation(async (password) => {

@@ -1,4 +1,4 @@
-import { Effect, Layer, type Scope, Struct } from "effect";
+import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { McpProtocol } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -12,28 +12,6 @@ import { bearerOwner, sessionOwner } from "./current-owner.ts";
 import { responseCookies } from "./response-cookies.ts";
 import { Auth } from "./auth.ts";
 
-// Nothing the provider does can be cancelled, so no owner action is. HTTP routes are
-// already uninterruptible (app.ts), but MCP forks every tool call into a fiber of its
-// own that a client's `notifications/cancelled` interrupts. So each handler runs
-// uninterruptibly in a scope of its own: a cancelled call still awaits its provider
-// Promises, holds its locks and runs its compensation, and its provider session lives
-// until it has settled rather than closing with the interrupted tool call. The
-// interruption still takes effect, once the handler is done.
-interface Settled extends Struct.Lambda {
-  <I, A, E, R>(
-    handler: (input: I) => Effect.Effect<A, E, R>,
-  ): (input: I) => Effect.Effect<A, E, Exclude<R, Scope.Scope>>;
-  readonly "~lambda.out": this["~lambda.in"] extends (
-    input: infer I,
-  ) => Effect.Effect<infer A, infer E, infer R>
-    ? (input: I) => Effect.Effect<A, E, Exclude<R, Scope.Scope>>
-    : never;
-}
-
-const settled = Struct.lambda<Settled>(
-  (handler) => (input) => Effect.uninterruptible(Effect.scoped(handler(input))),
-);
-
 export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -41,28 +19,23 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
       const admin = yield* administration;
       const keys = yield* machineKeys;
 
-      const owner = Administration.implement(
-        Struct.map(
-          {
-            listClients: admin.list,
-            createClient: admin.create,
-            updateClient: admin.update,
-            deleteClient: admin.delete,
-            revokeClient: admin.revoke,
-            blockClient: admin.block,
-            rotateClientSecret: admin.rotate,
-            setClientAccess: admin.access,
-            createResource: admin.createResource,
-            updateResource: admin.updateResource,
-            deleteResource: admin.deleteResource,
-            listApiKeys: keys.list,
-            createApiKey: keys.create,
-            updateApiKey: keys.update,
-            deleteApiKey: keys.delete,
-          },
-          settled,
-        ),
-      );
+      const owner = Administration.implement({
+        listClients: admin.list,
+        createClient: admin.create,
+        updateClient: admin.update,
+        deleteClient: admin.delete,
+        revokeClient: admin.revoke,
+        blockClient: admin.block,
+        rotateClientSecret: admin.rotate,
+        setClientAccess: admin.access,
+        createResource: admin.createResource,
+        updateResource: admin.updateResource,
+        deleteResource: admin.deleteResource,
+        listApiKeys: keys.list,
+        createApiKey: keys.create,
+        updateApiKey: keys.update,
+        deleteApiKey: keys.delete,
+      });
 
       const issuer = IssuerActions.implement({
         setupStatus: () =>
@@ -99,13 +72,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         name: "clankerauth-admin",
         version: manifest.version,
         path: "/mcp",
-        // Keep the existing protocol allowlist; native streaming does not expand it.
-        protocols: [
-          McpProtocol.v2026_07_28,
-          McpProtocol.v2025_11_25,
-          McpProtocol.v2025_06_18,
-          McpProtocol.v2025_03_26,
-        ],
+        protocols: [McpProtocol.v2026_07_28],
         // Native MCP admission needs this allowlist even after owner authentication.
         allowedOrigins: mcpAllowedOrigins,
         instructions:

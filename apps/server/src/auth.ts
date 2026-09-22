@@ -227,7 +227,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
   // Migrations and provider initialization cannot be cancelled; they settle here so the
   // layer never hands out a service whose database finalizer could outrun them. The
   // provider is constructed after migrating, since its initialization reads the schema.
-  const auth = yield* Effect.fn("Auth.initialize")(function* () {
+  const { auth, context } = yield* Effect.fn("Auth.initialize")(function* () {
     const plan = yield* Effect.tryPromise(() => getMigrations(options));
 
     if (plan.schemaProblems.length)
@@ -235,15 +235,17 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     yield* Effect.tryPromise(() => plan.runMigrations());
     const auth = betterAuth(options);
     // Provider initialization seeds the administration resource; publish the catalog after it.
-    yield* Effect.tryPromise(() => auth.$context);
+    const context = yield* Effect.tryPromise(() => auth.$context);
 
-    return auth;
+    return { auth, context };
   }, Effect.uninterruptible)();
 
   yield* resources.synchronize();
 
   return {
     auth,
+    /** The provider's resolved context: its adapter, cookie names and secret. */
+    context,
     sql,
     database: database.kysely,
     owner,

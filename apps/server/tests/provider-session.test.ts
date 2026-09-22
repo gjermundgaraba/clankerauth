@@ -22,7 +22,7 @@ test.each([false, true])(
       const owner = await Effect.runPromise(service.owner());
 
       if (!owner) throw new Error("Missing test owner");
-      const context = await service.auth.$context;
+      const { context } = service;
       const startedDeletion = Promise.withResolvers<void>();
       const originalDelete = context.internalAdapter.deleteSession.bind(context.internalAdapter);
       vi.spyOn(context.internalAdapter, "deleteSession").mockImplementation(async (token) => {
@@ -68,7 +68,7 @@ test("cancellation releases a temporary provider session that lasts at most one 
     const owner = await Effect.runPromise(service.owner());
 
     if (!owner) throw new Error("Missing test owner");
-    const context = await service.auth.$context;
+    const { context } = service;
     const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
     const acquired = Promise.withResolvers<void>();
     const before = await Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`);

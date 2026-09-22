@@ -54,14 +54,17 @@ window.mcpTest = {
       resource: await resource.json(),
     };
   },
-  async connect(mode = "modern") {
-    client = new Client({ name: "browser-oauth-test", version: "1" });
+  async connect() {
+    client = new Client(
+      { name: "browser-oauth-test", version: "1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
     transport = new StreamableHTTPClientTransport(serverUrl, { authProvider: provider });
 
     try {
-      await client.connect(transport, { mode });
+      await client.connect(transport);
 
-      return { connected: true, sessionId: transport.sessionId };
+      return { connected: true };
     } catch (error) {
       if (!read("authorizationUrl")) throw error;
 

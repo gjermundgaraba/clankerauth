@@ -59,17 +59,14 @@ const json = (body: typeof Schema.Json.Type, status = 200) =>
 
 const notFound = json({ error: "Not found" }, 404);
 
-const mcpMethods = ["GET", "POST", "DELETE"];
-
+/** Stateless 2026-07-28 MCP is POST only, with no session or stream-resumption headers. */
 const mcpRequestHeaders = [
   "Authorization",
   "Content-Type",
   "Accept",
   "Mcp-Protocol-Version",
-  "Mcp-Session-Id",
   "Mcp-Method",
   "Mcp-Name",
-  "Last-Event-ID",
 ];
 
 const mcpRequestHeaderNames = new Set(mcpRequestHeaders.map((header) => header.toLowerCase()));
@@ -101,10 +98,7 @@ export const application = (
               ? url.searchParams.getAll("resource")
               : new URLSearchParams(yield* request.text).getAll("resource");
 
-          if (
-            resources.length !== 1 ||
-            !(yield* service.resources.get(resources[0] ?? "").pipe(Effect.uninterruptible))
-          )
+          if (resources.length !== 1 || !(yield* service.resources.get(resources[0] ?? "")))
             return json(
               {
                 error: "invalid_target",
@@ -188,8 +182,7 @@ export const application = (
 
                 response =
                   mcpOriginAllowed &&
-                  method !== undefined &&
-                  mcpMethods.includes(method) &&
+                  method === "POST" &&
                   headers.every((header) => mcpRequestHeaderNames.has(header))
                     ? HttpServerResponse.empty({ status: 204 })
                     : json({ error: "MCP preflight rejected" }, 403);
@@ -223,8 +216,7 @@ export const application = (
                   response = response.pipe(
                     HttpServerResponse.setHeaders({
                       "access-control-allow-origin": origin,
-                      "access-control-expose-headers":
-                        "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version",
+                      "access-control-expose-headers": "WWW-Authenticate, Mcp-Protocol-Version",
                     }),
                   );
 
@@ -235,7 +227,7 @@ export const application = (
                   )
                     response = response.pipe(
                       HttpServerResponse.setHeaders({
-                        "access-control-allow-methods": mcpMethods.join(", "),
+                        "access-control-allow-methods": "POST",
                         "access-control-allow-headers": mcpRequestHeaders.join(", "),
                       }),
                     );
@@ -288,11 +280,7 @@ export const application = (
         HttpRouter.add(
           "GET",
           "/healthz",
-          service.sql`SELECT 1`.pipe(
-            Effect.as(json({ status: "ok" })),
-            Effect.uninterruptible,
-            Effect.catch(respond),
-          ),
+          service.sql`SELECT 1`.pipe(Effect.as(json({ status: "ok" })), Effect.catch(respond)),
         ),
         HttpRouter.add("*", "/api/auth/*", bridge),
         HttpRouter.add("*", "/.well-known/*", bridge),

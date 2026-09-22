@@ -94,11 +94,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         sameSite: "lax",
       } as const;
 
-      const sessionCookieName = Effect.tryPromise(async () => {
-        const context = await service.auth.$context;
-
-        return context.authCookies.sessionToken.name;
-      });
+      const sessionCookieName = service.context.authCookies.sessionToken.name;
 
       const withReturn = (path: string, returnTo: URL) => {
         const url = new URL(path, settings.baseURL);
@@ -139,7 +135,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
           : Option.none();
 
         const current = Option.isSome(unsealed)
-          ? yield* session(`${yield* sessionCookieName}=${unsealed.value}`)
+          ? yield* session(`${sessionCookieName}=${unsealed.value}`)
           : null;
 
         // Only a page navigation can follow the issuer and come back. A script's request would
@@ -173,7 +169,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         const returnTo = requested ? allowedReturnURL(requested) : undefined;
 
         if (!returnTo) return json(400, "invalid_return_url");
-        const value = request.cookies[yield* sessionCookieName];
+        const value = request.cookies[sessionCookieName];
         const current = value ? yield* session(request.headers.cookie ?? "") : null;
 
         // Login returns only to this origin: back here, which then seals the cookie and goes on.

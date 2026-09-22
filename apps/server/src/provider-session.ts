@@ -4,14 +4,14 @@ import { provider } from "./api-errors.ts";
 import type { Auth } from "./auth.ts";
 
 /** The pinned provider's administration APIs require a signed session cookie.
- * Keep the adapter session inside the owner action's own scope (action-api.ts) and never
- * forward this cookie to the caller. Its one-minute expiry bounds crash residue.
+ * The session lives in the calling scope, which deletes it on close; never put this
+ * cookie in a response. Its one-minute expiry bounds crash residue.
  */
 export const providerSession = Effect.fn("Administration.providerSession")(function* (
   service: Auth["Service"],
   userId: string,
 ) {
-  const context = yield* provider(() => service.auth.$context);
+  const { context } = service;
   const expiresAt = new Date((yield* Clock.currentTimeMillis) + 60_000);
 
   const session = yield* Effect.acquireRelease(

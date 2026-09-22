@@ -114,9 +114,9 @@ const platform = Layer.mergeAll(
 );
 
 /**
- * One running issuer, built into the caller's scope. The listener is acquired before the
- * issuer and the request handler after it, so closing the scope settles request fibers,
- * then closes SQLite, then frees the port and removes a temporary directory.
+ * One running issuer, built into the caller's scope. Closing the scope closes sockets and
+ * frees the port, then awaits request fibers, then closes SQLite, then removes a
+ * temporary directory.
  */
 const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOptions) {
   const fs = yield* FileSystem.FileSystem;
@@ -139,7 +139,11 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
           resolve(dataDir),
         );
 
-  // Listen first to discover the port; reject requests until initialization completes.
+  // Listen first, since the issuer's URL needs the port; requests get 503 until it is up.
+  // The listen's release frees the port if startup fails after binding. Once up, a second
+  // finalizer closes sockets before request fibers are awaited (a handler blocked on an
+  // incomplete body needs that) and before SQLite closes. Closing twice is fine: close's
+  // callback fires on a stopped server too.
   let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();
   };
@@ -157,18 +161,11 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     }
   });
 
-  // Idempotent: whichever of the two finalizers below runs first frees the port.
-  const stopListening = Effect.suspend(() =>
-    server.listening
-      ? Effect.callback<void>((resume) => {
-          server.close(() => resume(Effect.void));
-          server.closeAllConnections();
-        })
-      : Effect.void,
-  );
+  const stopListening = Effect.callback<void>((resume) => {
+    server.close(() => resume(Effect.void));
+    server.closeAllConnections();
+  });
 
-  // A startup that fails after binding, such as on invalid settings or a refused
-  // credentials file, must not leave the port bound and the caller's process alive.
   yield* Effect.acquireRelease(
     Effect.callback<void, Error>((resume) => {
       const failed = (error: Error) => resume(Effect.fail(error));
@@ -211,10 +208,6 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   const issuer = yield* Layer.build(Auth.layer(settings, { cimdTransport: options.cimdTransport }));
   const service = Context.get(issuer, Auth);
 
-  // Request fibers live in a child scope registered here, before the socket finalizer
-  // below, so shutdown closes sockets first, then awaits request fibers — which a handler
-  // blocked on an incomplete body needs — and only then closes SQLite. Until that
-  // finalizer is registered, the listen's own release frees the port on failure.
   const requests = yield* Scope.fork(yield* Effect.scope);
 
   serve = yield* nodeHandler(staticRoot).pipe(

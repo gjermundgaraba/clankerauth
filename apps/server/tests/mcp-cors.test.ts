@@ -60,22 +60,18 @@ test("allowed browser origins can preflight MCP without credentials", async () =
     "Content-Type",
     "Accept",
     "Mcp-Protocol-Version",
-    "Mcp-Session-Id",
     "Mcp-Method",
     "Mcp-Name",
-    "Last-Event-ID",
   ];
 
   for (const origin of [clientOrigin, baseURL]) {
-    for (const method of ["GET", "POST", "DELETE"]) {
-      const response = await preflight(origin, method, allowedHeaders.join(", "));
-      expect(response.status).toBe(204);
-      expectCors(response, origin);
-      expect(headerNames(response, "access-control-allow-methods")).toContain(method.toLowerCase());
-      expect(headerNames(response, "access-control-allow-headers")).toEqual(
-        expect.arrayContaining(allowedHeaders.map((name) => name.toLowerCase())),
-      );
-    }
+    const response = await preflight(origin, "POST", allowedHeaders.join(", "));
+    expect(response.status).toBe(204);
+    expectCors(response, origin);
+    expect(headerNames(response, "access-control-allow-methods")).toEqual(["post"]);
+    expect(headerNames(response, "access-control-allow-headers")).toEqual(
+      expect.arrayContaining(allowedHeaders.map((name) => name.toLowerCase())),
+    );
   }
 });
 
@@ -90,8 +86,12 @@ test("MCP preflight rejects unlisted origins, methods, and headers", async () =>
     expect(response.headers.has("access-control-allow-origin")).toBe(false);
   }
 
-  expect((await preflight(clientOrigin, "PATCH")).status).toBe(403);
-  expect((await preflight(clientOrigin, "POST", "authorization, x-unlisted")).status).toBe(403);
+  // Stateless 2026-07-28 MCP has no GET stream, session deletion, session or resumption headers.
+  for (const method of ["GET", "DELETE", "PATCH"])
+    expect((await preflight(clientOrigin, method)).status).toBe(403);
+
+  for (const header of ["x-unlisted", "mcp-session-id", "last-event-id"])
+    expect((await preflight(clientOrigin, "POST", `authorization, ${header}`)).status).toBe(403);
 });
 
 test("browser authentication failures expose the challenge and MCP headers", async () => {
@@ -105,9 +105,10 @@ test("browser authentication failures expose the challenge and MCP headers", asy
     expect(response.status).toBe(401);
     expectCors(response, clientOrigin);
     expect(response.headers.get("www-authenticate")).toContain('scope="admin"');
-    expect(headerNames(response, "access-control-expose-headers")).toEqual(
-      expect.arrayContaining(["www-authenticate", "mcp-session-id", "mcp-protocol-version"]),
-    );
+    expect(headerNames(response, "access-control-expose-headers")).toEqual([
+      "www-authenticate",
+      "mcp-protocol-version",
+    ]);
   }
 });
 
@@ -170,7 +171,8 @@ test("an allowed external browser uses bearer MCP while the dashboard API expose
   expect(dashboard.status).toBe(200);
   expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
 
-  const missingSession = await handle(
+  // Only 2026-07-28 is served: a 2025-era handshake is refused, and the refusal still carries CORS.
+  const legacy = await handle(
     new Request(`${baseURL}/mcp`, {
       method: "POST",
       headers: {
@@ -180,13 +182,23 @@ test("an allowed external browser uses bearer MCP while the dashboard API expose
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2025-11-25",
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "legacy", version: "1" },
+        },
+      }),
     }),
   );
 
-  expect(missingSession.status).toBe(400);
-  expectCors(missingSession, clientOrigin);
-  expect(missingSession.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(legacy.status).toBe(400);
+  expect(await legacy.clone().json()).toMatchObject({ id: 1, error: expect.any(Object) });
+  expectCors(legacy, clientOrigin);
+  expect(legacy.headers.get("x-content-type-options")).toBe("nosniff");
 });
 
 test("discovery middleware cannot bypass public CORS or security headers", async () => {

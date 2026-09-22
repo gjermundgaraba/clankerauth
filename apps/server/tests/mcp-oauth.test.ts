@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
-import { Effect, Schema } from "effect";
+import { Effect, Exit, Schema, Scope } from "effect";
 import { InternalServerError } from "@clankerauth/admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { nodeHandler } from "../src/app.ts";
+import { createNodeServer } from "../src/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
 import { createOwner } from "../src/auth.ts";
 import { openIssuer, type Issuer } from "./issuer.ts";
 import { administrationResource, mcpOAuthGrant, oauthToken } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
+
+const ListenAddress = Schema.Struct({ port: Schema.Number });
 
 type JsonPrimitive = string | number | boolean | null;
 
@@ -144,6 +148,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   await withMcpClient(
     {
       fetch: handle,
+      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -176,17 +181,16 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   expect((await mcp(replacement.access_token)).status).toBe(200);
 });
 
-test("a cancelled MCP tool call settles its provider work and compensation before shutdown", async () => {
+test("an aborted MCP tool call settles its provider work and compensation before shutdown", async () => {
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   const { api } = issuer.service.auth;
   const createClient = api.adminCreateOAuthClient;
   const deleteClient = api.deleteOAuthClient;
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const cancelled = Promise.withResolvers<void>();
   const controller = new AbortController();
   let compensated = false;
-  let disposed = false;
+  let stopped = false;
   vi.spyOn(api, "adminCreateOAuthClient").mockImplementation(async (context) => {
     entered.resolve();
     await release.promise;
@@ -197,73 +201,68 @@ test("a cancelled MCP tool call settles its provider work and compensation befor
   vi.spyOn(issuer.service.resources, "setAccess").mockReturnValue(
     Effect.fail(new InternalServerError({ error: "Request could not be completed" })),
   );
-
-  const compensation = vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
+  vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
     const deleted = await deleteClient(context);
     compensated = true;
 
     return deleted;
   });
 
+  // Serve and shut down the way main.ts does: the server's scope owns its request fibers.
+  const scope = Scope.makeUnsafe();
+
+  const server = createNodeServer(
+    await issuer.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, scope))),
+  );
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
+
   try {
-    await withMcpClient(
-      {
-        // Only a session-based protocol lets a client cancel a request it has sent.
-        versionNegotiation: { mode: "legacy" },
-        fetch: async (request) => {
-          const cancellation = (await request.clone().text()).includes("notifications/cancelled");
-          const response = await handle(request);
-
-          if (cancellation) cancelled.resolve();
-
-          return response;
+    const request = mcpRequest({
+      method: "tools/call",
+      url: `http://127.0.0.1:${port}/mcp`,
+      params: {
+        name: "createClient",
+        arguments: {
+          client_name: "Aborted through MCP",
+          redirect_uris: ["http://127.0.0.1:9912/callback"],
+          resources: [],
+          application_type: "native",
+          token_endpoint_auth_method: "client_secret_basic",
         },
-        path: "/mcp",
-        baseUrl: baseURL,
-        headers: { authorization: `Bearer ${tokens.access_token}` },
       },
-      async (client) => {
-        const call = client.callTool(
-          {
-            name: "createClient",
-            arguments: {
-              client_name: "Cancelled through MCP",
-              redirect_uris: ["http://127.0.0.1:9912/callback"],
-              resources: [],
-              application_type: "native",
-              token_endpoint_auth_method: "client_secret_basic",
-            },
-          },
-          { signal: controller.signal },
-        );
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    });
 
-        const rejected = expect(call).rejects.toThrow();
-        await entered.promise;
-        controller.abort();
-        await rejected;
-        await cancelled.promise;
+    const call = fetch(new Request(request, { signal: controller.signal }));
+    await entered.promise;
+    controller.abort();
+    await expect(call).rejects.toThrow();
 
-        const disposing = handle.dispose().then(() => {
-          disposed = true;
+    server.close();
+    server.closeAllConnections();
 
-          return compensated;
-        });
+    const stopping = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => {
+      stopped = true;
 
-        // The cancelled call still owns its provider write, so shutdown waits for it.
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        expect(disposed).toBe(false);
-        release.resolve();
-        expect(await disposing).toBe(true);
-      },
-    );
+      return compensated;
+    });
+
+    // Stateless MCP has no cancellation: the aborted call still owns its provider write.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stopped).toBe(false);
+    release.resolve();
+    expect(await stopping).toBe(true);
   } finally {
     release.resolve();
+    server.close();
+    await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 
-  expect(compensation).toHaveBeenCalledTimes(1);
   expect(
     await Effect.runPromise(
-      issuer.service.sql`SELECT clientId FROM oauthClient WHERE name = ${"Cancelled through MCP"}`,
+      issuer.service.sql`SELECT clientId FROM oauthClient WHERE name = ${"Aborted through MCP"}`,
     ),
   ).toEqual([]);
 });
@@ -404,12 +403,13 @@ test("MCP protocol and owner-identity operations do not acquire provider session
   ).toBe(201);
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   const target = await mcpOAuthGrant(handle, baseURL, cookie);
-  const context = await issuer.service.auth.$context;
+  const { context } = issuer.service;
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
     {
       fetch: handle,
+      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -466,12 +466,13 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   const sessions = () => Effect.runPromise(issuer.service.sql`SELECT id FROM session ORDER BY id`);
   const before = await sessions();
-  const context = await issuer.service.auth.$context;
+  const { context } = issuer.service;
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
     {
       fetch: handle,
+      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },

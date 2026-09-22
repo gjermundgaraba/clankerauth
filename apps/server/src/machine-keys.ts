@@ -1,4 +1,4 @@
-import { Clock, DateTime, Effect, Schema } from "effect";
+import { Clock, DateTime, Effect } from "effect";
 import {
   BadRequest,
   Forbidden,
@@ -13,23 +13,26 @@ import { Auth } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
 import { provider } from "./api-errors.ts";
+import { persisted } from "./database.ts";
 
-const permissions = Schema.decodeUnknownSync(KeyPermissions);
+const permissions = persisted(KeyPermissions);
 
-const summary = (key: {
+const summary = Effect.fnUntraced(function* (key: {
   id: string;
   name?: string | null;
   enabled: boolean;
   permissions?: unknown;
   expiresAt?: Date | null;
   createdAt: Date;
-}) => ({
-  keyId: key.id,
-  name: key.name ?? "",
-  enabled: key.enabled,
-  permissions: permissions(key.permissions ?? {}),
-  expiresAt: key.expiresAt ? DateTime.fromDateUnsafe(key.expiresAt) : null,
-  createdAt: DateTime.fromDateUnsafe(key.createdAt),
+}) {
+  return {
+    keyId: key.id,
+    name: key.name ?? "",
+    enabled: key.enabled,
+    permissions: yield* permissions(key.permissions ?? {}),
+    expiresAt: key.expiresAt ? DateTime.fromDateUnsafe(key.expiresAt) : null,
+    createdAt: DateTime.fromDateUnsafe(key.createdAt),
+  };
 });
 
 export const machineKeys = Effect.map(Auth, (service) => {
@@ -81,7 +84,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
         }),
       );
 
-      return { keys: result.apiKeys.map(summary) };
+      return { keys: yield* Effect.forEach(result.apiKeys, summary) };
     }),
     create: Effect.fn("MachineKeys.create")(function* (input: typeof ApiKeyInput.Type) {
       const owner = yield* CurrentOwner;
@@ -108,13 +111,13 @@ export const machineKeys = Effect.map(Auth, (service) => {
         }),
       );
 
-      return { ...summary(key), key: key.key };
+      return { ...(yield* summary(key)), key: key.key };
     }),
     update: Effect.fn("MachineKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
       const owner = yield* CurrentOwner;
       yield* validate(input.name, input.permissions);
 
-      return summary(
+      return yield* summary(
         yield* provider(() =>
           service.auth.api.updateApiKey({
             body: {
@@ -158,7 +161,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
       }
 
       const resource = yield* service.resources.get(identifier);
-      const grants = permissions(result.key.permissions ?? {});
+      const grants = yield* permissions(result.key.permissions ?? {});
       const scopes = (grants[identifier] ?? []).filter((scope) => resource?.scopes.includes(scope));
 
       if (!resource || !scopes.length)
