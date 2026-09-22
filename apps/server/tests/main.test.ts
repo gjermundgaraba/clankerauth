@@ -50,6 +50,7 @@ function start(port: number) {
         HOST: "127.0.0.1",
         PORT: String(port),
         MCP_ALLOWED_ORIGINS: "",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

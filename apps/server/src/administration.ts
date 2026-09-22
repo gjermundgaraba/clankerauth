@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { apiError, provider } from "./api-errors.ts";
+import { provider } from "./api-errors.ts";
 import type {
   ClientInput,
   ClientUpdateInput,
@@ -10,10 +10,11 @@ import type {
   ResourceId,
   SetupInput,
 } from "@clankerauth/admin-api";
+import { persisted } from "./database.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
 import { ResponseCookies } from "./response-cookies.ts";
-import { createOwner, type Service } from "./auth.ts";
+import { Auth, createOwner } from "./auth.ts";
 
 const ClientRow = Schema.Struct({
   clientId: Schema.String,
@@ -28,14 +29,15 @@ const ClientRow = Schema.Struct({
   userId: Schema.NullOr(Schema.String),
 });
 
-const decodeClients = Schema.decodeUnknownEffect(Schema.Array(ClientRow));
+const decodeClients = persisted(Schema.Array(ClientRow));
 
-export function administration(service: Service) {
+export const administration = Effect.map(Auth, (service) => {
   const { auth, settings } = service;
 
   return {
     setup: Effect.fn("Administration.setup")(function* (input: typeof SetupInput.Type) {
-      const cookies = yield* createOwner(service, input).pipe(Effect.mapError(apiError));
+      const cookies = yield* createOwner(service, input);
+
       yield* (yield* ResponseCookies).add(cookies);
 
       return { created: true };
@@ -48,9 +50,9 @@ export function administration(service: Service) {
         SELECT clientId, name, redirectUris, tokenEndpointAuthMethod, applicationType, scopes,
           grantTypes, disabled, clientDiscoveryId, userId
         FROM oauthClient ORDER BY createdAt, clientId
-      `.pipe(Effect.mapError(apiError));
+      `;
 
-      const clients = (yield* decodeClients(rows).pipe(Effect.mapError(apiError))).map((row) => ({
+      const clients = (yield* decodeClients(rows)).map((row) => ({
         client_id: row.clientId,
         onboarding:
           row.clientDiscoveryId !== null
@@ -70,7 +72,7 @@ export function administration(service: Service) {
       const catalog = yield* Effect.all({
         resources: service.resources.list(),
         clientAccess: service.resources.access(),
-      }).pipe(Effect.mapError(apiError));
+      });
 
       return {
         clients,
@@ -86,9 +88,7 @@ export function administration(service: Service) {
     create: Effect.fn("Administration.create")(function* (input: typeof ClientInput.Type) {
       const { providerHeaders } = yield* CurrentOwner;
 
-      const scopes = yield* service.resources
-        .scopesFor(input.resources)
-        .pipe(Effect.mapError(apiError));
+      const scopes = yield* service.resources.scopesFor(input.resources);
 
       const headers = yield* providerHeaders;
 
@@ -109,14 +109,15 @@ export function administration(service: Service) {
         }),
       );
 
-      yield* service.resources.setAccess(client.client_id, input.resources, headers).pipe(
-        Effect.mapError(apiError),
-        Effect.tapError(() =>
-          provider(() =>
-            auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+      yield* service.resources
+        .setAccess(client.client_id, input.resources, headers)
+        .pipe(
+          Effect.tapError(() =>
+            provider(() =>
+              auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+            ),
           ),
-        ),
-      );
+        );
 
       return client;
     }),
@@ -142,9 +143,11 @@ export function administration(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      const clientAccess = yield* service.resources
-        .setAccess(input.client_id, input.resources, headers)
-        .pipe(Effect.mapError(apiError));
+      const clientAccess = yield* service.resources.setAccess(
+        input.client_id,
+        input.resources,
+        headers,
+      );
 
       return { clientAccess };
     }),
@@ -154,7 +157,7 @@ export function administration(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      return yield* service.resources.create(input, headers).pipe(Effect.mapError(apiError));
+      return yield* service.resources.create(input, headers);
     }),
     updateResource: Effect.fn("Administration.updateResource")(function* (
       input: typeof Resource.Type,
@@ -162,7 +165,7 @@ export function administration(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      return yield* service.resources.update(input, headers).pipe(Effect.mapError(apiError));
+      return yield* service.resources.update(input, headers);
     }),
     deleteResource: Effect.fn("Administration.deleteResource")(function* (
       input: typeof ResourceId.Type,
@@ -170,9 +173,7 @@ export function administration(service: Service) {
       const { providerHeaders } = yield* CurrentOwner;
       const headers = yield* providerHeaders;
 
-      return yield* service.resources
-        .delete(input.identifier, headers)
-        .pipe(Effect.mapError(apiError));
+      return yield* service.resources.delete(input.identifier, headers);
     }),
     delete: Effect.fn("Administration.delete")(function* (body: typeof ClientId.Type) {
       const { providerHeaders } = yield* CurrentOwner;
@@ -184,14 +185,12 @@ export function administration(service: Service) {
     revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
       yield* CurrentOwner;
 
-      return yield* service.clients.revoke(input.client_id).pipe(Effect.mapError(apiError));
+      return yield* service.clients.revoke(input.client_id);
     }),
     block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
       yield* CurrentOwner;
 
-      return yield* service.clients
-        .block(input.client_id, input.blocked)
-        .pipe(Effect.mapError(apiError));
+      return yield* service.clients.block(input.client_id, input.blocked);
     }),
     rotate: Effect.fn("Administration.rotate")(function* (body: typeof ClientId.Type) {
       const { providerHeaders } = yield* CurrentOwner;
@@ -200,4 +199,4 @@ export function administration(service: Service) {
       return yield* provider(() => auth.api.rotateClientSecret({ headers, body }));
     }),
   };
-}
+});

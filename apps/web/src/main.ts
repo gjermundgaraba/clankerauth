@@ -4,12 +4,13 @@ import {
   ApplicationType,
   ClientAuthMethod,
   Http,
+  errors,
   type Client,
   type ClientCredentials,
   type MachineKey,
   type ResourceSummary,
 } from "@clankerauth/admin-api";
-import { Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 import "./style.css";
@@ -20,28 +21,24 @@ type ResourceView = typeof ResourceSummary.Type;
 
 type KeyView = typeof MachineKey.Type;
 
-const ErrorMessage = Schema.Struct({ error: Schema.String });
-
 const api = await Effect.runPromise(
   HttpApiClient.make(Http.api, { baseUrl: location.origin }).pipe(
     Effect.provide(FetchHttpClient.layer),
   ),
 );
 
+const isRefusal = Schema.is(Schema.Union(errors));
+
+/**
+ * The contract's own refusals carry the sentence written for the owner. Anything else
+ * reached the browser instead of the issuer's answer, and reads the same either way.
+ */
+const displayed = <E>(error: E) =>
+  new Error(isRefusal(error) ? error.error : "Request could not be completed. Please try again.");
+
+/** Typed refusals survive the whole call; only the display boundary flattens them. */
 function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-  return Effect.runPromise(
-    effect.pipe(
-      Effect.mapError(
-        (error) =>
-          new Error(
-            Option.getOrElse(
-              Option.map(Schema.decodeUnknownOption(ErrorMessage)(error), (parsed) => parsed.error),
-              () => "Request could not be completed. Please try again.",
-            ),
-          ),
-      ),
-    ),
-  );
+  return Effect.runPromise(Effect.mapError(effect, displayed));
 }
 
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
@@ -380,7 +377,7 @@ const resourceForm = () =>
   `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application\u2019s origin root with its trailing slash.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
 
 const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
-  `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(new Date(key.expiresAt).toLocaleString())}` : "Valid until revoked"}</p>${Object.entries(
+  `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(DateTime.formatLocal(key.expiresAt, { dateStyle: "medium", timeStyle: "short" }))}` : "Valid until revoked"}</p>${Object.entries(
     key.permissions,
   )
     .map(
@@ -443,10 +440,15 @@ const registerForm = (resources: readonly ResourceView[]) =>
     )}</select></label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
 
 async function dashboard() {
-  const [data, keyData] = await Promise.all([
-    request(api.administration.listClients({ payload: {} })),
-    request(api.administration.listApiKeys({ payload: {} })),
-  ]);
+  const [data, keyData] = await request(
+    Effect.all(
+      [
+        api.administration.listClients({ payload: {} }),
+        api.administration.listApiKeys({ payload: {} }),
+      ],
+      { concurrency: "unbounded" },
+    ),
+  );
 
   const { resources } = data;
   const keyResources = resources.filter((resource) => !resource.builtIn);
@@ -556,7 +558,8 @@ async function dashboard() {
         payload: {
           name: textField(fields, "name"),
           permissions: keyGrants(target),
-          expiresAt: expiry ? new Date(expiry).toISOString() : null,
+          // A `datetime-local` value has no zone, so the browser's own zone applies.
+          expiresAt: expiry ? DateTime.fromDateUnsafe(new Date(expiry)) : null,
         },
       }),
     );

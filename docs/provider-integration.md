@@ -32,7 +32,7 @@ Administrative policy changes do not turn a multi-step provider request already 
 
 ## Shutdown
 
-Graceful shutdown closes admission and tracks all admitted application work, including disconnected requests, until completion before closing SQLite. Late admission receives 503.
+Shutdown relies on structured concurrency, under one rule: no code path detaches a provider Promise. Nothing the provider does can be cancelled, so every request handler runs uninterruptibly — one route middleware in `app.ts` applies it — and a disconnect or shutdown interrupts a request only once its work is done. Request fibers belong to the HTTP server's scope, which closes before the issuer's: closing it interrupts every request and waits for it to finish, and only then does the SQLite connection close. An embedding must give the issuer a scope that outlives its server's.
 
 ## Forward auth
 
@@ -50,4 +50,6 @@ The API-key plugin is used unpatched. Its per-key rate limit counts up to 1,000 
 
 ## Effect boundaries
 
-`openAuth` captures the application context for Better Auth's awaited callbacks, so supplied clocks and logging services survive that Promise boundary. Construct it at application startup, not inside a request. Local Kysely transactions are controlled transactions: the body runs in the calling fiber, commits on success and rolls back on failure or defect. Action routes run uninterruptibly so admitted provider calls settle before their request scope releases sessions or permits database shutdown.
+Refusals are typed where they are decided. The resource catalogue, the client store, machine keys and first-run setup fail with the `Schema.TaggedError`s the administration contract declares, so no route translates between an internal and a public vocabulary. Only foreign failures are translated, each exactly once: Better Auth's `APIError` where a provider SDK call is wrapped, and SQLite or schema failures where a query runs or a persisted row is decoded. A translated internal failure keeps the original as its `cause`, which reaches spans and logs; the schema encodes only declared fields, so it never reaches the wire. The provider bridge and the health probe answer in that same vocabulary. The other direction is a policy decision taken inside one of Better Auth's own callbacks: those throw its `APIError`, because that is what its OAuth response is built from.
+
+The issuer is the `Auth` service, built by its scoped Layer at application startup and never inside a request; route and action builders read it from the Effect context once, when their layer is built. Building it captures the application context for Better Auth's awaited callbacks, so supplied clocks and logging services survive that Promise boundary. Local Kysely transactions are controlled transactions: the body runs in the calling fiber, commits on success and rolls back on failure or defect. Resource and client-access mutations take one permit, so their read-diff-write sequences never interleave; each client's scope ceiling is a copy of its resources' scope union, written directly and rebuilt on every start and after every change, so a failure between a resource write and its copies heals at the next one.

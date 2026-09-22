@@ -19,11 +19,10 @@ import {
   Unauthorized,
 } from "@clankerauth/admin-api";
 import { mcpResource, mcpScope } from "./resources.ts";
-import type { Service } from "./auth.ts";
+import { Auth } from "./auth.ts";
 
-export const administrationResource = Effect.fn("AdministrationResource.make")(function* (
-  service: Service,
-) {
+export const administrationResource = Effect.fn("AdministrationResource.make")(function* () {
+  const service = yield* Auth;
   const issuer = `${service.settings.baseURL}/api/auth`;
   const resource = mcpResource(service.settings.baseURL);
 
@@ -33,15 +32,15 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
     scopesSupported: [mcpScope, "offline_access"],
   });
 
-  // The SDK verifier reads JWKS from this issuer in-process. Provider calls are
-  // tracked for shutdown like external ones: the SDK's deadline can abandon a
-  // call that must still settle.
+  // The SDK verifier reads JWKS from this issuer in-process. The raw verifier has no
+  // deadline, so the provider call is awaited by the request fiber that made it: nothing
+  // detaches a provider Promise, which is what lets shutdown wait for every one.
   const loopback: typeof fetch = (input, init) => {
     const request = new Request(input, init);
     // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
     request.headers.set("x-clankerauth-peer", "127.0.0.1");
 
-    return service.run(() => service.auth.handler(request));
+    return service.auth.handler(request);
   };
 
   const verifier = yield* Verifier.make({

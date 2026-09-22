@@ -47,7 +47,7 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and retry initial outages", async () => {
+test("one JWKS read serves every key until it expires, and failed or abandoned reads cool down", async () => {
   const { exportJWK, generateKeyPair, SignJWT } = await import("jose");
   const first = await generateKeyPair("EdDSA");
   const second = await generateKeyPair("EdDSA");
@@ -74,8 +74,8 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
       let unavailable = true;
       let key = firstKey;
       let paused = false;
-      let started = yield* Deferred.make<void>();
-      let release = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
 
       const client = HttpClient.make((request) =>
         Effect.gen(function* () {
@@ -100,74 +100,48 @@ test("JWKS lookups refresh unknown keys once per cooldown, expire normally, and 
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const verify = resource.verifier.verifyToken;
+
+      // An unreachable issuer is an outage, and the cooldown holds off the next read.
       assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
+      assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
+      assert.equal(reads, 1);
       unavailable = false;
+      yield* TestClock.adjust("5 seconds");
+
+      // Concurrent verifications share a single read.
       yield* Effect.all([verify(firstToken), verify(firstToken), verify(firstToken)], {
         concurrency: "unbounded",
       });
       assert.equal(reads, 2);
+
+      // An identifier the document does not publish is refused, never chased.
       key = secondKey;
-      const missing = yield* Effect.flip(verify(secondToken));
-      assert(missing instanceof Unauthorized);
+      assert((yield* Effect.flip(verify(secondToken))) instanceof Unauthorized);
       assert.equal(reads, 2);
-      yield* TestClock.adjust("30 seconds");
-      paused = true;
 
-      const refreshing = yield* Effect.all(
-        [verify(secondToken), verify(secondToken), verify(secondToken)],
-        {
-          concurrency: "unbounded",
-        },
-      ).pipe(Effect.forkChild);
-
-      yield* Deferred.await(started);
-      // Known keys remain usable even while a refresh is waiting on the provider.
-      yield* verify(firstToken);
-      paused = false;
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(refreshing);
-      assert.equal(reads, 3);
+      // The next read rotates the new key in and the old one out.
+      yield* TestClock.adjust("1 minute");
+      yield* verify(secondToken);
       assert((yield* Effect.flip(verify(firstToken))) instanceof Unauthorized);
       assert.equal(reads, 3);
-      yield* TestClock.adjust("30 seconds");
-      unavailable = true;
 
-      const failures = yield* Effect.all(
-        Array.from({ length: 3 }, () => Effect.flip(verify(firstToken))),
-        { concurrency: "unbounded" },
-      );
-
-      assert(failures.every((error) => error instanceof ProviderUnavailable));
-      assert.equal(reads, 4);
-      yield* verify(secondToken);
-      assert.equal(reads, 4);
-      unavailable = false;
-      yield* TestClock.adjust("30 seconds");
-      assert((yield* Effect.flip(verify(firstToken))) instanceof Unauthorized);
-      assert.equal(reads, 5);
-      assert((yield* Effect.flip(verify(firstToken))) instanceof Unauthorized);
-      assert.equal(reads, 5);
-      yield* TestClock.adjust("10 minutes");
-      yield* verify(secondToken);
-      assert.equal(reads, 6);
-      yield* TestClock.adjust("30 seconds");
-      key = firstKey;
+      // An abandoned read cools down as a failed one does: the next caller is told the
+      // issuer is unavailable rather than inheriting a deadline that was not its own.
+      yield* TestClock.adjust("1 minute");
       paused = true;
-      started = yield* Deferred.make<void>();
-      release = yield* Deferred.make<void>();
-      const timed = yield* Effect.flip(verify(firstToken)).pipe(Effect.forkChild);
+      const abandoned = yield* verify(secondToken).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       yield* TestClock.adjust("5 seconds");
-      const timeout = yield* Fiber.join(timed);
+      const timeout = yield* Effect.flip(Fiber.join(abandoned));
       assert(timeout instanceof ProviderUnavailable);
       assert.equal(timeout.operation, "verify.timeout");
       paused = false;
+      yield* Deferred.succeed(release, undefined);
+      assert((yield* Effect.flip(verify(secondToken))) instanceof ProviderUnavailable);
+      assert.equal(reads, 4);
+      yield* TestClock.adjust("5 seconds");
       yield* verify(secondToken);
-      assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
-      assert.equal(reads, 7);
-      yield* TestClock.adjust("25 seconds");
-      yield* verify(firstToken);
-      assert.equal(reads, 8);
+      assert.equal(reads, 5);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 });

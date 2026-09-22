@@ -1,21 +1,13 @@
 import { Effect, Schema } from "effect";
+import { BadRequest, InternalServerError } from "@clankerauth/admin-api";
 import { sql as query } from "kysely";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { setImmediate } from "node:timers/promises";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { createServer, request as httpRequest } from "node:http";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { webApplication as application } from "./web-application.ts";
-import { initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
-import type { Settings } from "../src/config.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
-
-const ListenAddress = Schema.Struct({ port: Schema.Number });
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
 
@@ -33,7 +25,9 @@ const resourceA = "https://notes.internal/mcp";
 
 const resourceB = "https://reports.internal/api";
 
-let service: Service;
+let issuer: Issuer;
+
+let service: Issuer["service"];
 
 let handle: ReturnType<typeof application>;
 
@@ -56,7 +50,7 @@ async function stopCurrentGeneration() {
   );
 
   try {
-    await service.close();
+    await issuer.stop();
   } catch (error) {
     failures.push(error);
   }
@@ -64,9 +58,7 @@ async function stopCurrentGeneration() {
   if (failures.length) throw new AggregateError(failures, "Failed to stop service generation");
 }
 
-let directory: string;
-
-let settings: Settings;
+let settings: Issuer["settings"];
 
 let cookies: Map<string, string>;
 
@@ -259,13 +251,9 @@ async function tokens(
 
 beforeEach(async () => {
   applications = [];
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-"));
-  settings = testSettings({
-    baseURL: "http://localhost:3000",
-    database: join(directory, "auth.sqlite"),
-  });
-  service = await Effect.runPromise(openAuth(settings));
-  await Effect.runPromise(initialize(service));
+  issuer = await openIssuer({ baseURL: "http://localhost:3000" });
+  service = issuer.service;
+  settings = issuer.settings;
   handle = createApplication();
   cookies = new Map();
 });
@@ -276,7 +264,7 @@ afterEach(async () => {
   try {
     await stopCurrentGeneration();
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    await issuer.close();
   }
 });
 
@@ -287,8 +275,8 @@ async function setupOwner() {
 
 async function restart() {
   await stopCurrentGeneration();
-  service = await Effect.runPromise(openAuth(settings));
-  await Effect.runPromise(initialize(service));
+  issuer = await issuer.reopen();
+  service = issuer.service;
   handle = createApplication();
 }
 
@@ -471,45 +459,6 @@ describe("first-run setup", () => {
 
 describe("owner boundary", () => {
   beforeEach(setupOwner);
-  test("shutdown drains admitted work even after its HTTP client disconnects", async () => {
-    const admitted = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    let work: Promise<unknown> | undefined;
-
-    const server = createServer((_incoming, outgoing) => {
-      work = service.run(async () => {
-        admitted.resolve();
-        await release.promise;
-
-        return (await Effect.runPromise(service.sql`SELECT 1 AS value`))[0];
-      });
-      void work.then(() => outgoing.end());
-    });
-
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
-    const connection = httpRequest(`http://127.0.0.1:${port}`);
-    connection.on("error", () => {}); // Expected local abort, after admission is observed.
-    connection.end();
-    await admitted.promise;
-    connection.destroy();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    const closing = service.close();
-
-    try {
-      await expect(service.run(async () => 0)).rejects.toThrow("Service stopping");
-      await setImmediate();
-      expect(await Effect.runPromise(service.sql`SELECT 1 AS value`)).toEqual([{ value: 1 }]);
-    } finally {
-      release.resolve();
-      await closing;
-    }
-
-    expect(await work).toEqual({ value: 1 });
-    await expect(Effect.runPromise(service.sql`SELECT 1 AS value`)).rejects.toThrow();
-    expect((await request("/healthz")).status).toBe(503);
-  });
-
   test("serves the built web workspace rather than the server working directory", async () => {
     const assets = new Set<string>();
 
@@ -886,7 +835,6 @@ describe("OAuth boundaries and lifecycle", () => {
     );
 
     expect(refresh.status, await refresh.clone().text()).toBe(200);
-    await Effect.runPromise(initialize(service));
   });
 
   test("refresh is resource-bound, rotates with a reuse window, detects replay, and revokes", async () => {
@@ -1081,6 +1029,41 @@ describe("dashboard resources and client access", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  test("domain refusals and internal failures share one wire vocabulary", async () => {
+    const resource = { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read"] };
+    expect((await request("/api/administration/createResource", resource)).status).toBe(201);
+
+    const reserved = await request("/api/administration/deleteResource", {
+      identifier: `${settings.baseURL}/mcp`,
+    });
+
+    expect(reserved.status).toBe(400);
+    expect(await reserved.json()).toEqual(
+      Schema.encodeSync(BadRequest)(
+        new BadRequest({ error: "The administration Resource is reserved" }),
+      ),
+    );
+
+    // The provider bridge declares no refusal of its own. A catalogue row this issuer
+    // can no longer read is its own failure, answered exactly as the action API answers.
+    await Effect.runPromise(
+      service.sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`,
+    );
+
+    const authorize = await request(
+      `/api/auth/oauth2/authorize?client_id=unused&resource=${encodeURIComponent(resourceA)}`,
+      undefined,
+      { anonymous: true },
+    );
+
+    expect(authorize.status).toBe(500);
+    expect(await authorize.json()).toEqual(
+      Schema.encodeSync(InternalServerError)(
+        new InternalServerError({ error: "Request could not be completed" }),
+      ),
+    );
   });
 
   test("resources accept any absolute URI and may define no custom scopes", async () => {

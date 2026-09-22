@@ -1,5 +1,5 @@
-import { Effect, Redacted, Schema, Semaphore } from "effect";
-import { openDatabase } from "./database.ts";
+import { Context, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
+import { openDatabase, persisted } from "./database.ts";
 import { getCurrentAdapter } from "@better-auth/core/context";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -8,6 +8,7 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey } from "@better-auth/api-key";
 import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
+import { Conflict } from "@clankerauth/admin-api";
 import { forwardTokens } from "./forward-auth.ts";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { clientStore } from "./clients.ts";
@@ -29,13 +30,17 @@ import {
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
+const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
+
 /** Access tokens from OAuth flows and forward auth alike expire after fifteen minutes. */
 export const accessTokenLifetime = 15 * 60;
 
-export const openAuth = Effect.fn("Auth.open")(function* (
-  settings: Settings,
-  integrations: { cimdTransport?: ClientMetadataResourceFetch } = {},
-) {
+/** Outbound transports a test replaces; production uses the secure Node implementations. */
+export interface Integrations {
+  readonly cimdTransport?: ClientMetadataResourceFetch;
+}
+
+const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrations: Integrations) {
   // The provider and forward auth both name the OAuth issuer, which is the provider's own default.
   const jwtOptions = {
     disableSettingJwtHeader: true,
@@ -47,7 +52,12 @@ export const openAuth = Effect.fn("Auth.open")(function* (
   // never a later request's identity or scope.
   const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
   yield* Effect.try(() => mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 }));
-  const database = yield* Effect.tryPromise(() => openDatabase(settings.database));
+
+  const database = yield* Effect.acquireRelease(
+    Effect.tryPromise(() => openDatabase(settings.database)),
+    (open) => Effect.promise(() => open.close()),
+  );
+
   const { sql } = database;
   const clients = clientStore(database.kysely);
 
@@ -57,7 +67,7 @@ export const openAuth = Effect.fn("Auth.open")(function* (
 
     if (!rows.length) return undefined;
 
-    return (yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(rows[0])).id;
+    return (yield* decodeOwnerRow(rows[0])).id;
   });
 
   const oauthPlugin = oauthProvider({
@@ -121,9 +131,9 @@ export const openAuth = Effect.fn("Auth.open")(function* (
     resourcePrivileges: async ({ user }) => !!user,
   });
 
-  const resources = resourceStore(
+  const resources = yield* resourceStore(
     sql,
-    () => serviceAuth(),
+    () => auth,
     (scopes, identifiers) => {
       oauthPlugin.options.scopes = scopes;
       oauthPlugin.options.clientRegistrationDefaultResources = identifiers;
@@ -145,7 +155,7 @@ export const openAuth = Effect.fn("Auth.open")(function* (
         create: {
           // Runs inside the provider's sign-up transaction, so it must use that adapter.
           before: async () => {
-            const adapter = await getCurrentAdapter((await serviceAuth().$context).adapter);
+            const adapter = await getCurrentAdapter((await auth.$context).adapter);
 
             if (await adapter.count({ model: "user" }))
               throw new APIError("CONFLICT", { message: "Setup already completed" });
@@ -214,51 +224,26 @@ export const openAuth = Effect.fn("Auth.open")(function* (
     ],
   } satisfies BetterAuthOptions;
 
-  // Defer provider initialization until migrations finish.
-  const makeAuth = () => betterAuth(options);
-  let auth: ReturnType<typeof makeAuth> | undefined;
-  const serviceAuth = () => (auth ??= makeAuth());
-  // Track work for shutdown without serializing independent requests.
-  const active = new Set<Promise<unknown>>();
-  let closing = false;
+  // Migrations and provider initialization cannot be cancelled; they settle here so the
+  // layer never hands out a service whose database finalizer could outrun them. The
+  // provider is constructed after migrating, since its initialization reads the schema.
+  const auth = yield* Effect.fn("Auth.initialize")(function* () {
+    const plan = yield* Effect.tryPromise(() => getMigrations(options));
 
-  const run = <T>(operation: () => Promise<T>) => {
-    if (closing)
-      return Promise.reject(new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" }));
-    const result = Promise.resolve().then(operation);
-    active.add(result);
-    void result.then(
-      () => active.delete(result),
-      () => active.delete(result),
-    );
+    if (plan.schemaProblems.length)
+      return yield* Effect.fail(new Error("Database schema requires manual repair"));
+    yield* Effect.tryPromise(() => plan.runMigrations());
+    const auth = betterAuth(options);
+    // Provider initialization seeds the administration resource; publish the catalog after it.
+    yield* Effect.tryPromise(() => auth.$context);
 
-    return result;
-  };
+    return auth;
+  }, Effect.uninterruptible)();
 
-  // Request scopes may finish asynchronous finalizers after their HTTP response.
-  // Keep those lifetimes admitted until all provider cleanup has completed.
-  const retain = () => {
-    if (closing) throw new APIError("SERVICE_UNAVAILABLE", { message: "Service stopping" });
-    const lifetime = Promise.withResolvers<void>();
-    active.add(lifetime.promise);
-
-    return () => {
-      active.delete(lifetime.promise);
-      lifetime.resolve();
-    };
-  };
-
-  const close = async () => {
-    closing = true;
-    await Promise.allSettled(active);
-    await database.close();
-  };
+  yield* resources.synchronize();
 
   return {
-    get auth() {
-      return serviceAuth();
-    },
-    options,
+    auth,
     sql,
     database: database.kysely,
     owner,
@@ -266,24 +251,20 @@ export const openAuth = Effect.fn("Auth.open")(function* (
     resources,
     clients,
     setup: yield* Semaphore.make(1),
-    run,
-    retain,
-    close,
   };
 });
 
-export type Service = Effect.Success<ReturnType<typeof openAuth>>;
-
-export const initialize = Effect.fn("Auth.initialize")(function* (service: Service) {
-  const plan = yield* Effect.tryPromise(() => getMigrations(service.options));
-
-  if (plan.schemaProblems.length)
-    return yield* Effect.fail(new Error("Database schema requires manual repair"));
-  yield* Effect.tryPromise(() => plan.runMigrations());
-  // Provider initialization seeds the administration resource; publish the catalog after it.
-  yield* Effect.tryPromise(() => service.auth.$context);
-  yield* service.resources.synchronize();
-}, Effect.uninterruptible);
+/**
+ * The issuer: one SQLite connection and the Better Auth instance that owns it. Its scope
+ * must outlive the HTTP server's: request fibers settle before the connection closes.
+ */
+export class Auth extends Context.Service<Auth, Effect.Success<ReturnType<typeof openAuth>>>()(
+  "ClankerAuth/Auth",
+) {
+  /** Opens the database, runs the provider's migrations, and closes both with the scope. */
+  static readonly layer = (settings: Settings, integrations: Integrations = {}) =>
+    Layer.effect(Auth, openAuth(settings, integrations));
+}
 
 /**
  * First-run setup is the only sign-up: the provider route is not mounted, and the
@@ -292,9 +273,9 @@ export const initialize = Effect.fn("Auth.initialize")(function* (service: Servi
  * the owner in; the returned cookies belong on the response.
  */
 export const createOwner = Effect.fn("Auth.createOwner")(
-  function* (service: Service, input: { email: string; password: string }) {
+  function* (service: Auth["Service"], input: { email: string; password: string }) {
     if (yield* service.owner())
-      return yield* Effect.fail(new APIError("CONFLICT", { message: "Setup already completed" }));
+      return yield* Effect.fail(new Conflict({ error: "Setup already completed" }));
 
     const { headers } = yield* provider(() =>
       service.auth.api.signUpEmail({

@@ -1,12 +1,10 @@
 import { Effect } from "effect";
+import { NotFound } from "@clankerauth/admin-api";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { convertSetCookieToCookie } from "better-auth/test";
-import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { createOwner } from "../src/auth.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 
 const baseURL = "http://localhost:4183";
 
@@ -29,9 +27,7 @@ type ClientMetadata = {
   response_types?: string[];
 };
 
-let service: Service;
-
-let directory: string;
+let issuer: Issuer;
 
 let cookie: string;
 
@@ -71,7 +67,7 @@ async function request(path: string, body?: AuthRequestBody, authenticated = fal
         : JSON.stringify(body);
   }
 
-  return service.auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
+  return issuer.service.auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
 }
 
 function authorization(id: string, identifier = resource, port = 4184) {
@@ -142,7 +138,7 @@ const refresh = (id: string, token: string) =>
   });
 
 const blocked = (id: string) =>
-  Effect.runPromise(service.sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`);
+  Effect.runPromise(issuer.service.sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`);
 
 const consentRequired = async (id: string) =>
   (await request(authorization(id), undefined, true)).headers.get("location") ?? "";
@@ -154,7 +150,6 @@ const cimdTransport = async () => {
 };
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-clients-"));
   fetches = 0;
   metadataCacheControl = "max-age=1";
   metadata = {
@@ -165,14 +160,12 @@ beforeEach(async () => {
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
   };
-  service = await Effect.runPromise(
-    openAuth(testSettings({ baseURL, database: join(directory, "auth.sqlite") }), {
-      cimdTransport,
+  issuer = await openIssuer({ baseURL }, { cimdTransport });
+  await issuer.run(
+    createOwner(issuer.service, {
+      email: "owner@example.com",
+      password: "test-password-long-enough",
     }),
-  );
-  await Effect.runPromise(initialize(service));
-  await Effect.runPromise(
-    createOwner(service, { email: "owner@example.com", password: "test-password-long-enough" }),
   );
 
   const login = await request("/sign-in/email", {
@@ -183,7 +176,7 @@ beforeEach(async () => {
   expect(login.status).toBe(200);
   cookie = convertSetCookieToCookie(login.headers).get("cookie") ?? "";
   await Effect.runPromise(
-    service.resources.create(
+    issuer.service.resources.create(
       { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
       ownerHeaders(),
     ),
@@ -191,8 +184,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
 test("DCR infers native callbacks, keeps PKCE and consent, and revocation ends refresh", async () => {
@@ -202,7 +194,7 @@ test("DCR infers native callbacks, keeps PKCE and consent, and revocation ends r
   expect(alternate.headers.get("location")).toContain("/consent");
   const tokens = await grant(client.client_id);
   expect(tokens.access_token).toBeTypeOf("string");
-  expect(await Effect.runPromise(service.clients.revoke(client.client_id))).toEqual({
+  expect(await Effect.runPromise(issuer.service.clients.revoke(client.client_id))).toEqual({
     revoked: true,
   });
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
@@ -240,32 +232,32 @@ test.each(["dcr", "cimd"])(
     if (source === "cimd") await request(authorization(clientId));
     const second = "https://second.example/mcp";
     await Effect.runPromise(
-      service.resources.create(
+      issuer.service.resources.create(
         { identifier: second, name: "Second", scopes: ["second:read"] },
         ownerHeaders(),
       ),
     );
-    expect(await Effect.runPromise(service.resources.hasAccess(client.client_id, second))).toBe(
-      true,
-    );
+    expect(
+      await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, second)),
+    ).toBe(true);
     const tokens = await grant(client.client_id);
-    await Effect.runPromise(service.resources.delete(resource, ownerHeaders()));
-    expect(await Effect.runPromise(service.resources.hasAccess(client.client_id, resource))).toBe(
-      false,
-    );
+    await Effect.runPromise(issuer.service.resources.delete(resource, ownerHeaders()));
+    expect(
+      await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, resource)),
+    ).toBe(false);
     expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
   },
 );
 
 test("the owner can narrow an automatic client's resource access", async () => {
   const client = await register();
-  expect(await Effect.runPromise(service.resources.hasAccess(client.client_id, resource))).toBe(
-    true,
-  );
-  await Effect.runPromise(service.resources.setAccess(client.client_id, [], ownerHeaders()));
+  expect(
+    await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, resource)),
+  ).toBe(true);
+  await Effect.runPromise(issuer.service.resources.setAccess(client.client_id, [], ownerHeaders()));
   expect(await consentRequired(client.client_id)).not.toContain("/consent");
   await Effect.runPromise(
-    service.resources.setAccess(client.client_id, [resource], ownerHeaders()),
+    issuer.service.resources.setAccess(client.client_id, [resource], ownerHeaders()),
   );
   expect(await consentRequired(client.client_id)).toContain("/consent");
 });
@@ -274,7 +266,9 @@ test("blocking uses the provider's disabled flag and survives CIMD metadata redi
   expect(await consentRequired(clientId)).toContain("/consent");
   expect(fetches).toBe(1);
   const tokens = await grant(clientId);
-  expect(await Effect.runPromise(service.clients.block(clientId, true))).toEqual({ blocked: true });
+  expect(await Effect.runPromise(issuer.service.clients.block(clientId, true))).toEqual({
+    blocked: true,
+  });
   expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
   expect((await refresh(clientId, tokens.refresh_token)).status).toBe(400);
   // Let the metadata cache expire so the next authorization rediscovers the document.
@@ -282,7 +276,7 @@ test("blocking uses the provider's disabled flag and survives CIMD metadata redi
   expect(await consentRequired(clientId)).not.toContain("/consent");
   expect(fetches).toBe(2);
   expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
-  expect(await Effect.runPromise(service.clients.block(clientId, false))).toEqual({
+  expect(await Effect.runPromise(issuer.service.clients.block(clientId, false))).toEqual({
     blocked: false,
   });
   expect(await consentRequired(clientId)).toContain("/consent");
@@ -290,29 +284,27 @@ test("blocking uses the provider's disabled flag and survives CIMD metadata redi
 
 test("blocking a dynamically registered client rejects authorization until unblocked", async () => {
   const client = await register();
-  await Effect.runPromise(service.clients.block(client.client_id, true));
+  await Effect.runPromise(issuer.service.clients.block(client.client_id, true));
   const blocked = await request(authorization(client.client_id), undefined, true);
   expect(blocked.headers.get("location") ?? "").not.toContain("/consent");
-  await Effect.runPromise(service.clients.block(client.client_id, false));
+  await Effect.runPromise(issuer.service.clients.block(client.client_id, false));
   expect(await consentRequired(client.client_id)).toContain("/consent");
 });
 
 test("block and revoke report unknown clients", async () => {
-  await expect(Effect.runPromise(service.clients.revoke("missing"))).rejects.toThrow(
-    "Client not found",
+  const missing = new NotFound({ error: "Client not found" });
+  expect(await Effect.runPromise(Effect.flip(issuer.service.clients.revoke("missing")))).toEqual(
+    missing,
   );
-  await expect(Effect.runPromise(service.clients.block("missing", true))).rejects.toThrow(
-    "Client not found",
-  );
+  expect(
+    await Effect.runPromise(Effect.flip(issuer.service.clients.block("missing", true))),
+  ).toEqual(missing);
 });
 
 test("initialization is repeatable and refresh grants survive a reopen", async () => {
   const client = await register();
   const tokens = await grant(client.client_id);
-  const settings = service.settings;
-  await service.close();
-  service = await Effect.runPromise(openAuth(settings, { cimdTransport }));
-  await Effect.runPromise(initialize(service));
+  issuer = await issuer.reopen();
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
 });
 
@@ -321,7 +313,7 @@ test("CIMD rejects malformed metadata before persisting a client", async () => {
   expect(await consentRequired(clientId)).not.toContain("/consent");
   expect(
     await Effect.runPromise(
-      service.sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
+      issuer.service.sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
     ),
   ).toEqual([]);
 });

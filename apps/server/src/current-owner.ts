@@ -1,11 +1,12 @@
 import { Context, Effect, Schema, type Scope } from "effect";
 import { type Headers as HttpHeaders, HttpServerRequest } from "effect/unstable/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { errors, Unauthorized } from "@clankerauth/admin-api";
+import { Unauthorized } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
-import { apiError, apiErrorResponse, provider } from "./api-errors.ts";
+import { apiErrorResponse, provider, type ApiError } from "./api-errors.ts";
+import { persisted } from "./database.ts";
 import { providerSession } from "./provider-session.ts";
-import type { Service } from "./auth.ts";
+import { Auth } from "./auth.ts";
 
 /** Authenticated per request, never supplied by action arguments or at startup. */
 export class CurrentOwner extends Context.Service<
@@ -13,15 +14,14 @@ export class CurrentOwner extends Context.Service<
   {
     readonly userId: string;
     readonly email: string;
-    readonly providerHeaders: Effect.Effect<Headers, ReturnType<typeof apiError>, Scope.Scope>;
+    readonly providerHeaders: Effect.Effect<Headers, ApiError, Scope.Scope>;
   }
 >()("ClankerAuth/CurrentOwner") {}
 
-const fail = (error: ReturnType<typeof apiError>) =>
-  Effect.flatMap(apiErrorResponse(error), Effect.fail);
+const fail = (error: ApiError) => Effect.flatMap(apiErrorResponse(error), Effect.fail);
 
 /** Dashboard HTTP: the issuer's SameSite session cookie. */
-export const sessionOwner = (service: Service) =>
+export const sessionOwner = Effect.map(Auth, (service) =>
   Authentication.middleware(
     CurrentOwner,
     Effect.gen(function* () {
@@ -38,28 +38,31 @@ export const sessionOwner = (service: Service) =>
         email: session.user.email,
       };
     }).pipe(Effect.catch(fail)),
-  );
-
-const OwnerRow = Schema.Struct({ id: Schema.String, email: Schema.String });
+  ),
+);
 
 /** A public error and the headers that refusal carries, such as an RFC 6750 challenge. */
 interface Refusal {
-  readonly error: (typeof errors)[number]["Type"];
+  readonly error: ApiError;
   readonly headers: HttpHeaders.Input;
 }
+
+const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String, email: Schema.String }));
 
 /**
  * MCP: the bearer access token for the administration resource, verified here. The
  * token's client must still exist and not be blocked; revocation of already-issued
  * access tokens takes effect at their expiry.
  */
-export const bearerOwner = (service: Service, resource: AdministrationResource) => {
+export const bearerOwner = Effect.fnUntraced(function* (resource: AdministrationResource) {
+  const service = yield* Auth;
+
   const rejected = (): Refusal => ({
     error: new Unauthorized({ error: "Owner authorization required" }),
     headers: { "www-authenticate": resource.challenge(true) },
   });
 
-  const failed = (cause: unknown): Refusal => ({ error: apiError(cause), headers: {} });
+  const failed = (error: ApiError): Refusal => ({ error, headers: {} });
 
   return Authentication.middleware(
     CurrentOwner,
@@ -79,9 +82,7 @@ export const bearerOwner = (service: Service, resource: AdministrationResource) 
 
       if (!rows[0]) return yield* Effect.fail(rejected());
 
-      const owner = yield* Schema.decodeUnknownEffect(OwnerRow)(rows[0]).pipe(
-        Effect.mapError(failed),
-      );
+      const owner = yield* decodeOwnerRow(rows[0]).pipe(Effect.mapError(failed));
 
       return {
         userId: owner.id,
@@ -94,4 +95,4 @@ export const bearerOwner = (service: Service, resource: AdministrationResource) 
       ),
     ),
   );
-};
+});

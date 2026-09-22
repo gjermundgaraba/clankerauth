@@ -4,12 +4,9 @@ import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { Effect, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { createOwner } from "../src/auth.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 import { administrationResource, mcpOAuthGrant, oauthToken } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
@@ -34,9 +31,7 @@ type PrivateKeyRegistration = {
   jwks?: { keys: object[] };
 };
 
-let directory: string;
-
-let service: Service;
+let issuer: Issuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -69,14 +64,10 @@ const refresh = (client_id: string, refresh_token: string) =>
   });
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-oauth-"));
-  service = await Effect.runPromise(
-    openAuth(testSettings({ baseURL, database: join(directory, "auth.sqlite") })),
-  );
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
-  await Effect.runPromise(
-    createOwner(service, {
+  issuer = await openIssuer({ baseURL });
+  handle = application(issuer.service);
+  await issuer.run(
+    createOwner(issuer.service, {
       email: "owner@example.internal",
       password: "test-only password123",
     }),
@@ -100,8 +91,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers();
   await handle.dispose();
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
 test("anonymous discovery leads to PKCE owner consent, bearer administration, and refresh", async () => {
@@ -252,10 +242,8 @@ test("administration resource permits persistent renaming but reserves its scope
   const renamed = { ...resource, name: "My administration" };
   expect((await admin("updateResource", renamed)).status).toBe(200);
   await handle.dispose();
-  await service.close();
-  service = await Effect.runPromise(openAuth(service.settings));
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
+  issuer = await issuer.reopen();
+  handle = application(issuer.service);
   expect((await (await admin("listClients", {})).json()).resources).toEqual([renamed]);
 });
 
@@ -323,7 +311,7 @@ test("MCP protocol and owner-identity operations do not acquire provider session
   ).toBe(201);
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   const target = await mcpOAuthGrant(handle, baseURL, cookie);
-  const context = await service.auth.$context;
+  const context = await issuer.service.auth.$context;
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
@@ -383,9 +371,9 @@ test("MCP protocol and owner-identity operations do not acquire provider session
 
 test("provider-backed MCP writes release temporary sessions and offline grants survive owner sign-out", async () => {
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
-  const sessions = () => Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`);
+  const sessions = () => Effect.runPromise(issuer.service.sql`SELECT id FROM session ORDER BY id`);
   const before = await sessions();
-  const context = await service.auth.$context;
+  const context = await issuer.service.auth.$context;
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
@@ -444,8 +432,8 @@ test("deleting a client ends MCP access and refresh", async () => {
   expect((await mcp(tokens.access_token)).status).toBe(200);
   await Effect.runPromise(
     Effect.gen(function* () {
-      yield* service.sql`DELETE FROM oauthClientResource WHERE clientId = ${client_id}`;
-      yield* service.sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
+      yield* issuer.service.sql`DELETE FROM oauthClientResource WHERE clientId = ${client_id}`;
+      yield* issuer.service.sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
     }),
   );
   expect((await mcp(tokens.access_token)).status).toBe(401);
@@ -456,14 +444,15 @@ test("offline MCP access and refresh survive browser-session expiry and cleanup"
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   expect((await mcp(tokens.access_token)).status).toBe(200);
   await Effect.runPromise(
-    service.sql`UPDATE session SET expiresAt = ${new Date(Date.now() - 60_000).toISOString()}`,
+    issuer.service
+      .sql`UPDATE session SET expiresAt = ${new Date(Date.now() - 60_000).toISOString()}`,
   );
   expect((await mcp(tokens.access_token)).status).toBe(200);
   const refreshed = await refresh(client_id, tokens.refresh_token);
   expect(refreshed.status, await refreshed.clone().text()).toBe(200);
   const replacement = await refreshed.json();
   expect((await mcp(replacement.access_token)).status).toBe(200);
-  await Effect.runPromise(service.sql`DELETE FROM session`);
+  await Effect.runPromise(issuer.service.sql`DELETE FROM session`);
   const afterCleanup = await refresh(client_id, replacement.refresh_token);
   expect(afterCleanup.status, await afterCleanup.clone().text()).toBe(200);
   expect((await mcp((await afterCleanup.json()).access_token)).status).toBe(200);

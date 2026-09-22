@@ -1,10 +1,8 @@
 import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-dialect";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Schema } from "effect";
 import { Kysely, sql as query } from "kysely";
 import { DatabaseSync } from "node:sqlite";
-
-export const normalizeError = (cause: unknown): Error =>
-  cause instanceof Error ? cause : new Error(String(cause));
+import { internalError, type ApiError } from "./api-errors.ts";
 
 /** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
@@ -15,15 +13,28 @@ export type SqliteRow = Record<string, SqliteCell>;
 /** Opaque Better Auth table map keyed by table name. */
 export type DatabaseSchema = Record<string, SqliteRow>;
 
+/**
+ * A decoder for values this issuer wrote itself. A row or column that no longer
+ * matches its schema is a broken database, not a bad request, so it fails as an
+ * internal error carrying the schema issue.
+ */
+export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
+  const decode = Schema.decodeUnknownEffect(schema);
+
+  // eslint-disable-next-line anti-slop/no-unknown-parameters -- Persisted-row boundary: this is where the schema runs.
+  return (value: unknown): Effect.Effect<T, ApiError, RD> =>
+    Effect.mapError(decode(value), internalError);
+};
+
 /** Run Effect queries through the same Kysely connection or transaction as Better Auth. */
 export function makeSql(database: Kysely<DatabaseSchema>) {
   return <Row = SqliteRow>(
     strings: TemplateStringsArray,
     ...parameters: readonly unknown[]
-  ): Effect.Effect<readonly Row[], Error> =>
+  ): Effect.Effect<readonly Row[], ApiError> =>
     Effect.tryPromise({
       try: async () => (await query<Row>(strings, ...parameters).execute(database)).rows,
-      catch: normalizeError,
+      catch: internalError,
     });
 }
 
@@ -36,21 +47,21 @@ export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>
 ) {
   const trx = yield* Effect.tryPromise({
     try: () => database.startTransaction().execute(),
-    catch: normalizeError,
+    catch: internalError,
   });
 
   const exit = yield* Effect.exit(operation(makeSql(trx)));
 
   // The body's own outcome is what callers see; a failed ROLLBACK cannot improve on it.
   const settle = Effect.ignore(
-    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: normalizeError }),
+    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: internalError }),
   );
 
   // A failed COMMIT, such as a deferred constraint, leaves the transaction open on the
   // shared connection; roll it back before surfacing the failure.
   const commit = Effect.tryPromise({
     try: () => trx.commit().execute(),
-    catch: normalizeError,
+    catch: internalError,
   }).pipe(Effect.tapError(() => settle));
 
   yield* Exit.isSuccess(exit) ? commit : settle;

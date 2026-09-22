@@ -1,9 +1,9 @@
-import { Clock, Effect, Schema } from "effect";
-import { normalizeError, type Sql } from "./database.ts";
-import { APIError } from "better-auth/api";
+import { Clock, Effect, Schema, Semaphore } from "effect";
+import { persisted, type Sql, type SqliteRow } from "./database.ts";
 import type { Auth } from "better-auth";
 import type { oauthProvider } from "@better-auth/oauth-provider";
-import { ClientAccess, Resource } from "@clankerauth/admin-api";
+import { BadRequest, ClientAccess, NotFound, Resource } from "@clankerauth/admin-api";
+import { provider } from "./api-errors.ts";
 
 export const mcpScope = "admin";
 
@@ -14,7 +14,7 @@ export const protocolScopes = ["offline_access"];
 
 export const resourceReference = (identifier: string) => `resource:${identifier}`;
 
-const decodeScopes = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
+const decodeScopes = persisted(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 const ResourceRow = Schema.Struct({
   identifier: Schema.String,
@@ -22,13 +22,11 @@ const ResourceRow = Schema.Struct({
   allowedScopes: Schema.String,
 });
 
-const decodeResourceRow = Schema.decodeUnknownEffect(ResourceRow);
+const decodeResourceRow = persisted(ResourceRow);
 
-const accessRows = Schema.decodeUnknownEffect(Schema.Array(ClientAccess));
+const accessRows = persisted(Schema.Array(ClientAccess));
 
-const clientIds = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ clientId: Schema.String })),
-);
+const clientIds = persisted(Schema.Array(Schema.Struct({ clientId: Schema.String })));
 
 type ResourceValue = typeof Resource.Type;
 
@@ -44,9 +42,6 @@ type ResourceAuth = {
   >;
 };
 
-const providerCall = <A>(operation: () => Promise<A>) =>
-  Effect.tryPromise({ try: operation, catch: normalizeError });
-
 const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
 });
@@ -56,16 +51,19 @@ const linkParams = (clientId: string, identifier: string) => ({
   client_id: encodeURIComponent(clientId),
 });
 
-// Provider APIs own their writes and transaction boundaries.
-// Do not hold a separate transaction while calling them on the shared connection.
-export function resourceStore(
+// Provider APIs own their writes and transaction boundaries. Do not hold a separate
+// transaction while calling them on the shared connection. Mutations take one permit,
+// so their read-diff-write sequences never interleave.
+export const resourceStore = Effect.fnUntraced(function* (
   sql: Sql,
   getAuth: () => ResourceAuth,
   changed: (scopes: string[], identifiers: string[]) => void,
   reservedIdentifier: string,
 ) {
-  // eslint-disable-next-line anti-slop/no-unknown-parameters -- Persisted-row boundary: validate fields before use.
-  const decodeResource = Effect.fn("Resources.decode")(function* (value: unknown) {
+  const mutating = yield* Semaphore.make(1);
+  const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => mutating.withPermit(effect);
+
+  const decodeResource = Effect.fn("Resources.decode")(function* (value: SqliteRow) {
     const row = yield* decodeResourceRow(value);
     const scopes = yield* decodeScopes(row.allowedScopes);
 
@@ -102,28 +100,17 @@ export function resourceStore(
     );
   });
 
-  const accessForResource = Effect.fn("Resources.accessForResource")(function* (
-    identifier: string,
-  ) {
-    return yield* accessRows(
-      yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE resourceId = ${identifier} ORDER BY clientId`,
-    );
-  });
-
   const validateSelection = Effect.fn("Resources.validateSelection")(function* (
     identifiers: readonly string[],
   ) {
     if (new Set(identifiers).size !== identifiers.length)
-      return yield* Effect.fail(
-        new APIError("BAD_REQUEST", { message: "Choose unique Resources" }),
-      );
+      return yield* Effect.fail(new BadRequest({ error: "Choose unique Resources" }));
 
     return yield* Effect.forEach(identifiers, (id) =>
       Effect.gen(function* () {
         const resource = yield* get(id);
 
-        if (!resource)
-          return yield* Effect.fail(new APIError("BAD_REQUEST", { message: "Unknown Resource" }));
+        if (!resource) return yield* Effect.fail(new BadRequest({ error: "Unknown Resource" }));
 
         return resource;
       }),
@@ -149,15 +136,15 @@ export function resourceStore(
   };
 
   // The provider validates identifiers (RFC 8707) and rejects duplicates.
-  const validate = (input: ResourceValue): ResourceValue => {
+  const validateInput = Effect.fn("Resources.validateInput")(function* (input: ResourceValue) {
     const identifier = input.identifier.trim();
     const name = input.name.trim();
     const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
 
     if (!canonical(identifier))
-      throw new APIError("BAD_REQUEST", {
-        message: "Resource identifiers must be absolute URIs in canonical form",
-      });
+      return yield* Effect.fail(
+        new BadRequest({ error: "Resource identifiers must be absolute URIs in canonical form" }),
+      );
 
     if (
       !name ||
@@ -165,44 +152,20 @@ export function resourceStore(
         (scope) => !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope) || protocolScopes.includes(scope),
       )
     )
-      throw new APIError("BAD_REQUEST", {
-        message: "Resources require a name and well-formed custom scopes",
-      });
+      return yield* Effect.fail(
+        new BadRequest({ error: "Resources require a name and well-formed custom scopes" }),
+      );
 
-    return { identifier, name, scopes };
-  };
+    return { identifier, name, scopes } satisfies ResourceValue;
+  });
 
-  const validateInput = (input: ResourceValue) =>
-    Effect.try({
-      try: () => validate(input),
-      catch: (error) =>
-        error instanceof APIError
-          ? error
-          : new APIError("BAD_REQUEST", { message: "Invalid Resource" }),
-    });
-
-  const syncClient = Effect.fn("Resources.syncClient")(function* (
-    clientId: string,
-    headers: Headers,
-  ) {
+  // A client's scope ceiling is the union of its resources' scopes, kept as a copy the
+  // provider reads on every request. It is written directly: the provider's update API
+  // demands ownership, and this way the copy can be rebuilt without an owner session.
+  const syncClient = Effect.fn("Resources.syncClient")(function* (clientId: string) {
     const links = yield* accessForClient(clientId);
     const scopes = yield* scopesFor(links.map((link) => link.resource));
-
-    const unownedClient =
-      yield* sql`SELECT 1 FROM oauthClient WHERE clientId = ${clientId} AND userId IS NULL`;
-
-    if (unownedClient.length) {
-      // Provider update APIs require ownership even for admins. Unowned clients
-      // need direct persistence of their scope union.
-      yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
-    } else {
-      yield* providerCall(() =>
-        getAuth().api.updateOAuthClient({
-          headers,
-          body: { client_id: clientId, update: { scope: scopes.join(" ") } },
-        }),
-      );
-    }
+    yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
   });
 
   const publish = (catalog: ResourceValue[]) =>
@@ -211,8 +174,15 @@ export function resourceStore(
       catalog.map((resource) => resource.identifier),
     );
 
+  // Publishes the catalog and rebuilds every client's copy of it. A resource change and
+  // its client copies are separate writes, so a failure between them heals here.
   const synchronize = Effect.fn("Resources.synchronize")(function* () {
     publish(yield* list());
+
+    for (const client of yield* clientIds(
+      yield* sql`SELECT clientId FROM oauthClient ORDER BY clientId`,
+    ))
+      yield* syncClient(client.clientId);
   });
 
   return {
@@ -229,7 +199,7 @@ export function resourceStore(
     synchronize,
     create: Effect.fn("Resources.create")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
-      yield* providerCall(() =>
+      yield* provider(() =>
         getAuth().api.adminCreateOAuthResource({
           headers,
           body: {
@@ -248,29 +218,26 @@ export function resourceStore(
         yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NULL ORDER BY clientId`,
       );
 
-      for (const client of automatic) {
-        yield* providerCall(() =>
+      for (const client of automatic)
+        yield* provider(() =>
           getAuth().api.adminLinkClientResource({
             headers,
             params: linkParams(client.clientId, resource.identifier),
           }),
         );
-        yield* syncClient(client.clientId, headers);
-      }
+      yield* synchronize();
 
       return resource;
-    }),
+    }, serialized),
     update: Effect.fn("Resources.update")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
       const builtIn = resource.identifier === reservedIdentifier;
 
       if (builtIn && (resource.scopes.length !== 1 || resource.scopes[0] !== mcpScope))
         return yield* Effect.fail(
-          new APIError("BAD_REQUEST", {
-            message: "The administration Resource scopes are reserved",
-          }),
+          new BadRequest({ error: "The administration Resource scopes are reserved" }),
         );
-      yield* providerCall(() =>
+      yield* provider(() =>
         getAuth().api.adminUpdateOAuthResource({
           headers,
           params: resourceParams(resource.identifier),
@@ -280,21 +247,16 @@ export function resourceStore(
         }),
       );
 
-      if (builtIn) return resource;
-      yield* synchronize();
-
-      for (const link of yield* accessForResource(resource.identifier))
-        yield* syncClient(link.client_id, headers);
+      if (!builtIn) yield* synchronize();
 
       return resource;
-    }),
+    }, serialized),
     delete: Effect.fn("Resources.delete")(function* (identifier: string, headers: Headers) {
       if (identifier === reservedIdentifier)
         return yield* Effect.fail(
-          new APIError("BAD_REQUEST", { message: "The administration Resource is reserved" }),
+          new BadRequest({ error: "The administration Resource is reserved" }),
         );
-      const links = yield* accessForResource(identifier);
-      yield* providerCall(() =>
+      yield* provider(() =>
         getAuth().api.adminDeleteOAuthResource({
           headers,
           params: resourceParams(identifier),
@@ -304,10 +266,8 @@ export function resourceStore(
       // Existing grants retain provider semantics; current resource policy controls eligibility.
       yield* synchronize();
 
-      for (const link of links) yield* syncClient(link.client_id, headers);
-
       return { deleted: true };
-    }),
+    }, serialized),
     setAccess: Effect.fn("Resources.setAccess")(function* (
       clientId: string,
       identifiers: readonly string[],
@@ -315,13 +275,12 @@ export function resourceStore(
     ) {
       const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
 
-      if (!clients.length)
-        return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+      if (!clients.length) return yield* Effect.fail(new NotFound({ error: "Client not found" }));
       yield* validateSelection(identifiers);
       const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
 
       for (const identifier of previous.filter((id) => !identifiers.includes(id)))
-        yield* providerCall(() =>
+        yield* provider(() =>
           getAuth().api.adminUnlinkClientResource({
             headers,
             params: linkParams(clientId, identifier),
@@ -329,15 +288,15 @@ export function resourceStore(
         );
 
       for (const identifier of identifiers.filter((id) => !previous.includes(id)))
-        yield* providerCall(() =>
+        yield* provider(() =>
           getAuth().api.adminLinkClientResource({
             headers,
             params: linkParams(clientId, identifier),
           }),
         );
-      yield* syncClient(clientId, headers);
+      yield* syncClient(clientId);
 
       return yield* accessForClient(clientId);
-    }),
+    }, serialized),
   };
-}
+});

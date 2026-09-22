@@ -1,15 +1,11 @@
 /** The package against the real server: forward-auth tokens, verification, API keys, logout. */
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "vite-plus/test";
 import { nodeHandler } from "../src/app.ts";
-import { initialize, openAuth } from "../src/auth.ts";
 import { forwardClientId } from "../src/forward-auth.ts";
-import { testSettings } from "./settings.ts";
+import { openIssuer } from "./issuer.ts";
 import { createNodeServer } from "../src/node-http.ts";
 import { Effect, Exit, Schema, Scope } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -21,8 +17,6 @@ const owner = { email: "owner@example.internal", password: randomBytes(24).toStr
 const ApiKeyCreated = Schema.Struct({ key: Schema.String, keyId: Schema.String });
 
 const startServer = async () => {
-  const directory = await mkdtemp(join(tmpdir(), "clankerauth-sdk-"));
-
   let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();
   };
@@ -41,23 +35,15 @@ const startServer = async () => {
   // Forward auth shares one cookie domain between the issuer and the apps behind the proxy.
   const url = `http://auth.home.localhost:${port}`;
 
-  const service = await Effect.runPromise(
-    openAuth(
-      testSettings({
-        baseURL: url,
-        database: join(directory, "issuer.sqlite"),
-        port,
-        allowInsecureHttp: true,
-        cookieDomain: "home.localhost",
-      }),
-    ),
-  );
+  const opened = await openIssuer({
+    baseURL: url,
+    port,
+    allowInsecureHttp: true,
+    cookieDomain: "home.localhost",
+  });
 
-  await Effect.runPromise(initialize(service));
   const httpScope = Scope.makeUnsafe();
-  serve = await Effect.runPromise(
-    nodeHandler(service).pipe(Effect.provideService(Scope.Scope, httpScope)),
-  );
+  serve = await opened.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, httpScope)));
   const cookies = new Map<string, string>();
   const cookieHeader = () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 
@@ -99,8 +85,7 @@ const startServer = async () => {
       server.close(() => resolve());
     });
     await Effect.runPromise(Scope.close(httpScope, Exit.void));
-    await service.close();
-    await rm(directory, { recursive: true, force: true });
+    await opened.close();
   };
 
   return { url, issuer: `${url}/api/auth`, call, forward, close };

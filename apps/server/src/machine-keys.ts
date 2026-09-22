@@ -1,4 +1,4 @@
-import { Clock, Effect, Schema } from "effect";
+import { Clock, DateTime, Effect, Schema } from "effect";
 import {
   BadRequest,
   Forbidden,
@@ -9,10 +9,10 @@ import {
   type ApiKeyInput,
   type ApiKeyUpdate,
 } from "@clankerauth/admin-api";
-import type { Service } from "./auth.ts";
+import { Auth } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
-import { apiError, provider } from "./api-errors.ts";
+import { provider } from "./api-errors.ts";
 
 const permissions = Schema.decodeUnknownSync(KeyPermissions);
 
@@ -28,11 +28,11 @@ const summary = (key: {
   name: key.name ?? "",
   enabled: key.enabled,
   permissions: permissions(key.permissions ?? {}),
-  expiresAt: key.expiresAt?.toISOString() ?? null,
-  createdAt: key.createdAt.toISOString(),
+  expiresAt: key.expiresAt ? DateTime.fromDateUnsafe(key.expiresAt) : null,
+  createdAt: DateTime.fromDateUnsafe(key.createdAt),
 });
 
-export function machineKeys(service: Service) {
+export const machineKeys = Effect.map(Auth, (service) => {
   const validate = Effect.fn("MachineKeys.validate")(function* (
     name: string | undefined,
     grants: typeof KeyPermissions.Type | undefined,
@@ -52,7 +52,7 @@ export function machineKeys(service: Service) {
         return yield* Effect.fail(
           new BadRequest({ error: "Administration requires OAuth access tokens, not API keys" }),
         );
-      const resource = yield* service.resources.get(identifier).pipe(Effect.mapError(apiError));
+      const resource = yield* service.resources.get(identifier);
 
       if (
         !resource ||
@@ -90,9 +90,9 @@ export function machineKeys(service: Service) {
       const expiresIn =
         input.expiresAt === null
           ? null
-          : (Date.parse(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
+          : (DateTime.toEpochMillis(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
 
-      if (expiresIn !== null && (!Number.isFinite(expiresIn) || expiresIn < 1))
+      if (expiresIn !== null && expiresIn < 1)
         return yield* Effect.fail(new BadRequest({ error: "Expiry must be in the future" }));
 
       const key = yield* provider(() =>
@@ -157,7 +157,7 @@ export function machineKeys(service: Service) {
         return yield* Effect.fail(new Unauthorized({ error: "Invalid API key" }));
       }
 
-      const resource = yield* service.resources.get(identifier).pipe(Effect.mapError(apiError));
+      const resource = yield* service.resources.get(identifier);
       const grants = permissions(result.key.permissions ?? {});
       const scopes = (grants[identifier] ?? []).filter((scope) => resource?.scopes.includes(scope));
 
@@ -169,8 +169,8 @@ export function machineKeys(service: Service) {
         ownerId: result.key.referenceId,
         resource: identifier,
         scopes,
-        expiresAt: result.key.expiresAt?.toISOString() ?? null,
+        expiresAt: result.key.expiresAt ? DateTime.fromDateUnsafe(result.key.expiresAt) : null,
       };
     }),
   };
-}
+});

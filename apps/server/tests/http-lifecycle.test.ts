@@ -1,21 +1,17 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Effect, Exit, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { nodeHandler } from "../src/app.ts";
-import { initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 import { createNodeServer } from "../src/node-http.ts";
 
-let directory: string;
+let issuer: Issuer;
 
-let service: Service;
+let service: Issuer["service"];
 
 let scope: Scope.Closeable;
 
@@ -26,18 +22,11 @@ let url: string;
 let closing: Promise<void> | undefined;
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-http-lifecycle-"));
-  service = await Effect.runPromise(
-    openAuth(
-      testSettings({ baseURL: "https://issuer.example", database: join(directory, "auth.sqlite") }),
-    ),
-  );
-  await Effect.runPromise(initialize(service));
+  issuer = await openIssuer({ baseURL: "https://issuer.example" });
+  service = issuer.service;
   scope = Scope.makeUnsafe();
 
-  const listener = await Effect.runPromise(
-    nodeHandler(service).pipe(Effect.provideService(Scope.Scope, scope)),
-  );
+  const listener = await issuer.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)));
 
   server = createNodeServer(listener);
   server.listen(0, "127.0.0.1");
@@ -55,15 +44,14 @@ afterEach(async () => {
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await Effect.runPromise(Scope.close(scope, Exit.void));
-  await (closing ?? service.close());
+  await closing;
   vi.restoreAllMocks();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
-test("provider requests receive disconnect cancellation while shutdown waits for their actual settlement", async () => {
+test("shutdown waits for a provider request to settle after its client disconnects", async () => {
   const entered = Promise.withResolvers<Request>();
   const release = Promise.withResolvers<void>();
-  const cancel = vi.fn();
   const destroy = vi.spyOn(service.database, "destroy");
   vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
     entered.resolve(request);
@@ -71,7 +59,7 @@ test("provider requests receive disconnect cancellation while shutdown waits for
     // Work still owned by the provider must not encounter a closed database.
     await Effect.runPromise(service.sql`SELECT 1`);
 
-    return new Response(new ReadableStream({ cancel }));
+    return Response.json({ keys: [] });
   });
   const controller = new AbortController();
   const response = fetch(`${url}/api/auth/jwks`, { signal: controller.signal });
@@ -80,15 +68,12 @@ test("provider requests receive disconnect cancellation while shutdown waits for
   try {
     const request = await entered.promise;
     expect(request.url).toBe("https://issuer.example/api/auth/jwks");
-    const aborted = once(request.signal, "abort");
     controller.abort();
     await rejected;
-    await aborted;
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => service.close());
+    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
     expect(destroy).not.toHaveBeenCalled();
     release.resolve();
     await closing;
-    expect(cancel).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
   } finally {
     release.resolve();
@@ -123,13 +108,13 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
     await entered.promise;
     controller.abort();
     await rejected;
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => service.close());
+    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
     expect(destroy).not.toHaveBeenCalled();
     release.resolve();
     await closing;
     expect(destroy).toHaveBeenCalledTimes(1);
     // The disconnected request still committed the account before the database closed.
-    const stored = new DatabaseSync(join(directory, "auth.sqlite"));
+    const stored = new DatabaseSync(issuer.settings.database);
     expect(stored.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 1 });
     stored.close();
   } finally {
@@ -137,7 +122,7 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   }
 });
 
-test("shutdown waits for an in-process JWKS fetch the SDK has already given up on", async () => {
+test("an in-process JWKS read is awaited by its request, so shutdown waits for it", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const destroy = vi.spyOn(service.database, "destroy");
@@ -148,6 +133,7 @@ test("shutdown waits for an in-process JWKS fetch the SDK has already given up o
     if (new URL(request.url).pathname.endsWith("/jwks")) {
       entered.resolve();
       await release.promise;
+      // Work still owned by the provider must not encounter a closed database.
       await Effect.runPromise(service.sql`SELECT 1`).catch((cause: unknown) => {
         stalledCallFailed = cause;
       });
@@ -168,21 +154,32 @@ test("shutdown waits for an in-process JWKS fetch the SDK has already given up o
     .setJti("stalled")
     .sign(privateKey);
 
+  let answered = false;
+
   const response = fetch(
     mcpRequest({
       method: "tools/list",
       url: `${url}/mcp`,
       headers: { authorization: `Bearer ${token}` },
     }),
-  );
+  ).then((answer) => {
+    answered = true;
+
+    return answer;
+  });
 
   try {
     await entered.promise;
-    expect((await response).status).toBe(503);
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => service.close());
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
+    // Past the deadline a Resource would apply: the raw verifier has none, so the request
+    // fiber is still waiting on the provider, and shutdown is still waiting on the fiber.
+    await new Promise((resolve) => setTimeout(resolve, 5500));
+    expect(answered).toBe(false);
     expect(destroy).not.toHaveBeenCalled();
     release.resolve();
+    // Shutdown interrupts the request once its provider work is done, so the client
+    // sees the interruption, not a verdict; the provider's query still reached SQLite.
+    await response;
     await closing;
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(stalledCallFailed).toBeUndefined();

@@ -1,5 +1,5 @@
 import { Clock, Effect } from "effect";
-import { APIError } from "better-auth/api";
+import { NotFound } from "@clankerauth/admin-api";
 import type { Kysely } from "kysely";
 import { transaction, type DatabaseSchema, type Sql } from "./database.ts";
 
@@ -10,7 +10,7 @@ import { transaction, type DatabaseSchema, type Sql } from "./database.ts";
 export function clientStore(database: Kysely<DatabaseSchema>) {
   const revoke = Effect.fn("Clients.revoke")(function* (clientId: string, query: Sql) {
     if (!(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`).length)
-      return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+      return yield* Effect.fail(new NotFound({ error: "Client not found" }));
     yield* query`DELETE FROM oauthConsent WHERE clientId = ${clientId}`;
     yield* query`DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND json_extract(value, '$.query.client_id') = ${clientId}`;
     yield* query`DELETE FROM oauthAccessToken WHERE clientId = ${clientId}`;
@@ -26,7 +26,7 @@ export function clientStore(database: Kysely<DatabaseSchema>) {
         Effect.gen(function* () {
           if (blocked) yield* revoke(clientId, query);
           else if (!(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`).length)
-            return yield* Effect.fail(new APIError("NOT_FOUND", { message: "Client not found" }));
+            return yield* Effect.fail(new NotFound({ error: "Client not found" }));
           yield* query`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
 
           return { blocked };

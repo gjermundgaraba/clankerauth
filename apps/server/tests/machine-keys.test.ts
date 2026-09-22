@@ -3,9 +3,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest, type McpRequestParams } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Effect, Exit, Scope, Schema } from "effect";
 import {
   Administration,
@@ -15,8 +12,8 @@ import {
 } from "@clankerauth/admin-api";
 import { createNodeServer } from "../src/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
-import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { createOwner } from "../src/auth.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 
 const origin = "http://localhost:3000";
 
@@ -32,9 +29,7 @@ type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]
 
 type TestRequestBody = { readonly [key: string]: JsonValue };
 
-let directory: string;
-
-let service: Service;
+let issuer: Issuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -60,14 +55,10 @@ const verify = (key: string, target = resource) =>
 
 beforeEach(async () => {
   bearer = undefined;
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-keys-"));
-  service = await Effect.runPromise(
-    openAuth(testSettings({ baseURL: origin, database: join(directory, "auth.sqlite") })),
-  );
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
-  await Effect.runPromise(
-    createOwner(service, {
+  issuer = await openIssuer({ baseURL: origin });
+  handle = application(issuer.service);
+  await issuer.run(
+    createOwner(issuer.service, {
       email: "owner@example.internal",
       password: "test-only password123",
     }),
@@ -96,8 +87,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers();
   await handle.dispose();
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
 const create = async () => {
@@ -117,7 +107,8 @@ test("hash-only storage, explicit scopes, one-time display and next-request disa
   expect(key.key.startsWith("ca_")).toBe(true);
 
   const stored = await Effect.runPromise(
-    service.sql`SELECT key, rateLimitMax, rateLimitTimeWindow FROM apikey WHERE id = ${key.keyId}`,
+    issuer.service
+      .sql`SELECT key, rateLimitMax, rateLimitTimeWindow FROM apikey WHERE id = ${key.keyId}`,
   );
 
   expect(stored[0]?.key).not.toBe(key.key);
@@ -129,7 +120,7 @@ test("hash-only storage, explicit scopes, one-time display and next-request disa
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     keyId: key.keyId,
-    ownerId: await Effect.runPromise(service.owner()),
+    ownerId: await Effect.runPromise(issuer.service.owner()),
     resource,
     scopes: ["example:read"],
     expiresAt: null,
@@ -197,13 +188,17 @@ test("resource policy removal and restoration retains only explicit grants", asy
 
 test("expired keys and per-key rate limits are enforced", async () => {
   const key = await create();
-  await service.auth.api.updateApiKey({
-    body: { keyId: key.keyId, rateLimitMax: 1, userId: await Effect.runPromise(service.owner()) },
+  await issuer.service.auth.api.updateApiKey({
+    body: {
+      keyId: key.keyId,
+      rateLimitMax: 1,
+      userId: await Effect.runPromise(issuer.service.owner()),
+    },
   });
   expect((await verify(key.key)).status).toBe(200);
   expect((await verify(key.key)).status).toBe(429);
   await Effect.runPromise(
-    service.sql`UPDATE apikey SET expiresAt = ${Date.now() - 1000} WHERE id = ${key.keyId}`,
+    issuer.service.sql`UPDATE apikey SET expiresAt = ${Date.now() - 1000} WHERE id = ${key.keyId}`,
   );
   expect((await verify(key.key)).status).toBe(401);
 });
@@ -214,19 +209,41 @@ test("creation rejects implicit, unknown and invalid expiry grants", async () =>
     { name: "Bad", permissions: { [resource]: [] }, expiresAt: null },
     { name: "Bad", permissions: { [resource]: ["example:unknown"] }, expiresAt: null },
     { name: "Bad", permissions: { "https://unknown.internal": ["example:read"] }, expiresAt: null },
+    { name: "Bad", permissions: { [resource]: ["example:read"] }, expiresAt: "not a date" },
+    // The past is a domain refusal, not a malformed request; both are 400.
+    {
+      name: "Bad",
+      permissions: { [resource]: ["example:read"] },
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    },
   ];
 
   for (const body of rejected)
     expect((await call("/api/administration/createApiKey", body)).status).toBe(400);
-  expect(
-    (
-      await call("/api/administration/createApiKey", {
-        name: "Bad",
-        permissions: { [resource]: ["example:read"] },
-        expiresAt: "not a date",
-      })
-    ).status,
-  ).toBe(400);
+});
+
+test("expiry travels as an ISO timestamp all the way to key verification", async () => {
+  const sent = Date.now();
+  const requested = sent + 86_400_000;
+
+  const response = await call("/api/administration/createApiKey", {
+    name: "Expiring",
+    permissions: { [resource]: ["example:read"] },
+    expiresAt: new Date(requested).toISOString(),
+  });
+
+  expect(response.status).toBe(201);
+  const created = await response.json();
+  // The plugin takes a lifetime in seconds and dates it itself, so the stored instant
+  // is the requested one shifted forward by however far apart those two clock reads
+  // are — at most this request's own duration, less the millisecond seconds round away.
+  expect(Date.parse(created.expiresAt)).toBeGreaterThanOrEqual(requested - 1);
+  expect(Date.parse(created.expiresAt)).toBeLessThanOrEqual(requested + (Date.now() - sent));
+  expect(Date.parse(created.createdAt)).toBeLessThanOrEqual(Date.now());
+  const expiresAt: string = created.expiresAt;
+  const listed = await (await call("/api/administration/listApiKeys", {})).json();
+  expect(listed.keys).toEqual([expect.objectContaining({ keyId: created.keyId, expiresAt })]);
+  expect(await (await verify(created.key)).json()).toMatchObject({ expiresAt });
 });
 
 test("listing returns key metadata without plaintext", async () => {
@@ -401,7 +418,8 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
   expect(created.status).toBe(201);
   const { client_id } = await created.json();
   await Effect.runPromise(
-    service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${client_id}`,
+    issuer.service
+      .sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${client_id}`,
   );
 
   const listing = await call("/api/administration/listClients", {});
@@ -422,7 +440,7 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
 });
 
 test("HTTP administration requires the owner session; MCP requires bearer authorization", async () => {
-  const userId = await Effect.runPromise(service.owner());
+  const userId = await Effect.runPromise(issuer.service.owner());
 
   if (userId === undefined) throw new Error("Expected an owner for spoofed-session checks");
   const spoofedOwner = { userId, cookie };
@@ -461,8 +479,8 @@ test.each(["2026-07-28", "2025-11-25"] as const)(
     const { tokens } = await mcpOAuthGrant(handle, origin, cookie);
     const scope = Scope.makeUnsafe();
 
-    const listener = await Effect.runPromise(
-      nodeHandler(service).pipe(Effect.provideService(Scope.Scope, scope)),
+    const listener = await issuer.run(
+      nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)),
     );
 
     const server = createNodeServer(listener);

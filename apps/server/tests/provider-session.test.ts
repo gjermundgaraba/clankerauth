@@ -1,33 +1,23 @@
 import { expect, test, vi } from "vite-plus/test";
 import { Effect, Fiber } from "effect";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createOwner, initialize, openAuth } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { createOwner } from "../src/auth.ts";
+import { openIssuer } from "./issuer.ts";
 import { providerSession } from "../src/provider-session.ts";
 
 test.each([false, true])(
-  "shutdown waits for provider session cleanup (failure: %s)",
+  "stopping the issuer waits for provider session cleanup (failure: %s)",
   async (failCleanup) => {
-    const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-session-"));
-
-    const service = await Effect.runPromise(
-      openAuth(
-        testSettings({
-          baseURL: "https://auth.example.internal",
-          database: join(directory, "auth.sqlite"),
-        }),
-      ),
-    );
-
+    const issuer = await openIssuer({ baseURL: "https://auth.example.internal" });
+    const { service } = issuer;
     const allowDeletion = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
 
     try {
-      await Effect.runPromise(initialize(service));
-      await Effect.runPromise(
-        createOwner(service, { email: "owner@example.internal", password: "test password123" }),
+      await issuer.run(
+        createOwner(issuer.service, {
+          email: "owner@example.internal",
+          password: "test password123",
+        }),
       );
       const owner = await Effect.runPromise(service.owner());
 
@@ -44,44 +34,36 @@ test.each([false, true])(
         return originalDelete(token);
       });
       const destroy = vi.spyOn(service.database, "destroy");
-
-      const request = Effect.runPromiseExit(Effect.scoped(providerSession(service, owner)));
+      const request = issuer.runExit(Effect.scoped(providerSession(issuer.service, owner)));
 
       await startedDeletion.promise;
-      closing = service.close();
-      await expect(service.run(async () => undefined)).rejects.toThrow("Service stopping");
-      expect(() => service.retain()).toThrow("Service stopping");
+      closing = issuer.stop();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The request fiber is owned by the scope shutting down, ahead of the database.
       expect(destroy).not.toHaveBeenCalled();
       allowDeletion.resolve();
-      expect((await request)._tag).toBe(failCleanup ? "Failure" : "Success");
+      await request;
       await closing;
       expect(destroy).toHaveBeenCalledTimes(1);
     } finally {
       allowDeletion.resolve();
-      await (closing ?? service.close());
-      rmSync(directory, { recursive: true, force: true });
+      await (closing ?? Promise.resolve());
+      await issuer.close();
     }
   },
 );
 
 test("cancellation releases a temporary provider session that lasts at most one minute", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "clankerauth-provider-cancellation-"));
-
-  const service = await Effect.runPromise(
-    openAuth(
-      testSettings({
-        baseURL: "https://auth.example.internal",
-        database: join(directory, "auth.sqlite"),
-      }),
-    ),
-  );
-
+  const issuer = await openIssuer({ baseURL: "https://auth.example.internal" });
+  const { service } = issuer;
   let request: Fiber.Fiber<never, unknown> | undefined;
 
   try {
-    await Effect.runPromise(initialize(service));
-    await Effect.runPromise(
-      createOwner(service, { email: "owner@example.internal", password: "test password123" }),
+    await issuer.run(
+      createOwner(issuer.service, {
+        email: "owner@example.internal",
+        password: "test password123",
+      }),
     );
     const owner = await Effect.runPromise(service.owner());
 
@@ -90,10 +72,11 @@ test("cancellation releases a temporary provider session that lasts at most one 
     const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
     const acquired = Promise.withResolvers<void>();
     const before = await Effect.runPromise(service.sql`SELECT id FROM session ORDER BY id`);
-    request = Effect.runFork(
+
+    request = issuer.runFork(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* providerSession(service, owner);
+          yield* providerSession(issuer.service, owner);
           acquired.resolve();
 
           return yield* Effect.never;
@@ -111,7 +94,6 @@ test("cancellation releases a temporary provider session that lasts at most one 
     );
   } finally {
     if (request) await Effect.runPromise(Fiber.interrupt(request));
-    await service.close();
-    rmSync(directory, { recursive: true, force: true });
+    await issuer.close();
   }
 });

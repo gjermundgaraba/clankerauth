@@ -52,13 +52,16 @@ export class TooManyRequests extends Schema.TaggedError<TooManyRequests>()(
   { httpApiStatus: 429 },
 ) {}
 
+/** The schema defines the public response; the diagnostic cause reaches logs, never a caller. */
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   {
     error: Schema.String,
   },
   { httpApiStatus: 500 },
-) {}
+) {
+  override cause?: unknown;
+}
 
 export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
   "ServiceUnavailable",
@@ -156,10 +159,17 @@ export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(Cli
 
 export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
+/**
+ * Timestamps stay ISO strings on the wire and arrive as `DateTime.Utc` values. An input
+ * without an offset is read as UTC, so the instant an API caller means never depends on
+ * the host's time zone; every value this issuer writes carries `Z`.
+ */
+const Timestamp = Schema.DateTimeUtcFromString;
+
 export const ApiKeyInput = Schema.Struct({
   name: Schema.String,
   permissions: KeyPermissions,
-  expiresAt: Schema.NullOr(Schema.String),
+  expiresAt: Schema.NullOr(Timestamp),
 });
 
 export const ApiKeyId = Schema.Struct({ keyId: Schema.String });
@@ -176,8 +186,8 @@ export const MachineKey = Schema.Struct({
   name: Schema.String,
   enabled: Schema.Boolean,
   permissions: KeyPermissions,
-  expiresAt: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
+  expiresAt: Schema.NullOr(Timestamp),
+  createdAt: Timestamp,
 });
 
 // Every action can fail with shared API errors. HTTP maps native schema failures
@@ -216,7 +226,7 @@ export const IssuerActions = ActionGroup.make(
       ownerId: Schema.String,
       resource: Schema.String,
       scopes: Schema.Array(Schema.String),
-      expiresAt: Schema.NullOr(Schema.String),
+      expiresAt: Schema.NullOr(Timestamp),
     }),
     mcp: false,
   }),

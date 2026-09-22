@@ -1,14 +1,11 @@
 /** Forward auth: proxy subrequests turn the owner's session into resource access tokens. */
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { webApplication as application } from "./web-application.ts";
-import { initialize, openAuth, createOwner, type Service } from "../src/auth.ts";
+import { createOwner } from "../src/auth.ts";
 import { forwardClientId, forwardCookie } from "../src/forward-auth.ts";
-import { testSettings } from "./settings.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 
 const origin = "https://auth.home.example";
 
@@ -18,9 +15,7 @@ const page = "https://notes.home.example/docs?x=1";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-let directory: string;
-
-let service: Service;
+let issuer: Issuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -76,19 +71,9 @@ const continueURL = (original = page) =>
   `${origin}/forward-auth/continue?rd=${encodeURIComponent(original)}`;
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-forward-"));
-  service = await Effect.runPromise(
-    openAuth(
-      testSettings({
-        baseURL: origin,
-        database: join(directory, "auth.sqlite"),
-        cookieDomain: "home.example",
-      }),
-    ),
-  );
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
-  await Effect.runPromise(createOwner(service, owner));
+  issuer = await openIssuer({ baseURL: origin, cookieDomain: "home.example" });
+  handle = application(issuer.service);
+  await issuer.run(createOwner(issuer.service, owner));
   session = "";
   const login = await call("/api/auth/sign-in/email", owner);
   expect(login.status).toBe(200);
@@ -111,8 +96,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await handle.dispose();
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
 test("the signed-in owner continues to the app with a domain-wide forward cookie that yields resource tokens", async () => {
@@ -148,7 +132,7 @@ test("the signed-in owner continues to the app with a domain-wide forward cookie
   });
 
   expect(protectedHeader.alg).toBe("EdDSA");
-  expect(payload.sub).toBe(await Effect.runPromise(service.owner()));
+  expect(payload.sub).toBe(await Effect.runPromise(issuer.service.owner()));
   expect(payload.client_id).toBe(forwardClientId);
   expect(payload.scope).toBe("notes:read notes:write");
   expect(payload.exp! - payload.iat!).toBe(15 * 60);

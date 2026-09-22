@@ -53,7 +53,7 @@ Pass `dataDir` and a fixed `port` to keep the issuer's state:
 const issuer = await startDisposableIssuer({ ...options, dataDir: ".dev/auth", port: 5174 });
 ```
 
-The owner account and password, the signing secret, the registered client and the database are kept in that directory, and provisioning is idempotent, so the next start reuses them: the same sign-in works, API keys minted before still verify, and browser storage keyed by the origin survives. A fixed port is part of that, because the origin is what cookies and registered redirect URIs are keyed by. `close()` leaves the directory alone. Treat it as the whole secret of the workspace and keep it out of version control. Without `dataDir`, nothing changes: a temporary directory, a random port, and everything removed by `close()`.
+The owner account and password, the signing secret, the registered client and the database are kept in that directory, and provisioning is idempotent, so the next start reuses them: the same sign-in works, API keys minted before still verify, and browser storage keyed by the origin survives. A fixed port is part of that, because the origin is what cookies and registered redirect URIs are keyed by. `close()` leaves the directory alone. Treat it as the whole secret of the workspace and keep it out of version control. `credentials.json` is written and read by this package alone and is validated against its schema on every start, so an edited or truncated file is refused rather than half-read. Without `dataDir`, nothing changes: a temporary directory, a random port, and everything removed by `close()`.
 
 To develop an app behind forward auth, pass a `cookieDomain`:
 

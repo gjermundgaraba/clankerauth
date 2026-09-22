@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 import { Api, BadRequest } from "@clankerauth/admin-api";
 import { webApplication as application } from "./web-application.ts";
-import { initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
-import type { Settings } from "../src/config.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 
@@ -17,28 +12,21 @@ describe("API integration", () => {
   const email = "owner@example.internal";
   const password = "test-only owner password 8rS!";
   const resource = "https://example.internal/mcp";
-  let directory: string;
-  let service: Service;
+  let issuer: Issuer;
   let handle: ReturnType<typeof application>;
-  let settings: Settings;
+  let settings: Issuer["settings"];
   let cookie: string;
 
   beforeEach(async () => {
-    directory = mkdtempSync(join(tmpdir(), "clankerauth-contract-"));
-    settings = testSettings({
-      baseURL: "http://localhost:3000",
-      database: join(directory, "auth.sqlite"),
-    });
-    service = await Effect.runPromise(openAuth(settings));
-    await Effect.runPromise(initialize(service));
-    handle = application(service);
+    issuer = await openIssuer({ baseURL: "http://localhost:3000" });
+    settings = issuer.settings;
+    handle = application(issuer.service);
     cookie = "";
   });
 
   afterEach(async () => {
     await handle.dispose();
-    await service.close();
-    rmSync(directory, { recursive: true, force: true });
+    await issuer.close();
   });
 
   // Model the browser's same-origin headers and cookie transport while exercising
@@ -185,7 +173,8 @@ describe("API integration", () => {
       );
       // Persisted values must satisfy the outgoing contract; corrupt data is a
       // server failure, not a bad request from this correctly typed caller.
-      yield* service.sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
+      yield* issuer.service
+        .sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
       const invalidResponse = yield* Effect.flip(api.administration.listClients({ payload: {} }));
       expect(invalidResponse._tag).toBe("InternalServerError");
       expect(
@@ -331,7 +320,8 @@ describe("API integration", () => {
 
       // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
       // and nullable live metadata is omitted rather than invented.
-      yield* service.sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
+      yield* issuer.service
+        .sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
       expect((yield* api.administration.listClients({ payload: {} })).clients).toEqual([
         {
           client_id,
@@ -343,7 +333,8 @@ describe("API integration", () => {
       ]);
 
       for (const invalidRedirects of ["null", "[42]"]) {
-        yield* service.sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
+        yield* issuer.service
+          .sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
         expect((yield* Effect.flip(api.administration.listClients({ payload: {} })))._tag).toBe(
           "InternalServerError",
         );
@@ -406,8 +397,10 @@ describe("API integration", () => {
       });
 
       const client_id = client.client_id;
-      yield* service.sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
-      yield* service.sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
+      yield* issuer.service
+        .sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* issuer.service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
+      yield* issuer.service
+        .sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
       expect(
         (yield* Effect.flip(api.administration.revokeClient({ payload: { client_id } })))._tag,
       ).toBe("InternalServerError");
@@ -420,9 +413,9 @@ describe("API integration", () => {
       expect((yield* api.administration.listClients({ payload: {} })).clients[0]?.blocked).toBe(
         false,
       );
-      expect(yield* service.sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`).toEqual(
-        [{ id: "failure-consent" }],
-      );
+      expect(
+        yield* issuer.service.sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`,
+      ).toEqual([{ id: "failure-consent" }]);
     }).pipe(
       Effect.provide(FetchHttpClient.layer),
       Effect.provideService(FetchHttpClient.Fetch, appFetch),
@@ -443,6 +436,6 @@ describe("API integration", () => {
     expect(JSON.parse(body)).toEqual(
       Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
     );
-    expect(await Effect.runPromise(service.owner())).toBeUndefined();
+    expect(await Effect.runPromise(issuer.service.owner())).toBeUndefined();
   });
 });

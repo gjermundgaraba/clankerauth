@@ -37,6 +37,7 @@
     "@clankerauth/admin-api": "workspace:*",
     "@clankerauth/server": "workspace:*",
     "@clankerauth/web": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "@opentelemetry/api": "catalog:",
     "effect": "catalog:",
     "jose": "catalog:",

@@ -1,21 +1,16 @@
 import { serializeSignedCookie } from "better-call";
 import { Clock, Effect } from "effect";
-import { apiError, provider } from "./api-errors.ts";
-import type { Service } from "./auth.ts";
+import { provider } from "./api-errors.ts";
+import type { Auth } from "./auth.ts";
 
 /** The pinned provider's administration APIs require a signed session cookie.
  * Keep the adapter session inside the authenticated request scope and never
  * forward this cookie to the caller. Its one-minute expiry bounds crash residue.
  */
 export const providerSession = Effect.fn("Administration.providerSession")(function* (
-  service: Service,
+  service: Auth["Service"],
   userId: string,
 ) {
-  // Registered first, released last: shutdown waits for session deletion even
-  // when native HTTP handling has already returned its Response to the caller.
-  yield* Effect.acquireRelease(Effect.try({ try: service.retain, catch: apiError }), (release) =>
-    Effect.sync(release),
-  );
   const context = yield* provider(() => service.auth.$context);
   const expiresAt = new Date((yield* Clock.currentTimeMillis) + 60_000);
 

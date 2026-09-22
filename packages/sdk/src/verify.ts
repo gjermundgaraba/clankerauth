@@ -1,6 +1,5 @@
-import { Clock, Effect, Exit, Schema, Semaphore } from "effect";
+import { Cause, Clock, DateTime, Effect, Exit, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
-import type { JWSHeaderParameters } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   ConfigurationError,
@@ -68,12 +67,22 @@ const KeyResponse = Schema.Struct({
   ownerId: Schema.NonEmptyString,
   resource: Schema.String,
   scopes: Schema.Array(Schema.NonEmptyString),
-  expiresAt: Schema.NullOr(Schema.String),
+  expiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
 const unauthorized = () => new Unauthorized({ message: "Authentication required" });
 
-/** Acquire once per resource; transport is selected by the application, not the SDK. */
+/** How long a JWKS document answers verification before it is read again. */
+const documentLifetime = "1 minute";
+
+/** How long a failed read holds off the next one. */
+const failureCooldown = "5 seconds";
+
+/**
+ * Acquire once per resource; transport is selected by the application, not the SDK.
+ * Verification runs to completion: a deadline is the request edge's policy, which
+ * `Resource` applies, so an in-process caller can await a provider call it cannot cancel.
+ */
 export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const client = yield* HttpClient.HttpClient;
 
@@ -85,79 +94,48 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     catch: () => new ConfigurationError({ message: "Invalid issuer URL" }),
   });
 
-  const refreshLock = yield* Semaphore.make(1);
-  let refreshAfter = 0;
-  let refreshFailure: ProviderUnavailable | undefined;
+  const document = Effect.fn("Verifier.jwks")(function* () {
+    const response = yield* execute(client, HttpClientRequest.get(endpoints.jwks));
 
-  const makeCachedKeys = Effect.cachedWithTTL(
-    Effect.gen(function* () {
-      const response = yield* execute(client, HttpClientRequest.get(endpoints.jwks));
-
-      if (response.status !== 200)
-        return yield* new ProviderUnavailable({
-          operation: "jwks.fetch",
-          cause: { status: response.status },
-        });
-
-      const document = yield* HttpClientResponse.schemaBodyJson(Jwks)(response).pipe(
-        Effect.mapError((cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })),
-      );
-
-      refreshAfter = (yield* Clock.currentTimeMillis) + 30_000;
-      refreshFailure = undefined;
-
-      return createLocalJWKSet({
-        keys: document.keys.map(({ key_ops, ...key }) =>
-          key_ops ? { ...key, key_ops: [...key_ops] } : key,
-        ),
+    if (response.status !== 200)
+      return yield* new ProviderUnavailable({
+        operation: "jwks.fetch",
+        cause: { status: response.status },
       });
-    }).pipe(Effect.scoped),
-    (exit) => (Exit.isSuccess(exit) ? "10 minutes" : 0),
+
+    const jwks = yield* HttpClientResponse.schemaBodyJson(Jwks)(response).pipe(
+      Effect.mapError((cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })),
+    );
+
+    return createLocalJWKSet({
+      keys: jwks.keys.map(({ key_ops, ...key }) =>
+        key_ops ? { ...key, key_ops: [...key_ops] } : key,
+      ),
+    });
+  }, Effect.scoped);
+
+  // One read serves every key identifier until it expires, whatever its outcome, so an
+  // unknown `kid` in an unauthenticated request never becomes traffic at the issuer.
+  const read = yield* Effect.cachedWithTTL(document(), (exit) =>
+    Exit.isSuccess(exit) ? documentLifetime : failureCooldown,
   );
 
-  let keys = yield* makeCachedKeys;
+  // Replaying that read must not hand a later request the interruption of an earlier
+  // one's deadline; within the window the issuer simply was not reached.
+  const keys = Effect.catchCause(read, (cause) =>
+    Cause.hasInterrupts(cause)
+      ? Effect.fail(new ProviderUnavailable({ operation: "jwks.refresh" }))
+      : Effect.failCause(cause),
+  );
 
-  const resolveKey = (resolve: ReturnType<typeof createLocalJWKSet>, header: JWSHeaderParameters) =>
-    Effect.tryPromise({
-      try: () => resolve(header),
+  const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string) {
+    const resolve = yield* keys;
+
+    return yield* Effect.tryPromise({
+      try: () => resolve({ alg: "EdDSA", kid }),
       // Selecting from fetched keys does no I/O: every failure is the credential's.
       catch: unauthorized,
     });
-
-  const signingKey = Effect.fn("Verifier.signingKey")(function* (header: JWSHeaderParameters) {
-    const resolve = yield* keys;
-
-    return yield* resolveKey(resolve, header).pipe(
-      Effect.catchTag("Unauthorized", () =>
-        refreshLock.withPermit(
-          Effect.gen(function* () {
-            const current = yield* keys;
-
-            // Another request may have refreshed while this one waited for admission.
-            if (current !== resolve) return yield* resolveKey(current, header);
-            const now = yield* Clock.currentTimeMillis;
-
-            // Cool down failed or interrupted refreshes too, without discarding still-valid cached keys.
-            if (now < refreshAfter) return yield* refreshFailure ?? unauthorized();
-            refreshAfter = now + 30_000;
-            refreshFailure = new ProviderUnavailable({ operation: "jwks.refresh" });
-            const next = yield* makeCachedKeys;
-
-            const refreshed = yield* next.pipe(
-              Effect.tapError((error) =>
-                Effect.sync(() => {
-                  refreshFailure = error;
-                }),
-              ),
-            );
-
-            keys = next;
-
-            return yield* resolveKey(refreshed, header);
-          }),
-        ),
-      ),
-    );
   });
 
   const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
@@ -169,7 +147,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     // The issuer always names its key, so key selection is never ambiguous. Reject other
     // tokens before doing provider I/O; JOSE still enforces its algorithm allowlist.
     if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
-    const key = yield* signingKey(header);
+    const key = yield* signingKey(header.kid);
     const now = yield* Clock.currentTimeMillis;
 
     const { payload } = yield* Effect.tryPromise({
@@ -226,12 +204,14 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       Effect.mapError((cause) => new ProviderUnavailable({ operation: "api-key.response", cause })),
     );
 
-    const expiry = body.expiresAt === null ? null : Date.parse(body.expiresAt);
-
-    if (body.resource !== options.resource || (expiry !== null && !Number.isFinite(expiry)))
+    if (body.resource !== options.resource)
       return yield* new ProviderUnavailable({ operation: "api-key.response" });
 
-    if (expiry !== null && expiry <= (yield* Clock.currentTimeMillis)) return yield* unauthorized();
+    if (
+      body.expiresAt !== null &&
+      DateTime.toEpochMillis(body.expiresAt) <= (yield* Clock.currentTimeMillis)
+    )
+      return yield* unauthorized();
 
     return {
       subject: body.ownerId,
@@ -243,25 +223,19 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     } satisfies Principal;
   }, Effect.scoped);
 
-  const verifyToken = Effect.fn("Verifier.verifyToken")(
-    function* (token: string) {
-      const principal = yield* token.startsWith("ca_")
-        ? options.apiKeys === false
-          ? Effect.fail(unauthorized())
-          : verifyKey(token)
-        : verifyJwt(token);
+  const verifyToken = Effect.fn("Verifier.verifyToken")(function* (token: string) {
+    const principal = yield* token.startsWith("ca_")
+      ? options.apiKeys === false
+        ? Effect.fail(unauthorized())
+        : verifyKey(token)
+      : verifyJwt(token);
 
-      const missing = options.requiredScopes?.find((scope) => !principal.scopes.includes(scope));
+    const missing = options.requiredScopes?.find((scope) => !principal.scopes.includes(scope));
 
-      if (missing !== undefined) return yield* new InsufficientScope({ scope: missing });
+    if (missing !== undefined) return yield* new InsufficientScope({ scope: missing });
 
-      return principal;
-    },
-    Effect.timeoutOrElse({
-      duration: "5 seconds",
-      orElse: () => Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
-    }),
-  );
+    return principal;
+  });
 
   return {
     verifyToken,

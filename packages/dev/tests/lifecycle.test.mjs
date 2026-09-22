@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createServer, request } from "node:http";
 import { once } from "node:events";
+import { connect } from "node:net";
+import { setTimeout } from "node:timers/promises";
 import { startDisposableIssuer } from "../dist/index.mjs";
 import { attach, reserveLoopbackPort } from "../dist/edge.mjs";
 import { startFakeIssuer } from "../dist/testing.mjs";
@@ -213,6 +215,23 @@ await test("failed provisioning removes its temporary directory and listening se
     /provisioning failed/,
   );
   assert.deepEqual(await directories(), before);
+});
+
+await test("close() does not wait for a request whose body never arrives", async () => {
+  const issuer = await startDisposableIssuer(options);
+  const { port } = new URL(issuer.url);
+  const socket = connect(Number(port), "127.0.0.1");
+  await once(socket, "connect");
+  // A sign-in whose body the client never sends: the handler waits on it uninterruptibly.
+  socket.write(
+    `POST /api/auth/sign-in/email HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: ${issuer.url}\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n`,
+  );
+  await setTimeout(100);
+  const started = performance.now();
+  await issuer.close();
+  assert.ok(performance.now() - started < 5000, "close() waited for the request timeout");
+  socket.destroy();
+  await assert.rejects(access(issuer.directory), { code: "ENOENT" });
 });
 
 await test("bundled provider lists key metadata without plaintext and verifies keys online", async () => {

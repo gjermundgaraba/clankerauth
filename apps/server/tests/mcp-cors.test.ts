@@ -1,43 +1,26 @@
-import { Effect } from "effect";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner, initialize, openAuth, type Service } from "../src/auth.ts";
-import { testSettings } from "./settings.ts";
+import { createOwner } from "../src/auth.ts";
+import { openIssuer, type Issuer } from "./issuer.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";
 
 const clientOrigin = "https://mcp-client.example.test";
 
-let directory: string;
-
-let service: Service;
+let issuer: Issuer;
 
 let handle: ReturnType<typeof application>;
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), "clankerauth-mcp-cors-"));
-  service = await Effect.runPromise(
-    openAuth(
-      testSettings({
-        baseURL,
-        database: join(directory, "auth.sqlite"),
-        mcpAllowedOrigins: [clientOrigin],
-      }),
-    ),
-  );
-  await Effect.runPromise(initialize(service));
-  handle = application(service);
+  issuer = await openIssuer({ baseURL, mcpAllowedOrigins: [clientOrigin] });
+  handle = application(issuer.service);
 });
 
 afterEach(async () => {
   await handle.dispose();
-  await service.close();
-  rmSync(directory, { recursive: true, force: true });
+  await issuer.close();
 });
 
 const list = (headers: Record<string, string> = {}) =>
@@ -139,7 +122,7 @@ test("MCP rejects unlisted origins before authentication and accepts originless 
 
 test("an allowed external browser uses bearer MCP while the dashboard API exposes no CORS grant", async () => {
   const credentials = { email: "owner@example.internal", password: "test-only password123" };
-  await Effect.runPromise(createOwner(service, credentials));
+  await issuer.run(createOwner(issuer.service, credentials));
 
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {

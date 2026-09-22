@@ -6,6 +6,7 @@ import {
   authenticationErrors,
   ConfigurationError,
   InsufficientScope,
+  ProviderUnavailable,
   RateLimited,
   Unauthorized,
 } from "./errors.ts";
@@ -100,12 +101,25 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
     catch: () => new ConfigurationError({ message: "Invalid resource metadata configuration" }),
   });
 
-  const verifier = yield* Verifier.make({
+  const unbounded = yield* Verifier.make({
     issuer: options.issuer,
     resource: identifier,
     requiredScopes: [options.scopes.read],
     apiKeys: options.apiKeys,
   });
+
+  // A request must not wait on an issuer that does not answer: the transport is
+  // interrupted and the credential refused as unavailable.
+  const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
+    Effect.timeoutOrElse(effect, {
+      duration: "5 seconds",
+      orElse: () => Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
+    });
+
+  const verifier: Verifier.Verifier = {
+    verify: (authorization) => deadline(unbounded.verify(authorization)),
+    verifyToken: (token) => deadline(unbounded.verifyToken(token)),
+  };
 
   const challengeValue = (error?: "invalid_token" | "insufficient_scope", missing?: string) =>
     discovery.challenge({ error, scope: missing ?? options.scopes.read });

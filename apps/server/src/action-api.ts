@@ -10,13 +10,14 @@ import { administrationResource } from "./administration-resource.ts";
 import { machineKeys } from "./machine-keys.ts";
 import { bearerOwner, sessionOwner } from "./current-owner.ts";
 import { responseCookies } from "./response-cookies.ts";
-import type { Service } from "./auth.ts";
+import { Auth } from "./auth.ts";
 
-export function actionRoutes(service: Service, mcpAllowedOrigins: readonly string[]) {
+export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
   return Layer.unwrap(
     Effect.gen(function* () {
-      const admin = administration(service);
-      const keys = machineKeys(service);
+      const service = yield* Auth;
+      const admin = yield* administration;
+      const keys = yield* machineKeys;
 
       const owner = Administration.implement({
         listClients: admin.list,
@@ -53,12 +54,12 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
           }),
       });
 
-      const adminResource = yield* administrationResource(service);
+      const adminResource = yield* administrationResource();
 
       // Owner administration needs the dashboard session; issuer actions have
       // their own access rules and must work before anyone has signed in.
       const httpRoutes = Layer.mergeAll(
-        Http.layer({}, owner).pipe(Layer.provide(sessionOwner(service).layer)),
+        Http.layer({}, owner).pipe(Layer.provide((yield* sessionOwner).layer)),
         HttpRouter.add(
           "GET",
           "/openapi.json",
@@ -85,13 +86,9 @@ export function actionRoutes(service: Service, mcpAllowedOrigins: readonly strin
             "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
         },
         owner,
-      ).pipe(Layer.provide(bearerOwner(service, adminResource).layer));
+      ).pipe(Layer.provide((yield* bearerOwner(adminResource)).layer));
 
-      // Provider SDK calls do not support interruption. Finish admitted action work
-      // before its request scope releases sessions or permits database shutdown.
-      return Layer.mergeAll(httpRoutes, mcpRoutes, adminResource.discovery.layer).pipe(
-        Layer.provide(HttpRouter.middleware((effect) => Effect.uninterruptible(effect)).layer),
-      );
+      return Layer.mergeAll(httpRoutes, mcpRoutes, adminResource.discovery.layer);
     }),
   );
 }

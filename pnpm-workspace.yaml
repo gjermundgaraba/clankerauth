@@ -22,7 +22,6 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.5
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.82.0
-  zod: 4.6.4
   "@gjermundgaraba/effect-actions": 0.4.1
 
 overrides:

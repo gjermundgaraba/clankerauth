@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Redacted, Effect, Exit, Scope } from "effect";
+import { Context, Effect, Exit, Fiber, FileSystem, Layer, Redacted, Schema, Scope } from "effect";
+import { NodeFileSystem } from "@effect/platform-node";
+import { Cookies, FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { administration } from "../../../apps/server/src/administration.ts";
 import { nodeHandler } from "../../../apps/server/src/app.ts";
-import { createOwner, initialize, openAuth, type Service } from "../../../apps/server/src/auth.ts";
+import { Auth, createOwner } from "../../../apps/server/src/auth.ts";
 import { validateSettings } from "../../../apps/server/src/config.ts";
 import { CurrentOwner } from "../../../apps/server/src/current-owner.ts";
 import { machineKeys } from "../../../apps/server/src/machine-keys.ts";
@@ -17,12 +17,34 @@ import type { DisposableIssuer, DisposableIssuerOptions, Identity } from "./type
 
 const credentialsFile = "credentials.json";
 
+/** The credentials file is written by this package only, so its shape is a schema. */
+const IdentityFile = Schema.Struct({
+  email: Schema.String,
+  password: Schema.String,
+  secret: Schema.String,
+  clientId: Schema.optional(Schema.String),
+  clientSecret: Schema.optional(Schema.String),
+});
+
+const decodeIdentity = Schema.decodeUnknownEffect(Schema.fromJsonString(IdentityFile));
+
+const encodeIdentity = Schema.encodeSync(IdentityFile);
+
+const saveIdentity = (directory: string, identity: Identity) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.writeFileString(
+      join(directory, credentialsFile),
+      `${JSON.stringify(encodeIdentity(identity), null, 2)}\n`,
+      { mode: 0o600 },
+    ),
+  );
+
 /**
  * A run's identity. A disposable issuer invents one; a persistent workspace keeps it
  * in its data directory, so the owner account, the signing secret and the registered
  * client survive a restart. The file is the whole secret: it is the workspace.
  */
-const loadIdentity = async (directory: string, persistent: boolean): Promise<Identity> => {
+const loadIdentity = Effect.fn("Dev.identity")(function* (directory: string, persistent: boolean) {
   const fresh: Identity = {
     email: "owner@example.internal",
     password: randomBytes(24).toString("base64url"),
@@ -30,52 +52,92 @@ const loadIdentity = async (directory: string, persistent: boolean): Promise<Ide
   };
 
   if (!persistent) return fresh;
+  const fs = yield* FileSystem.FileSystem;
   const path = join(directory, credentialsFile);
-  const existing = await readFile(path, "utf8").catch(() => undefined);
 
-  if (existing !== undefined) {
-    // SAFETY: this file is written by `saveIdentity` below and lives in the caller's
-    // own data directory; a hand-edited one fails at the first use of a missing field.
-    return JSON.parse(existing) as Identity;
-  }
-
-  await writeFile(path, `${JSON.stringify(fresh, null, 2)}\n`, { mode: 0o600 });
+  // A hand-edited file is refused by the schema rather than half-read.
+  if (yield* fs.exists(path)) return yield* decodeIdentity(yield* fs.readFileString(path));
+  yield* saveIdentity(directory, fresh);
 
   return fresh;
-};
+});
 
-const saveIdentity = (directory: string, identity: Identity) =>
-  writeFile(join(directory, credentialsFile), `${JSON.stringify(identity, null, 2)}\n`, {
-    mode: 0o600,
-  });
+const provisioningFailed = (cause: unknown) =>
+  new Error("Disposable issuer provisioning failed", { cause });
 
-/** Start an issuer on a loopback port. The caller owns signals and must await close(). */
-export async function startDisposableIssuer({
-  resources,
-  client,
-  cookieDomain,
-  cimdTransport,
-  onRequest,
-  dataDir,
-  port: requestedPort = 0,
-}: DisposableIssuerOptions): Promise<DisposableIssuer> {
-  const staticRoot = fileURLToPath(new URL("./web/", import.meta.url));
-  await access(join(staticRoot, "index.html")).catch(() => {
-    throw new Error(
-      "The @gjermundgaraba/clankerauth-dev installation is missing its bundled dashboard assets",
+/** Sign the owner in and seal the forward cookie, the way a browser does. */
+const ownerSession = Effect.fn("Dev.ownerSession")(function* (
+  issuerUrl: string,
+  forwardOrigin: string | undefined,
+  owner: { readonly email: string; readonly password: string },
+  appOrigin: string,
+) {
+  if (forwardOrigin === undefined)
+    return yield* Effect.fail(
+      new Error("A forward-auth session needs a cookieDomain; the issuer serves none"),
     );
-  });
-  const persistent = dataDir !== undefined;
+  const client = yield* HttpClient.HttpClient;
 
-  if (persistent) await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  const signIn = yield* client.execute(
+    HttpClientRequest.post(`${issuerUrl}/api/auth/sign-in/email`, {
+      headers: { origin: issuerUrl },
+    }).pipe(HttpClientRequest.bodyJsonUnsafe(owner)),
+  );
 
-  const directory = persistent
-    ? resolve(dataDir)
-    : await mkdtemp(join(tmpdir(), "clankerauth-disposable-"));
+  // Every response body is read to completion, so no connection is left half-consumed.
+  yield* signIn.text;
 
-  let service: Service | undefined;
-  let httpScope: Scope.Closeable | undefined;
-  let closing: Promise<void> | undefined;
+  if (signIn.status !== 200)
+    return yield* Effect.fail(new Error(`Owner sign-in failed with HTTP ${signIn.status}`));
+  // `/forward-auth/continue` seals the session into the cookie the domain shares.
+  const destination = new URL("/", appOrigin).href;
+
+  const sealed = yield* client.get(
+    `${issuerUrl}/forward-auth/continue?rd=${encodeURIComponent(destination)}`,
+    { headers: { cookie: Cookies.toCookieHeader(signIn.cookies) } },
+  );
+
+  yield* sealed.text;
+  const jar = Cookies.merge(signIn.cookies, sealed.cookies);
+
+  return {
+    cookie: Cookies.toCookieHeader(jar),
+    cookies: Object.entries(Cookies.toRecord(jar)).map(([name, value]) => ({ name, value })),
+  };
+});
+
+/** The platform this package runs on. A forward-auth answer is read, never followed. */
+const platform = Layer.mergeAll(
+  NodeFileSystem.layer,
+  FetchHttpClient.layer,
+  Layer.succeed(FetchHttpClient.RequestInit, { redirect: "manual" }),
+);
+
+/**
+ * One running issuer, built into the caller's scope. The listener is acquired before the
+ * issuer and the request handler after it, so closing the scope settles request fibers,
+ * then closes SQLite, then frees the port and removes a temporary directory.
+ */
+const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const staticRoot = fileURLToPath(new URL("./web/", import.meta.url));
+
+  if (!(yield* fs.exists(join(staticRoot, "index.html"))))
+    return yield* Effect.fail(
+      new Error(
+        "The @gjermundgaraba/clankerauth-dev installation is missing its bundled dashboard assets",
+      ),
+    );
+  const dataDir = options.dataDir;
+
+  // A workspace directory belongs to its caller; only a temporary one is removed.
+  const directory =
+    dataDir === undefined
+      ? yield* fs.makeTempDirectoryScoped({ prefix: "clankerauth-disposable-" })
+      : yield* Effect.as(
+          fs.makeDirectory(resolve(dataDir), { recursive: true, mode: 0o700 }),
+          resolve(dataDir),
+        );
 
   // Listen first to discover the port; reject requests until initialization completes.
   let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
@@ -84,7 +146,7 @@ export async function startDisposableIssuer({
 
   const server = createNodeServer((incoming, outgoing) => {
     try {
-      onRequest?.({
+      options.onRequest?.({
         method: incoming.method ?? "GET",
         url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
       });
@@ -95,266 +157,223 @@ export async function startDisposableIssuer({
     }
   });
 
-  const close = () =>
-    (closing ??= (async () => {
-      try {
-        const stopped = new Promise<void>((resolve, reject) => {
-          server.close((error) =>
-            error && (!("code" in error) || error.code !== "ERR_SERVER_NOT_RUNNING")
-              ? reject(error)
-              : resolve(),
-          );
-          // Also release incomplete uploads and connections without a request fiber.
-          server.closeAllConnections();
-        });
-
-        // Interrupt response delivery without abandoning tracked provider work.
-        await Promise.all([
-          stopped,
-          httpScope ? Effect.runPromise(Scope.close(httpScope, Exit.void)) : Promise.resolve(),
-        ]);
-      } finally {
-        try {
-          await service?.close();
-        } finally {
-          // A workspace directory belongs to its caller; only a temporary one is removed.
-          if (!persistent) await rm(directory, { recursive: true, force: true });
-        }
-      }
-    })());
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(requestedPort, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
+  yield* Effect.callback<void, Error>((resume) => {
+    const failed = (error: Error) => resume(Effect.fail(error));
+    server.once("error", failed);
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
+      server.off("error", failed);
+      resume(Effect.void);
     });
-    const address = server.address();
+  });
 
-    if (!(address instanceof Object))
-      throw new Error("Disposable issuer failed to bind a TCP port");
+  const address = server.address();
 
-    const { port } = address;
+  if (!(address instanceof Object))
+    return yield* Effect.fail(new Error("Disposable issuer failed to bind a TCP port"));
+  const { port } = address;
 
-    // Forward auth shares a cookie across hosts, which an IP address cannot do. A `.localhost`
-    // name resolves to this loopback listener and gives the issuer and the apps a common parent.
-    const url =
-      cookieDomain === undefined
-        ? `http://127.0.0.1:${port}`
-        : `http://auth.${cookieDomain}:${port}`;
+  // Forward auth shares a cookie across hosts, which an IP address cannot do. A `.localhost`
+  // name resolves to this loopback listener and gives the issuer and the apps a common parent.
+  const url =
+    options.cookieDomain === undefined
+      ? `http://127.0.0.1:${port}`
+      : `http://auth.${options.cookieDomain}:${port}`;
 
-    const identity = await loadIdentity(directory, persistent);
+  const identity = yield* loadIdentity(directory, dataDir !== undefined);
 
-    service = await Effect.runPromise(
-      openAuth(
-        validateSettings({
-          baseURL: url,
-          secret: Redacted.make(identity.secret),
-          database: join(directory, "issuer.sqlite"),
-          host: "127.0.0.1",
-          port,
-          trustProxy: false,
-          allowInsecureHttp: cookieDomain !== undefined,
-          cookieDomain,
+  const settings = yield* validateSettings({
+    baseURL: url,
+    secret: Redacted.make(identity.secret),
+    database: join(directory, "issuer.sqlite"),
+    host: "127.0.0.1",
+    port,
+    mcpAllowedOrigins: [],
+    trustProxy: false,
+    allowInsecureHttp: options.cookieDomain !== undefined,
+    cookieDomain: options.cookieDomain,
+  });
+
+  const issuer = yield* Layer.build(Auth.layer(settings, { cimdTransport: options.cimdTransport }));
+  const service = Context.get(issuer, Auth);
+
+  // Request fibers live in a child scope registered here, before the socket finalizer
+  // below, so shutdown closes sockets first, then awaits request fibers — which a handler
+  // blocked on an incomplete body needs — and only then closes SQLite.
+  const requests = yield* Scope.fork(yield* Effect.scope);
+
+  serve = yield* nodeHandler(staticRoot).pipe(
+    Effect.provide(issuer),
+    Effect.provideService(Scope.Scope, requests),
+  );
+
+  yield* Effect.addFinalizer(() =>
+    Effect.callback<void>((resume) => {
+      server.close(() => resume(Effect.void));
+      server.closeAllConnections();
+    }),
+  );
+
+  const owner = { email: identity.email, password: identity.password };
+
+  // Seed in-process: the owner's provider session authorizes administration directly.
+  const admin = yield* Effect.provide(administration, issuer);
+  const keys = yield* Effect.provide(machineKeys, issuer);
+
+  /**
+   * Run administration as the owner, the way the dashboard's session does. No code path
+   * detaches a provider Promise: like a request handler, this runs uninterruptibly, so
+   * `close()` during a call waits for it and its session cleanup before SQLite closes.
+   */
+  const asOwner = <A, E>(
+    operation: (userId: string) => Effect.Effect<A, E, CurrentOwner | Scope.Scope>,
+  ) =>
+    Effect.uninterruptible(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const userId = yield* service.owner();
+
+          if (userId === undefined) return yield* Effect.die(new Error("Owner setup failed"));
+          const headers = yield* providerSession(service, userId);
+
+          return yield* operation(userId).pipe(
+            Effect.provideService(CurrentOwner, {
+              userId,
+              email: owner.email,
+              providerHeaders: Effect.succeed(headers),
+            }),
+          );
         }),
-        { cimdTransport },
       ),
-    );
-    await Effect.runPromise(initialize(service));
-    httpScope = Scope.makeUnsafe();
-    serve = await Effect.runPromise(
-      nodeHandler(service, staticRoot).pipe(Effect.provideService(Scope.Scope, httpScope)),
-    );
+    ).pipe(Effect.mapError(provisioningFailed));
 
-    const owner = { email: identity.email, password: identity.password };
+  // Every step is idempotent, so a persistent workspace restarts onto its own state.
+  if (!(yield* service.owner()))
+    yield* createOwner(service, owner).pipe(Effect.mapError(provisioningFailed));
 
-    // Seed in-process: the owner's provider session authorizes administration directly.
-    const issuer = service;
-    const admin = administration(issuer);
-    const keys = machineKeys(issuer);
-
-    /** Run administration as the owner, the way the dashboard's session does. */
-    const asOwner = <A, E>(
-      operation: (userId: string) => Effect.Effect<A, E, CurrentOwner | Scope.Scope>,
-    ) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const userId = yield* issuer.owner();
-
-            if (userId === undefined) return yield* Effect.die(new Error("Owner setup failed"));
-            const headers = yield* providerSession(issuer, userId);
-
-            return yield* operation(userId).pipe(
-              Effect.provideService(CurrentOwner, {
-                userId,
-                email: owner.email,
-                providerHeaders: Effect.succeed(headers),
-              }),
-            );
-          }),
-        ).pipe(
-          Effect.mapError(
-            (error) => new Error("Disposable issuer provisioning failed", { cause: error }),
-          ),
-        ),
-      );
-
-    // Every step is idempotent, so a persistent workspace restarts onto its own state.
-    if (!(await Effect.runPromise(issuer.owner())))
-      await Effect.runPromise(
-        Effect.scoped(createOwner(issuer, owner)).pipe(
-          Effect.mapError(
-            (error) => new Error("Disposable issuer provisioning failed", { cause: error }),
-          ),
-        ),
-      );
-
-    await asOwner(() =>
-      Effect.forEach(resources, (resource) =>
-        Effect.flatMap(issuer.resources.get(resource.identifier), (existing) =>
-          existing ? Effect.void : Effect.asVoid(admin.createResource(resource)),
-        ),
+  yield* asOwner(() =>
+    Effect.forEach(options.resources, (resource) =>
+      Effect.flatMap(service.resources.get(resource.identifier), (existing) =>
+        existing ? Effect.void : Effect.asVoid(admin.createResource(resource)),
       ),
-    );
+    ),
+  );
 
-    const registered = await asOwner(() =>
-      Effect.gen(function* () {
-        if (identity.clientId !== undefined && identity.clientSecret !== undefined) {
-          const { clients } = yield* admin.list();
+  const registered = yield* asOwner(() =>
+    Effect.gen(function* () {
+      if (identity.clientId !== undefined && identity.clientSecret !== undefined) {
+        const { clients } = yield* admin.list();
 
-          if (clients.some((known) => known.client_id === identity.clientId))
-            return { client_id: identity.clientId, client_secret: identity.clientSecret };
-        }
+        if (clients.some((known) => known.client_id === identity.clientId))
+          return { client_id: identity.clientId, client_secret: identity.clientSecret };
+      }
 
-        return yield* admin.create({
-          client_name: client.name,
-          redirect_uris: [client.redirect],
-          resources: client.resources,
-          token_endpoint_auth_method: "client_secret_basic",
-          application_type: "native",
-        });
-      }),
-    );
-
-    if (registered.client_secret === undefined)
-      throw new Error("Disposable issuer did not return client credentials");
-
-    if (persistent)
-      await saveIdentity(directory, {
-        ...identity,
-        clientId: registered.client_id,
-        clientSecret: registered.client_secret,
+      return yield* admin.create({
+        client_name: options.client.name,
+        redirect_uris: [options.client.redirect],
+        resources: options.client.resources,
+        token_endpoint_auth_method: "client_secret_basic",
+        application_type: "native",
       });
+    }),
+  );
 
-    const forwardOrigin = cookieDomain === undefined ? undefined : url;
+  const clientSecret = registered.client_secret;
 
-    return {
+  if (clientSecret === undefined)
+    return yield* Effect.fail(new Error("Disposable issuer did not return client credentials"));
+
+  if (dataDir !== undefined)
+    yield* saveIdentity(directory, {
+      ...identity,
+      clientId: registered.client_id,
+      clientSecret,
+    });
+
+  const forwardOrigin = options.cookieDomain === undefined ? undefined : url;
+
+  return {
+    details: {
       issuer: `${url}/api/auth`,
       clientId: registered.client_id,
-      clientSecret: registered.client_secret,
+      clientSecret,
       owner,
       url,
       port,
       directory,
-      apiKey: (input) =>
-        asOwner(() =>
-          Effect.map(
-            keys.create({
-              name: input.name ?? "development",
-              permissions: input.permissions,
-              expiresAt: null,
-            }),
-            (created) => created.key,
-          ),
+    },
+    apiKey: (input: { readonly name?: string; readonly permissions: Record<string, string[]> }) =>
+      asOwner(() =>
+        Effect.map(
+          keys.create({
+            name: input.name ?? "development",
+            permissions: input.permissions,
+            expiresAt: null,
+          }),
+          (created) => created.key,
         ),
-      ownerSession: (appOrigin) => ownerSession(url, forwardOrigin, owner, appOrigin),
-      ownerToken: async (input) => {
-        const { cookie } = await ownerSession(url, forwardOrigin, owner, input.appOrigin);
-        const app = new URL(input.appOrigin);
-        const check = new URL("/forward-auth", url);
-        check.searchParams.set("resource", input.resource);
+      ),
+    ownerSession: (appOrigin: string) => ownerSession(url, forwardOrigin, owner, appOrigin),
+    ownerToken: Effect.fn("Dev.ownerToken")(function* (input: {
+      readonly resource: string;
+      readonly appOrigin: string;
+    }) {
+      const { cookie } = yield* ownerSession(url, forwardOrigin, owner, input.appOrigin);
+      const client = yield* HttpClient.HttpClient;
+      const app = new URL(input.appOrigin);
+      const check = new URL("/forward-auth", url);
+      check.searchParams.set("resource", input.resource);
 
-        const decision = await fetch(check, {
-          redirect: "manual",
-          headers: {
-            cookie,
-            "x-forwarded-proto": app.protocol.slice(0, -1),
-            "x-forwarded-host": app.host,
-            "x-forwarded-uri": "/",
-          },
-        });
+      const decision = yield* client.get(check, {
+        headers: {
+          cookie,
+          "x-forwarded-proto": app.protocol.slice(0, -1),
+          "x-forwarded-host": app.host,
+          "x-forwarded-uri": "/",
+        },
+      });
 
-        const authorization = decision.headers.get("authorization");
-        await decision.body?.cancel().catch(() => {});
+      yield* decision.text;
+      const authorization = decision.headers.authorization;
 
-        if (decision.status !== 204 || authorization === null)
-          throw new Error(`Forward auth issued no token (HTTP ${decision.status})`);
+      if (decision.status !== 204 || authorization === undefined)
+        return yield* Effect.fail(
+          new Error(`Forward auth issued no token (HTTP ${decision.status})`),
+        );
 
-        return authorization.replace(/^Bearer /iu, "");
-      },
-      close,
+      return authorization.replace(/^Bearer /iu, "");
+    }),
+  };
+});
+
+/** Start an issuer on a loopback port. The caller owns signals; `close()` waits for calls in flight. */
+export async function startDisposableIssuer(
+  options: DisposableIssuerOptions,
+): Promise<DisposableIssuer> {
+  const scope = Scope.makeUnsafe();
+
+  // Fibers run in the workspace's scope, after its finalizers: `close()` interrupts a
+  // call still in flight and awaits its cleanup before SQLite closes.
+  const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof platform> | Scope.Scope>) =>
+    Effect.runPromise(
+      effect.pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(platform)),
+      { onFiberStart: Fiber.runIn(scope) },
+    );
+
+  // `close()` is documented idempotent: repeated calls observe the one disposal.
+  const dispose = Effect.runSync(Effect.cached(Scope.close(scope, Exit.void)));
+
+  try {
+    const workspace = await run(makeWorkspace(options));
+
+    return {
+      ...workspace.details,
+      apiKey: (input) => run(workspace.apiKey(input)),
+      ownerSession: (appOrigin) => run(workspace.ownerSession(appOrigin)),
+      ownerToken: (input) => run(workspace.ownerToken(input)),
+      close: () => Effect.runPromise(dispose),
     };
   } catch (error) {
-    await close();
+    await Effect.runPromise(dispose);
     throw error;
   }
 }
-
-/** Sign the owner in and seal the forward cookie, the way a browser does. */
-const ownerSession = async (
-  issuerUrl: string,
-  forwardOrigin: string | undefined,
-  owner: { readonly email: string; readonly password: string },
-  appOrigin: string,
-) => {
-  if (forwardOrigin === undefined)
-    throw new Error("A forward-auth session needs a cookieDomain; the issuer serves none");
-  const jar = new Map<string, string>();
-
-  const collect = async (response: Response) => {
-    for (const raw of response.headers.getSetCookie()) {
-      const end = raw.indexOf(";");
-      const pair = end === -1 ? raw : raw.slice(0, end);
-      const separator = pair.indexOf("=");
-
-      if (separator > 0) jar.set(pair.slice(0, separator), pair.slice(separator + 1));
-    }
-
-    await response.body?.cancel().catch(() => {});
-
-    return response;
-  };
-
-  const cookie = () => [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
-
-  const signIn = await fetch(`${issuerUrl}/api/auth/sign-in/email`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "content-type": "application/json", origin: issuerUrl },
-    body: JSON.stringify(owner),
-  });
-
-  if (!signIn.ok) {
-    await signIn.body?.cancel().catch(() => {});
-    throw new Error(`Owner sign-in failed with HTTP ${signIn.status}`);
-  }
-
-  await collect(signIn);
-  // `/forward-auth/continue` seals the session into the cookie the domain shares.
-  const destination = new URL("/", appOrigin).href;
-
-  await collect(
-    await fetch(`${issuerUrl}/forward-auth/continue?rd=${encodeURIComponent(destination)}`, {
-      redirect: "manual",
-      headers: { cookie: cookie() },
-    }),
-  );
-
-  return {
-    cookie: cookie(),
-    cookies: [...jar].map(([name, value]) => ({ name, value })),
-  };
-};
