@@ -60,20 +60,17 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
   const web = HttpRouter.toWebHandler(
     Layer.mergeAll(
       resource.discovery.layer,
-      Http.layer({ before: resource.authorize }, app, resource.session).pipe(
+      Http.layer([app, resource.session], { before: resource.authorize }).pipe(
         Layer.provide(Resource.middleware(resource).layer),
       ),
-      ActionMcp.layerHttp(
-        {
-          name: "notes",
-          version: "1.0.0",
-          path: "/mcp",
-          protocols: [McpProtocol.v2026_07_28],
-          errors: authenticationErrors,
-          before: resource.authorize,
-        },
-        app,
-      ).pipe(Layer.provide(Resource.middleware(resource).layer)),
+      ActionMcp.layerHttp([app], {
+        name: "notes",
+        version: "1.0.0",
+        path: "/mcp",
+        protocols: [McpProtocol.v2026_07_28],
+        errors: authenticationErrors,
+        before: resource.authorize,
+      }).pipe(Layer.provide(Resource.middleware(resource).layer)),
     ).pipe(Layer.provide(HttpServer.layerServices)),
   );
 

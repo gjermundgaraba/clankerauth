@@ -69,20 +69,17 @@ const routes = Layer.unwrap(
 
     return Layer.mergeAll(
       notes.discovery.layer,
-      Http.layer({ before: notes.authorize }, app, notes.session).pipe(
+      Http.layer([app, notes.session], { before: notes.authorize }).pipe(
         Layer.provide(Resource.middleware(notes).layer),
       ),
-      ActionMcp.layerHttp(
-        {
-          name: "notes",
-          version: "1.0.0",
-          path: "/mcp",
-          protocols: [McpProtocol.v2026_07_28],
-          errors: authenticationErrors,
-          before: notes.authorize,
-        },
-        app,
-      ).pipe(Layer.provide(Resource.middleware(notes).layer)),
+      ActionMcp.layerHttp([app], {
+        name: "notes",
+        version: "1.0.0",
+        path: "/mcp",
+        protocols: [McpProtocol.v2026_07_28],
+        errors: authenticationErrors,
+        before: notes.authorize,
+      }).pipe(Layer.provide(Resource.middleware(notes).layer)),
     );
   }),
 ).pipe(Layer.provide(FetchHttpClient.layer));
@@ -94,7 +91,7 @@ The supplied `HttpClient` must not retry credential exchanges or follow redirect
 
 ## Scope enforcement
 
-An application names its scopes once and writes no authorization code. Each action declares what it does to the resource, and `resource.authorize` is the surface's pre-handler hook: it runs before every handler on every surface — HTTP, MCP, Toolkit, CLI — so no handler can forget it.
+An application names its scopes once and writes no authorization code. Each action declares what it does to the resource, and `resource.authorize` is the surface's pre-handler hook: it runs after the input is decoded and before every handler on every surface — HTTP, MCP, Toolkit, CLI — so no handler can forget it.
 
 ```ts
 import * as Action from "@gjermundgaraba/effect-actions/Action";
@@ -114,7 +111,7 @@ const Notes = ActionGroup.make(
 const Http = ActionHttp.make({ apiPath: "/api", errors: authenticationErrors }, Notes, Session);
 
 // And bound once per surface, so no handler and no group can forget it.
-const routes = Http.layer({ before: notes.authorize }, Notes.implement(handlers), notes.session);
+const routes = Http.layer([Notes.implement(handlers), notes.session], { before: notes.authorize });
 ```
 
 `scopes.read` is required at verification, so a read needs nothing further. `scopes.write` is what an `access: "write"` action additionally needs; leave it out and every action passes, which is how a single-scope application is expressed. `InsufficientScope` is a 403 naming **only** the missing scope, so a refusal never enumerates the resource's permissions.
@@ -123,7 +120,7 @@ A forward-auth browser token carries **every** scope the resource defines, becau
 
 An action reads identity from `CurrentPrincipal`, which contains `subject`, `scopes`, `actor` — either `{ kind: "client", clientId }` or `{ kind: "key", keyId }` — and `expiresAt`: an access token's verified `exp` in epoch milliseconds, so a host bounding a connection to its credential never decodes the token again. It is `undefined` for an API key, which carries no token lifetime and is re-verified on every request; choose your own bound for those.
 
-A hook refusal is a plain declared error: effect-actions encodes it with the schema's status and `Cache-Control: no-store`, and adds no `WWW-Authenticate`. Challenge headers come from admission — `Resource.middleware` and `admit` — which is what a client onboarding through RFC 9728 reads. No current client reads the header on a scope refusal, because an MCP denial is a tool error.
+A hook refusal is a plain declared error: effect-actions encodes it with the schema's status and adds no headers of its own; `Cache-Control: no-store` comes from `Resource.middleware`, which wraps every route it authenticates. Challenge headers come from admission — `Resource.middleware` and `admit` — which is what a client onboarding through RFC 9728 reads. No current client reads the header on a scope refusal, because an MCP denial is a tool error.
 
 Middleware authenticates the request and the hook authorizes it; neither filters MCP tool discovery.
 
@@ -199,7 +196,7 @@ JWTs are checked against issuer, audience, EdDSA signature, token type, required
 
 The bundled issuer does not configure automatic signing-key rotation. Immediate-use rotation is supported, but tokens signed by a new key are rejected until the next JWKS read, up to a minute. Publish-before-use avoids that window; it is not mandatory.
 
-The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity and the no-store response policy. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
+The SDK Resource adapter owns authentication error encoding and challenge headers; effect-actions supplies request-scoped identity, and its authentication middleware marks every response it answers or wraps `Cache-Control: no-store`; other cache policy is the host's. Defects and interruption are not relabeled as authentication rejection. Named effects supply tracing boundaries; application logging/tracing layers remain caller-owned. No `onFailure` callbacks or hidden runtime.
 
 Operational failures retain their underlying `cause` for application-side Effect error handling. `ProviderUnavailable` and `Unauthorized` keep this diagnostic field outside their public schemas; effect-actions serializes only those schemas. Causes may contain sensitive transport or provider details: inspect selectively, never serialize them into responses or log them indiscriminately.
 

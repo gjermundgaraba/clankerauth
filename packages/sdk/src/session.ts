@@ -18,7 +18,7 @@ export type Principal = typeof Principal.Type;
 
 /**
  * The credential is a transport concern: a process surface has none, so `whoami` is its
- * own group and never an MCP tool. Bind it with `Http.layer(app, resource.session)`.
+ * own group and never an MCP tool. Bind it with `Http.layer([app, resource.session])`.
  */
 export const Session = ActionGroup.make(
   { name: "session" },

@@ -50,7 +50,7 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "0.4.1"
+    "@gjermundgaraba/effect-actions": "0.5.0"
   },
   "peerDependenciesMeta": {
     "@gjermundgaraba/effect-actions": {

@@ -59,34 +59,31 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
       // Owner administration needs the dashboard session; issuer actions have
       // their own access rules and must work before anyone has signed in.
       const httpRoutes = Layer.mergeAll(
-        Http.layer({}, owner).pipe(Layer.provide((yield* sessionOwner).layer)),
+        Http.layer([owner]).pipe(Layer.provide((yield* sessionOwner).layer)),
         HttpRouter.add(
           "GET",
           "/openapi.json",
           HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
         ),
-        Http.layer({}, issuer).pipe(Layer.provide(responseCookies.layer)),
+        Http.layer([issuer]).pipe(Layer.provide(responseCookies.layer)),
       );
 
-      const mcpRoutes = ActionMcp.layerHttp(
-        {
-          name: "clankerauth-admin",
-          version: manifest.version,
-          path: "/mcp",
-          // Keep the existing protocol allowlist; native streaming does not expand it.
-          protocols: [
-            McpProtocol.v2026_07_28,
-            McpProtocol.v2025_11_25,
-            McpProtocol.v2025_06_18,
-            McpProtocol.v2025_03_26,
-          ],
-          // Native MCP admission needs this allowlist even after owner authentication.
-          allowedOrigins: mcpAllowedOrigins,
-          instructions:
-            "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
-        },
-        owner,
-      ).pipe(Layer.provide((yield* bearerOwner(adminResource)).layer));
+      const mcpRoutes = ActionMcp.layerHttp([owner], {
+        name: "clankerauth-admin",
+        version: manifest.version,
+        path: "/mcp",
+        // Keep the existing protocol allowlist; native streaming does not expand it.
+        protocols: [
+          McpProtocol.v2026_07_28,
+          McpProtocol.v2025_11_25,
+          McpProtocol.v2025_06_18,
+          McpProtocol.v2025_03_26,
+        ],
+        // Native MCP admission needs this allowlist even after owner authentication.
+        allowedOrigins: mcpAllowedOrigins,
+        instructions:
+          "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
+      }).pipe(Layer.provide((yield* bearerOwner(adminResource)).layer));
 
       return Layer.mergeAll(httpRoutes, mcpRoutes, adminResource.discovery.layer);
     }),
