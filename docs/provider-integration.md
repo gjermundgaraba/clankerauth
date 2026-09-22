@@ -32,7 +32,7 @@ Administrative policy changes do not turn a multi-step provider request already 
 
 ## Shutdown
 
-Shutdown relies on structured concurrency, under one rule: no code path detaches a provider Promise. Nothing the provider does can be cancelled, so every request handler runs uninterruptibly — one route middleware in `app.ts` applies it — and a disconnect or shutdown interrupts a request only once its work is done. Request fibers belong to the HTTP server's scope, which closes before the issuer's: closing it interrupts every request and waits for it to finish, and only then does the SQLite connection close. An embedding must give the issuer a scope that outlives its server's.
+Shutdown relies on structured concurrency, under one rule: no code path detaches a provider Promise. Nothing the provider does can be cancelled, so every request handler runs uninterruptibly — one route middleware in `app.ts` applies it — and a disconnect or shutdown interrupts a request only once its work is done. Administration MCP runs each tool call in a fiber of its own, which a client's `notifications/cancelled` interrupts under the session-based protocols, so `action-api.ts` also makes every owner action uninterruptible and gives it its own scope: a cancelled call still awaits its provider calls, runs its compensation and keeps its provider session until it has settled, and only then takes the cancellation. Request fibers belong to the HTTP server's scope, which closes before the issuer's: closing it interrupts every request and waits for it to finish, and only then does the SQLite connection close. An embedding must give the issuer a scope that outlives its server's.
 
 ## Forward auth
 

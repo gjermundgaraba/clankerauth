@@ -26,7 +26,7 @@ issuer.clientSecret;
 await issuer.close();
 ```
 
-Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client in-process through the server's administration module, and returns. Only the returned issuer is reached over HTTP. The client is first party: once the owner is signed in, an authorization request redirects straight to the callback with a code and no consent step. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them.
+Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client in-process through the server's administration module, and returns. Only the returned issuer is reached over HTTP. The client is first party: once the owner is signed in, an authorization request redirects straight to the callback with a code and no consent step. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them. A start that fails, for example on an invalid `cookieDomain`, rejects after doing the same, so it leaves no port bound and nothing to close.
 
 ## Provisioning
 

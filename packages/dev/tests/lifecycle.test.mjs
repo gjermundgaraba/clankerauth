@@ -205,16 +205,44 @@ await test("new runs have independent credentials and identity databases", async
   await assert.rejects(access(second.directory), { code: "ENOENT" });
 });
 
-await test("failed provisioning removes its temporary directory and listening server", async () => {
-  const directories = async () =>
-    (await readdir(tmpdir())).filter((name) => name.startsWith("clankerauth-disposable-")).sort();
+const directories = async () =>
+  (await readdir(tmpdir())).filter((name) => name.startsWith("clankerauth-disposable-")).sort();
 
+/** Whether nothing listens on the loopback port any more. */
+const portFree = (port) =>
+  new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+  });
+
+await test("failed provisioning removes its temporary directory and listening server", async () => {
   const before = await directories();
+  const port = await reserveLoopbackPort();
+
   await assert.rejects(
-    startDisposableIssuer({ ...options, resources: [{ ...resource, identifier: "invalid" }] }),
+    startDisposableIssuer({
+      ...options,
+      port,
+      resources: [{ ...resource, identifier: "invalid" }],
+    }),
     /provisioning failed/,
   );
   assert.deepEqual(await directories(), before);
+  assert.equal(await portFree(port), true);
+});
+
+await test("a start refused after binding, by an invalid cookieDomain, frees its port", async () => {
+  const before = await directories();
+  const port = await reserveLoopbackPort();
+
+  // Settings are validated only once the listener has chosen the port the issuer's URL needs.
+  await assert.rejects(
+    startDisposableIssuer({ ...options, port, cookieDomain: "localhost" }),
+    /AUTH_COOKIE_DOMAIN/,
+  );
+  assert.deepEqual(await directories(), before);
+  assert.equal(await portFree(port), true);
 });
 
 await test("close() does not wait for a request whose body never arrives", async () => {

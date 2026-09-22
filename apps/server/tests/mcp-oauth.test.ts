@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { Effect, Schema } from "effect";
+import { InternalServerError } from "@clankerauth/admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { webApplication as application } from "./web-application.ts";
@@ -173,6 +174,98 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   const replacement = await rotated.json();
   expect(replacement.refresh_token).not.toBe(tokens.refresh_token);
   expect((await mcp(replacement.access_token)).status).toBe(200);
+});
+
+test("a cancelled MCP tool call settles its provider work and compensation before shutdown", async () => {
+  const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+  const { api } = issuer.service.auth;
+  const createClient = api.adminCreateOAuthClient;
+  const deleteClient = api.deleteOAuthClient;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  let compensated = false;
+  let disposed = false;
+  vi.spyOn(api, "adminCreateOAuthClient").mockImplementation(async (context) => {
+    entered.resolve();
+    await release.promise;
+
+    return createClient(context);
+  });
+  // Fail once the provider has created the client, so the handler has to remove it again.
+  vi.spyOn(issuer.service.resources, "setAccess").mockReturnValue(
+    Effect.fail(new InternalServerError({ error: "Request could not be completed" })),
+  );
+
+  const compensation = vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
+    const deleted = await deleteClient(context);
+    compensated = true;
+
+    return deleted;
+  });
+
+  try {
+    await withMcpClient(
+      {
+        // Only a session-based protocol lets a client cancel a request it has sent.
+        versionNegotiation: { mode: "legacy" },
+        fetch: async (request) => {
+          const cancellation = (await request.clone().text()).includes("notifications/cancelled");
+          const response = await handle(request);
+
+          if (cancellation) cancelled.resolve();
+
+          return response;
+        },
+        path: "/mcp",
+        baseUrl: baseURL,
+        headers: { authorization: `Bearer ${tokens.access_token}` },
+      },
+      async (client) => {
+        const call = client.callTool(
+          {
+            name: "createClient",
+            arguments: {
+              client_name: "Cancelled through MCP",
+              redirect_uris: ["http://127.0.0.1:9912/callback"],
+              resources: [],
+              application_type: "native",
+              token_endpoint_auth_method: "client_secret_basic",
+            },
+          },
+          { signal: controller.signal },
+        );
+
+        const rejected = expect(call).rejects.toThrow();
+        await entered.promise;
+        controller.abort();
+        await rejected;
+        await cancelled.promise;
+
+        const disposing = handle.dispose().then(() => {
+          disposed = true;
+
+          return compensated;
+        });
+
+        // The cancelled call still owns its provider write, so shutdown waits for it.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(disposed).toBe(false);
+        release.resolve();
+        expect(await disposing).toBe(true);
+      },
+    );
+  } finally {
+    release.resolve();
+  }
+
+  expect(compensation).toHaveBeenCalledTimes(1);
+  expect(
+    await Effect.runPromise(
+      issuer.service.sql`SELECT clientId FROM oauthClient WHERE name = ${"Cancelled through MCP"}`,
+    ),
+  ).toEqual([]);
 });
 
 test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and insufficient-scope tokens", async () => {

@@ -157,14 +157,29 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     }
   });
 
-  yield* Effect.callback<void, Error>((resume) => {
-    const failed = (error: Error) => resume(Effect.fail(error));
-    server.once("error", failed);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
-      server.off("error", failed);
-      resume(Effect.void);
-    });
-  });
+  // Idempotent: whichever of the two finalizers below runs first frees the port.
+  const stopListening = Effect.suspend(() =>
+    server.listening
+      ? Effect.callback<void>((resume) => {
+          server.close(() => resume(Effect.void));
+          server.closeAllConnections();
+        })
+      : Effect.void,
+  );
+
+  // A startup that fails after binding, such as on invalid settings or a refused
+  // credentials file, must not leave the port bound and the caller's process alive.
+  yield* Effect.acquireRelease(
+    Effect.callback<void, Error>((resume) => {
+      const failed = (error: Error) => resume(Effect.fail(error));
+      server.once("error", failed);
+      server.listen(options.port ?? 0, "127.0.0.1", () => {
+        server.off("error", failed);
+        resume(Effect.void);
+      });
+    }),
+    () => stopListening,
+  );
 
   const address = server.address();
 
@@ -198,7 +213,8 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
 
   // Request fibers live in a child scope registered here, before the socket finalizer
   // below, so shutdown closes sockets first, then awaits request fibers — which a handler
-  // blocked on an incomplete body needs — and only then closes SQLite.
+  // blocked on an incomplete body needs — and only then closes SQLite. Until that
+  // finalizer is registered, the listen's own release frees the port on failure.
   const requests = yield* Scope.fork(yield* Effect.scope);
 
   serve = yield* nodeHandler(staticRoot).pipe(
@@ -206,12 +222,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     Effect.provideService(Scope.Scope, requests),
   );
 
-  yield* Effect.addFinalizer(() =>
-    Effect.callback<void>((resume) => {
-      server.close(() => resume(Effect.void));
-      server.closeAllConnections();
-    }),
-  );
+  yield* Effect.addFinalizer(() => stopListening);
 
   const owner = { email: identity.email, password: identity.password };
 
