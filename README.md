@@ -190,7 +190,7 @@ curl "$AUTH_BASE_URL/api/administration/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See [the breaking 0.7.0 release notes](docs/releases/0.7.0.md) before upgrading an issuer or SDK.
+See the breaking [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

@@ -1,8 +1,10 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
+import * as ActionHttpClient from "@gjermundgaraba/effect-actions/ActionHttpClient";
 import {
   ApplicationType,
   ClientAuthMethod,
+  Conflict,
   Http,
   errors,
   type Client,
@@ -10,9 +12,7 @@ import {
   type MachineKey,
   type ResourceSummary,
 } from "@clankerauth/admin-api";
-import { DateTime, Effect, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
+import { DateTime, Schema } from "effect";
 import "./style.css";
 
 type ClientView = typeof Client.Type;
@@ -21,11 +21,7 @@ type ResourceView = typeof ResourceSummary.Type;
 
 type KeyView = typeof MachineKey.Type;
 
-const api = await Effect.runPromise(
-  HttpApiClient.make(Http.api, { baseUrl: location.origin }).pipe(
-    Effect.provide(FetchHttpClient.layer),
-  ),
-);
+const api = ActionHttpClient.promise(Http);
 
 const isRefusal = Schema.is(Schema.Union(errors));
 
@@ -37,8 +33,12 @@ const displayed = <E>(error: E) =>
   new Error(isRefusal(error) ? error.error : "Request could not be completed. Please try again.");
 
 /** Typed refusals survive the whole call; only the display boundary flattens them. */
-function request<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-  return Effect.runPromise(Effect.mapError(effect, displayed));
+async function request<A>(call: Promise<A>): Promise<A> {
+  try {
+    return await call;
+  } catch (error) {
+    throw displayed(error);
+  }
 }
 
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
@@ -112,20 +112,20 @@ function setup() {
         throw new Error("Use a password between 8 and 128 characters.");
 
       if (password !== confirmation) throw new Error("Passwords do not match.");
-      await request(
-        api.issuer
-          .setupOwner({
-            payload: {
-              email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-              password,
-            },
-          })
-          .pipe(
-            // Setup signs the owner in; the dashboard opens directly.
-            Effect.tap(() => Effect.sync(() => location.replace("/"))),
-            Effect.catchTag("Conflict", () => Effect.sync(() => location.replace("/login"))),
-          ),
-      );
+
+      try {
+        await api.issuer.setupOwner({
+          email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+          password,
+        });
+      } catch (error) {
+        if (error instanceof Conflict) return location.replace("/login");
+
+        throw displayed(error);
+      }
+
+      // Setup signs the owner in; the dashboard opens directly.
+      location.replace("/");
     });
   });
 }
@@ -441,13 +441,7 @@ const registerForm = (resources: readonly ResourceView[]) =>
 
 async function dashboard() {
   const [data, keyData] = await request(
-    Effect.all(
-      [
-        api.administration.listClients({ payload: {} }),
-        api.administration.listApiKeys({ payload: {} }),
-      ],
-      { concurrency: "unbounded" },
-    ),
+    Promise.all([api.administration.listClients(), api.administration.listApiKeys()]),
   );
 
   const { resources } = data;
@@ -534,13 +528,11 @@ async function dashboard() {
 
     const result = await request(
       api.administration.createClient({
-        payload: {
-          client_name: textField(fields, "name"),
-          redirect_uris: redirectUris(fields),
-          resources: selectedResources(target),
-          application_type: applicationTypeField(fields),
-          token_endpoint_auth_method: authMethodField(fields),
-        },
+        client_name: textField(fields, "name"),
+        redirect_uris: redirectUris(fields),
+        resources: selectedResources(target),
+        application_type: applicationTypeField(fields),
+        token_endpoint_auth_method: authMethodField(fields),
       }),
     );
 
@@ -555,12 +547,10 @@ async function dashboard() {
 
     const result = await request(
       api.administration.createApiKey({
-        payload: {
-          name: textField(fields, "name"),
-          permissions: keyGrants(target),
-          // A `datetime-local` value has no zone, so the browser's own zone applies.
-          expiresAt: expiry ? DateTime.fromDateUnsafe(new Date(expiry)) : null,
-        },
+        name: textField(fields, "name"),
+        permissions: keyGrants(target),
+        // A `datetime-local` value has no zone, so the browser's own zone applies.
+        expiresAt: expiry ? DateTime.fromDateUnsafe(new Date(expiry)) : null,
       }),
     );
 
@@ -573,10 +563,8 @@ async function dashboard() {
     const fields = new FormData(target);
     await request(
       api.administration.createResource({
-        payload: {
-          identifier: textField(fields, "identifier"),
-          ...resourceFields(fields),
-        },
+        identifier: textField(fields, "identifier"),
+        ...resourceFields(fields),
       }),
     );
     target.reset();
@@ -587,10 +575,8 @@ async function dashboard() {
     onSubmit(edit, async (target) => {
       await request(
         api.administration.updateApiKey({
-          payload: {
-            keyId: target.dataset.keyRename!,
-            name: textField(new FormData(target), "name"),
-          },
+          keyId: target.dataset.keyRename!,
+          name: textField(new FormData(target), "name"),
         }),
       );
       await refreshDashboard();
@@ -600,10 +586,8 @@ async function dashboard() {
     onSubmit(edit, async (target) => {
       await request(
         api.administration.updateApiKey({
-          payload: {
-            keyId: target.dataset.keyGrants!,
-            permissions: keyGrants(target),
-          },
+          keyId: target.dataset.keyGrants!,
+          permissions: keyGrants(target),
         }),
       );
       await refreshDashboard();
@@ -617,13 +601,9 @@ async function dashboard() {
 
       await request(
         api.administration.updateResource({
-          payload: {
-            identifier: target.dataset.resourceEdit!,
-            name: textField(new FormData(target), "name"),
-            scopes: resource.builtIn
-              ? resource.scopes
-              : resourceFields(new FormData(target)).scopes,
-          },
+          identifier: target.dataset.resourceEdit!,
+          name: textField(new FormData(target), "name"),
+          scopes: resource.builtIn ? resource.scopes : resourceFields(new FormData(target)).scopes,
         }),
       );
       await refreshDashboard();
@@ -634,12 +614,10 @@ async function dashboard() {
       const fields = new FormData(target);
       await request(
         api.administration.updateClient({
-          payload: {
-            client_id: target.dataset.clientEdit!,
-            client_name: textField(fields, "name"),
-            redirect_uris: redirectUris(fields),
-            application_type: applicationTypeField(fields),
-          },
+          client_id: target.dataset.clientEdit!,
+          client_name: textField(fields, "name"),
+          redirect_uris: redirectUris(fields),
+          application_type: applicationTypeField(fields),
         }),
       );
       await refreshDashboard();
@@ -653,9 +631,7 @@ async function dashboard() {
       const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
 
       const save = async () => {
-        await request(
-          api.administration.setClientAccess({ payload: { client_id, resources: selected } }),
-        );
+        await request(api.administration.setClientAccess({ client_id, resources: selected }));
         await refreshDashboard();
       };
 
@@ -670,10 +646,8 @@ async function dashboard() {
     void submit(async () => {
       await request(
         api.administration.updateApiKey({
-          payload: {
-            keyId: button.dataset.keyToggle!,
-            enabled: button.dataset.enabled !== "true",
-          },
+          keyId: button.dataset.keyToggle!,
+          enabled: button.dataset.enabled !== "true",
         }),
       );
       await refreshDashboard();
@@ -682,7 +656,7 @@ async function dashboard() {
   onClick("[data-key-delete]", (button) => {
     const keyId = button.dataset.keyDelete!;
     confirmed("Delete this API key?", async () => {
-      await request(api.administration.deleteApiKey({ payload: { keyId } }));
+      await request(api.administration.deleteApiKey({ keyId }));
       pendingKeys.delete(keyId);
       renderCredentials();
       await refreshDashboard();
@@ -691,7 +665,7 @@ async function dashboard() {
   onClick("[data-revoke]", (button) => {
     const client_id = button.dataset.revoke!;
     confirmed("Revoke this Client’s authorization? It can request consent again.", async () => {
-      await request(api.administration.revokeClient({ payload: { client_id } }));
+      await request(api.administration.revokeClient({ client_id }));
       await refreshDashboard();
     });
   });
@@ -701,7 +675,7 @@ async function dashboard() {
     confirmed(
       blocked ? "Block this Client and revoke its authorization?" : "Unblock this Client?",
       async () => {
-        await request(api.administration.blockClient({ payload: { client_id, blocked } }));
+        await request(api.administration.blockClient({ client_id, blocked }));
         await refreshDashboard();
       },
     );
@@ -709,9 +683,7 @@ async function dashboard() {
   onClick("[data-rotate]", (button) => {
     const client_id = button.dataset.rotate!;
     confirmed("Rotate the secret? The old one stops working immediately.", async () => {
-      const result = await request(
-        api.administration.rotateClientSecret({ payload: { client_id } }),
-      );
+      const result = await request(api.administration.rotateClientSecret({ client_id }));
 
       pendingCredentials.set(result.client_id, result);
       showCredentials();
@@ -720,7 +692,7 @@ async function dashboard() {
   onClick("[data-delete]", (button) => {
     const client_id = button.dataset.delete!;
     confirmed("Delete this Client and its grants?", async () => {
-      await request(api.administration.deleteClient({ payload: { client_id } }));
+      await request(api.administration.deleteClient({ client_id }));
       pendingCredentials.delete(client_id);
       renderCredentials();
       await refreshDashboard();
@@ -731,7 +703,7 @@ async function dashboard() {
     confirmed(
       `Delete Resource ${identifier}? Stored grants are kept and may become usable again if it is recreated.`,
       async () => {
-        await request(api.administration.deleteResource({ payload: { identifier } }));
+        await request(api.administration.deleteResource({ identifier }));
         await refreshDashboard();
       },
     );
@@ -739,7 +711,7 @@ async function dashboard() {
 }
 
 try {
-  const state = await request(api.issuer.setupStatus({ payload: {} }));
+  const state = await request(api.issuer.setupStatus());
 
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { HttpApiSchema, type HttpApiError } from "effect/unstable/httpapi";
+import { HttpApiSchema } from "effect/unstable/httpapi";
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()(
   "BadRequest",
@@ -193,11 +193,11 @@ export const MachineKey = Schema.Struct({
 // Every action can fail with shared API errors. HTTP maps native schema failures
 // through the group policy; MCP retains its native validation and error responses.
 const schemaError = {
-  errors: [BadRequest, InternalServerError],
-  map: (failure: HttpApiError.HttpApiSchemaError) =>
-    failure.kind === "Body" || failure.kind === "ResponseHeaders"
-      ? new InternalServerError({ error: "Request could not be completed" })
-      : new BadRequest({ error: "Invalid request" }),
+  invalid: { schema: BadRequest, make: () => new BadRequest({ error: "Invalid request" }) },
+  internal: {
+    schema: InternalServerError,
+    make: () => new InternalServerError({ error: "Request could not be completed" }),
+  },
 };
 
 // These actions have their own access rules, not an owner-session requirement.

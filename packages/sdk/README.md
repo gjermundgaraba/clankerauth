@@ -11,7 +11,7 @@ vp add @gjermundgaraba/clankerauth-sdk
 Install Effect in the application:
 
 ```sh
-vp add effect@4.0.0-rc.116
+vp add effect@4.0.0-rc.117
 ```
 
 ## Entry points
@@ -53,7 +53,6 @@ Acquire the resource once at application construction, never per request.
 ```ts
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { McpProtocol } from "effect/unstable/ai";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { authenticationErrors } from "@gjermundgaraba/clankerauth-sdk/errors";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
@@ -76,7 +75,6 @@ const routes = Layer.unwrap(
         name: "notes",
         version: "1.0.0",
         path: "/mcp",
-        protocols: [McpProtocol.v2026_07_28],
         errors: authenticationErrors,
         before: notes.authorize,
       }).pipe(Layer.provide(Resource.middleware(notes).layer)),
@@ -85,7 +83,7 @@ const routes = Layer.unwrap(
 ).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
-Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.116` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Every authentication response carries `Cache-Control: no-store`.
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.117` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Every authentication response carries `Cache-Control: no-store`.
 
 The supplied `HttpClient` must not retry credential exchanges or follow redirects. The SDK overrides only FetchHttpClient's redirect policy to reject redirects, preserves other caller-provided fetch defaults, and never installs retry middleware.
 

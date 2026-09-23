@@ -1,8 +1,6 @@
 import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
-import { McpProtocol } from "effect/unstable/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { OpenApi } from "effect/unstable/httpapi";
+import { HttpServerRequest } from "effect/unstable/http";
 import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/admin-api";
 import manifest from "../package.json" with { type: "json" };
 import { administration } from "./administration.ts";
@@ -60,11 +58,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
       // their own access rules and must work before anyone has signed in.
       const httpRoutes = Layer.mergeAll(
         Http.layer([owner]).pipe(Layer.provide((yield* sessionOwner).layer)),
-        HttpRouter.add(
-          "GET",
-          "/openapi.json",
-          HttpServerResponse.jsonUnsafe(OpenApi.fromApi(Http.api)),
-        ),
+        Http.openApi("/openapi.json"),
         Http.layer([issuer]).pipe(Layer.provide(responseCookies.layer)),
       );
 
@@ -72,7 +66,6 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         name: "clankerauth-admin",
         version: manifest.version,
         path: "/mcp",
-        protocols: [McpProtocol.v2026_07_28],
         // Native MCP admission needs this allowlist even after owner authentication.
         allowedOrigins: mcpAllowedOrigins,
         instructions:

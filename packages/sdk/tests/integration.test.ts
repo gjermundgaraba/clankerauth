@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 import { Effect, Layer, Schema } from "effect";
-import { McpProtocol } from "effect/unstable/ai";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
-import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
+import { mcpCall, mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
 import {
   authenticationErrors,
   InsufficientScope,
@@ -67,7 +66,6 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
         name: "notes",
         version: "1.0.0",
         path: "/mcp",
-        protocols: [McpProtocol.v2026_07_28],
         errors: authenticationErrors,
         before: resource.authorize,
       }).pipe(Layer.provide(Resource.middleware(resource).layer)),
@@ -140,22 +138,19 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     assert.equal((await web.handler(authorized)).status, 200);
 
     // The same hook runs on MCP: a refusal is the tool's declared failure.
-    const mcpWrite = mcpRequest({
-      url: `${publicUrl}/mcp`,
-      method: "tools/call",
-      params: { name: "write", arguments: {} },
-    });
-
-    mcpWrite.headers.set(
-      "authorization",
-      `Bearer ${await issuer.sign({ scope: "notes:read" }, "")}`,
+    assert.deepEqual(
+      await mcpCall(web.handler, {
+        url: `${publicUrl}/mcp`,
+        name: "write",
+        headers: { authorization: `Bearer ${await issuer.sign({ scope: "notes:read" }, "")}` },
+      }),
+      {
+        isError: true,
+        error: Schema.encodeSync(InsufficientScope)(
+          new InsufficientScope({ scope: "notes:write" }),
+        ),
+      },
     );
-
-    const mcpResult = (await (await web.handler(mcpWrite)).json()).result;
-    assert.equal(mcpResult.isError, true);
-    assert.deepEqual(mcpResult.content, [
-      { type: "text", text: '{"_tag":"InsufficientScope","scope":"notes:write"}' },
-    ]);
 
     issuer.fail(429);
     const limited = await call("notes/identity", issuer.key);

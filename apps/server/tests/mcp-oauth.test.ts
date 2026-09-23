@@ -148,7 +148,6 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   await withMcpClient(
     {
       fetch: handle,
-      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -409,7 +408,6 @@ test("MCP protocol and owner-identity operations do not acquire provider session
   await withMcpClient(
     {
       fetch: handle,
-      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -472,7 +470,6 @@ test("provider-backed MCP writes release temporary sessions and offline grants s
   await withMcpClient(
     {
       fetch: handle,
-      versionNegotiation: { mode: { pin: "2026-07-28" } },
       path: "/mcp",
       baseUrl: baseURL,
       headers: { authorization: `Bearer ${tokens.access_token}` },

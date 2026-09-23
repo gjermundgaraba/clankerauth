@@ -1,6 +1,11 @@
 import { nodeHandler } from "../src/app.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import { mcpRequest, type McpRequestParams } from "@gjermundgaraba/effect-actions/Testing";
+import {
+  mcpCall,
+  mcpRequest,
+  type McpCallOptions,
+  type McpRequestParams,
+} from "@gjermundgaraba/effect-actions/Testing";
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 import { Effect, Exit, Scope, Schema } from "effect";
@@ -277,22 +282,30 @@ test("key writes require owner authorization", async () => {
   ).toBe(401);
 });
 
+const ownerBearer = async () =>
+  (bearer ??= (await mcpOAuthGrant(handle, origin, cookie)).tokens.access_token);
+
 const mcp = async (
   method: string,
   params: McpRequestParams = {},
   headers: Record<string, string> = {},
-) => {
-  bearer ??= (await mcpOAuthGrant(handle, origin, cookie)).tokens.access_token;
-
-  return handle(
+) =>
+  handle(
     mcpRequest({
       method,
       params,
       url: `${origin}/mcp`,
-      headers: { authorization: `Bearer ${bearer}`, ...headers },
+      headers: { authorization: `Bearer ${await ownerBearer()}`, ...headers },
     }),
   );
-};
+
+const tool = async (name: string, arguments_: McpCallOptions["arguments"] = {}) =>
+  mcpCall(handle, {
+    url: `${origin}/mcp`,
+    name,
+    arguments: arguments_,
+    headers: { authorization: `Bearer ${await ownerBearer()}` },
+  });
 
 test("HTTP and MCP share administration contracts, writes, secrets and revocation", async () => {
   const discovery = await mcp("tools/list");
@@ -334,19 +347,14 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
 
   expect(document.paths["/api/administration/createApiKey"].post.responses).toHaveProperty("201");
 
-  const created = await mcp("tools/call", {
-    name: "createApiKey",
-    arguments: {
-      name: "MCP automation",
-      permissions: { [resource]: ["example:read"] },
-      expiresAt: null,
-    },
+  const created = await tool("createApiKey", {
+    name: "MCP automation",
+    permissions: { [resource]: ["example:read"] },
+    expiresAt: null,
   });
 
-  expect(created.status).toBe(200);
-  const { result } = await created.json();
-  expect(result.isError).toBe(false);
-  const key = result.structuredContent.value;
+  expect(created.isError).toBe(false);
+  const key = Schema.decodeUnknownSync(Schema.Struct({ value: CreatedApiKey }))(created).value;
   expect(key.key).toMatch(/^ca_/);
   expect((await verify(key.key)).status).toBe(200);
   const listing = await call("/api/administration/listApiKeys", {});
@@ -364,17 +372,14 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
       })
     ).status,
   ).toBe(200);
-  const renamed = await (await mcp("tools/call", { name: "listApiKeys", arguments: {} })).json();
-  expect(renamed.result.structuredContent.value.keys[0].name).toBe("HTTP rename");
-
-  const disabled = await (
-    await mcp("tools/call", {
-      name: "updateApiKey",
-      arguments: { keyId: key.keyId, enabled: false },
-    })
-  ).json();
-
-  expect(disabled.result.structuredContent.value.enabled).toBe(false);
+  expect(await tool("listApiKeys")).toMatchObject({
+    isError: false,
+    value: { keys: [{ keyId: key.keyId, name: "HTTP rename" }] },
+  });
+  expect(await tool("updateApiKey", { keyId: key.keyId, enabled: false })).toMatchObject({
+    isError: false,
+    value: { keyId: key.keyId, enabled: false },
+  });
   expect((await verify(key.key)).status).toBe(401);
 
   const invalid = await (
@@ -507,7 +512,6 @@ test("official 2026-07-28 MCP client uses OAuth bearer authentication through na
     await withMcpClient(
       {
         fetch: (request) => fetch(request),
-        versionNegotiation: { mode: { pin: "2026-07-28" } },
         path: "/mcp",
         baseUrl: `http://127.0.0.1:${port}`,
         headers: { authorization: `Bearer ${tokens.access_token}` },
