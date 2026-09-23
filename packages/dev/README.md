@@ -1,6 +1,6 @@
 # @gjermundgaraba/clankerauth-dev
 
-A disposable [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) issuer for developing and testing applications that authenticate against one. The package bundles the whole server and dashboard with no dependencies, so it needs only Node 26 or newer.
+A disposable [clankerauth](https://github.com/gjermundgaraba/clankerauth) issuer for developing and testing applications that authenticate against one. The package bundles the whole server and dashboard with no dependencies, so it needs only Node 26 or newer.
 
 ```sh
 npm install --save-dev @gjermundgaraba/clankerauth-dev
@@ -50,7 +50,7 @@ const token = await issuer.ownerToken({
 Pass `dataDir` and a fixed `port` to keep the issuer's state:
 
 ```ts
-const issuer = await startDisposableIssuer({ ...options, dataDir: ".dev/auth", port: 5174 });
+const issuer = await startDisposableIssuer({ ...options, dataDir: ".dev/clankerauth", port: 5174 });
 ```
 
 The owner account and password, the signing secret, the registered client and the database are kept in that directory, and provisioning is idempotent, so the next start reuses them: the same sign-in works, API keys minted before still verify, and browser storage keyed by the origin survives. A fixed port is part of that, because the origin is what cookies and registered redirect URIs are keyed by. `close()` leaves the directory alone. Treat it as the whole secret of the workspace and keep it out of version control. `credentials.json` is written and read by this package alone and is validated against its schema on every start, so an edited or truncated file is refused rather than half-read. Without `dataDir`, nothing changes: a temporary directory, a random port, and everything removed by `close()`.
@@ -64,7 +64,7 @@ const issuer = await startDisposableIssuer({
   cookieDomain: "notes.localhost",
 });
 
-issuer.url; // http://auth.notes.localhost:<port>
+issuer.url; // http://clankerauth.notes.localhost:<port>
 ```
 
 The issuer then serves `/forward-auth?resource=<identifier>`, `/forward-auth/continue` and `/forward-auth/logout`, and shares its forward cookie with every host under the domain, so serve the app on one, such as `app.notes.localhost`. Browsers and Node resolve `.localhost` names to loopback without a hosts-file entry. A signed-in owner's check answers `204` with an `Authorization` header to copy upstream; without a session, a page navigation (`Sec-Fetch-Mode: navigate`) is redirected through sign-in and any other request is `401`. Without `cookieDomain` the issuer is `http://127.0.0.1:<port>` and these routes are not served.
@@ -79,7 +79,7 @@ import { forwardAuth, reserveLoopbackPort } from "@gjermundgaraba/clankerauth-de
 export default defineConfig({
   plugins: [
     forwardAuth({
-      issuer: "http://auth.notes.localhost:5174",
+      issuer: "http://clankerauth.notes.localhost:5174",
       appOrigin: "http://app.notes.localhost:5173",
       resource: "http://app.notes.localhost:5173/",
       sockets: { backend: "http://127.0.0.1:8080", paths: ["/eventlog"] },

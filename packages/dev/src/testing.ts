@@ -139,7 +139,7 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
         .sign(pair.privateKey);
     },
     apiKey: (scopes, resource = options.resource) => {
-      const key = `ca_${randomBytes(24).toString("base64url")}`;
+      const key = `clankerauth_${randomBytes(24).toString("base64url")}`;
       grants.set(key, { keyId: `key-${grants.size + 1}`, resource, scopes });
 
       return key;

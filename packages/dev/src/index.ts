@@ -189,7 +189,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   const url =
     options.cookieDomain === undefined
       ? `http://127.0.0.1:${port}`
-      : `http://auth.${options.cookieDomain}:${port}`;
+      : `http://clankerauth.${options.cookieDomain}:${port}`;
 
   const identity = yield* loadIdentity(directory, dataDir !== undefined);
 

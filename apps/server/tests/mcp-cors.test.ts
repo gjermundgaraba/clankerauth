@@ -104,7 +104,7 @@ test("browser authentication failures expose the challenge and MCP headers", asy
 
     expect(response.status).toBe(401);
     expectCors(response, clientOrigin);
-    expect(response.headers.get("www-authenticate")).toContain('scope="admin"');
+    expect(response.headers.get("www-authenticate")).toContain('scope="clankerauth:admin"');
     expect(headerNames(response, "access-control-expose-headers")).toEqual([
       "www-authenticate",
       "mcp-protocol-version",

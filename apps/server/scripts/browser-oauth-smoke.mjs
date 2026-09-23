@@ -62,12 +62,12 @@ const child = spawn(
     cwd: directory,
     env: {
       ...process.env,
-      AUTH_BASE_URL: issuer,
-      BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-      AUTH_DATABASE: join(directory, "auth.sqlite"),
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      MCP_ALLOWED_ORIGINS: clientOrigin,
+      CLANKERAUTH_BASE_URL: issuer,
+      CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+      CLANKERAUTH_DATABASE: join(directory, "clankerauth.sqlite"),
+      CLANKERAUTH_HOST: "127.0.0.1",
+      CLANKERAUTH_PORT: String(port),
+      CLANKERAUTH_MCP_ALLOWED_ORIGINS: clientOrigin,
     },
     stdio: ["ignore", "pipe", "pipe"],
   },
@@ -127,9 +127,9 @@ try {
   await page.waitForFunction(() => Boolean(window.mcpTest));
   const discovery = await page.evaluate(() => window.mcpTest.inspectDiscovery());
   assert.equal(discovery.status, 401);
-  assert.match(discovery.challenge, /scope="admin"/);
+  assert.match(discovery.challenge, /scope="clankerauth:admin"/);
   assert.match(discovery.challenge, /resource_metadata=/);
-  assert.deepEqual(discovery.resource.scopes_supported, ["admin", "offline_access"]);
+  assert.deepEqual(discovery.resource.scopes_supported, ["clankerauth:admin", "offline_access"]);
 
   const start = await page.evaluate(() => window.mcpTest.connect());
   const authorization = new URL(start.authorizationUrl);
@@ -137,7 +137,7 @@ try {
   assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
   assert.deepEqual(
     new Set(authorization.searchParams.get("scope").split(" ")),
-    new Set(["admin", "offline_access"]),
+    new Set(["clankerauth:admin", "offline_access"]),
   );
   await page.goto(authorization.href);
   await page.getByLabel("Email", { exact: true }).fill("browser@example.internal");

@@ -109,7 +109,7 @@ const create = async () => {
 
 test("hash-only storage, explicit scopes, one-time display and next-request disable/delete", async () => {
   const key = await create();
-  expect(key.key.startsWith("ca_")).toBe(true);
+  expect(key.key.startsWith("clankerauth_")).toBe(true);
 
   const stored = await Effect.runPromise(
     issuer.service
@@ -159,7 +159,7 @@ test("keys cannot authenticate administration, create sessions or reach plugin r
       .status,
   ).toBe(401);
   expect((await call("/api/auth/api-key/create", { name: "Forbidden" })).status).toBe(404);
-  expect((await verify("ca_invalid")).status).toBe(401);
+  expect((await verify("clankerauth_invalid")).status).toBe(401);
 });
 
 test("resource policy removal and restoration retains only explicit grants", async () => {
@@ -355,7 +355,7 @@ test("HTTP and MCP share administration contracts, writes, secrets and revocatio
 
   expect(created.isError).toBe(false);
   const key = Schema.decodeUnknownSync(Schema.Struct({ value: CreatedApiKey }))(created).value;
-  expect(key.key).toMatch(/^ca_/);
+  expect(key.key).toMatch(/^clankerauth_/);
   expect((await verify(key.key)).status).toBe(200);
   const listing = await call("/api/administration/listApiKeys", {});
   expect(await listing.json()).toMatchObject({
@@ -562,7 +562,7 @@ test("official 2026-07-28 MCP client uses OAuth bearer authentication through na
 });
 
 test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
-  const permissions = { [`${origin}/mcp`]: ["admin"] };
+  const permissions = { [`${origin}/mcp`]: ["clankerauth:admin"] };
 
   const created = await call("/api/administration/createApiKey", {
     name: "Invalid administration key",

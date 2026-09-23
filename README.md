@@ -1,4 +1,4 @@
-# Clanker Auth
+# clankerauth
 
 A small self-hosted OAuth authorization server for private-network apps and MCP servers. One owner account with local password login and first-run setup in the browser. S256 PKCE on every flow, audience-bound JWT access tokens, rotating refresh tokens, scoped API keys, and automatic client onboarding through Client ID Metadata Documents (CIMD) and Dynamic Client Registration (DCR). No external identity provider, no open signup, no organizations.
 
@@ -6,7 +6,7 @@ Built on Node 26, [Better Auth](https://better-auth.com) with its OAuth provider
 
 ## Run it
 
-Create an env file with `AUTH_BASE_URL` and `BETTER_AUTH_SECRET`, then:
+Create an env file with `CLANKERAUTH_BASE_URL` and `CLANKERAUTH_BETTER_AUTH_SECRET`, then:
 
 ```sh
 docker build -t clankerauth .
@@ -19,19 +19,19 @@ Without Docker: `vp install --frozen-lockfile && vp run build && vp run start`, 
 
 Open the configured origin, create the owner account, and add a resource. Do this on the private network before exposing the service.
 
-| Variable              | Meaning                                                                                                                                                                                                                                                                                                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_BASE_URL`       | Public origin without a path. HTTPS unless loopback or `ALLOW_INSECURE_HTTP`. The OAuth issuer is `AUTH_BASE_URL/api/auth`.                                                                                                                                                                                           |
-| `BETTER_AUTH_SECRET`  | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups.                                                                                                                                                                                |
-| `AUTH_DATABASE`       | SQLite file, default `data/auth.sqlite`. Persist the whole directory. The container defaults to `/data/auth.sqlite`.                                                                                                                                                                                                  |
-| `MCP_ALLOWED_ORIGINS` | Comma-separated additional browser origins allowed to call administration MCP. Exact HTTPS origins, or loopback HTTP for development; defaults to none.                                                                                                                                                               |
-| `HOST`, `PORT`        | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                                                                                                                                                                                            |
-| `TRUST_PROXY`         | `true` when a reverse proxy sets `X-Forwarded-For`; the last hop becomes the client address for rate limiting. Default `false`.                                                                                                                                                                                       |
-| `ALLOW_INSECURE_HTTP` | `true` permits a plain-HTTP issuer and MCP origins beyond loopback, for private networks without TLS. Default `false`.                                                                                                                                                                                                |
-| `AUTH_COOKIE_DOMAIN`  | Parent domain of `AUTH_BASE_URL`, for example `home.example`, that the forward-auth cookie is shared with. Required for forward auth; without it the routes are not served.                                                                                                                                           |
-| `OTEL_*`              | Standard [OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/): set `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces, metrics and logs to a collector; headers, timeouts and `OTEL_SDK_DISABLED` are honoured. Unset means no telemetry is exported. |
+| Variable                               | Meaning                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLANKERAUTH_BASE_URL`                 | Public origin without a path. HTTPS unless loopback or `CLANKERAUTH_ALLOW_INSECURE_HTTP`. The OAuth issuer is `CLANKERAUTH_BASE_URL/api/auth`.                                                                                                                                                                        |
+| `CLANKERAUTH_BETTER_AUTH_SECRET`       | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups.                                                                                                                                                                                |
+| `CLANKERAUTH_DATABASE`                 | SQLite file, default `data/clankerauth.sqlite`. Persist the whole directory. The container defaults to `/data/clankerauth.sqlite`.                                                                                                                                                                                    |
+| `CLANKERAUTH_MCP_ALLOWED_ORIGINS`      | Comma-separated additional browser origins allowed to call administration MCP. Exact HTTPS origins, or loopback HTTP for development; defaults to none.                                                                                                                                                               |
+| `CLANKERAUTH_HOST`, `CLANKERAUTH_PORT` | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                                                                                                                                                                                            |
+| `CLANKERAUTH_TRUST_PROXY`              | `true` when a reverse proxy sets `X-Forwarded-For`; the last hop becomes the client address for rate limiting. Default `false`.                                                                                                                                                                                       |
+| `CLANKERAUTH_ALLOW_INSECURE_HTTP`      | `true` permits a plain-HTTP issuer and MCP origins beyond loopback, for private networks without TLS. Default `false`.                                                                                                                                                                                                |
+| `CLANKERAUTH_COOKIE_DOMAIN`            | Parent domain of `CLANKERAUTH_BASE_URL`, for example `home.example`, that the forward-auth cookie is shared with. Required for forward auth; without it the routes are not served.                                                                                                                                    |
+| `OTEL_*`                               | Standard [OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/): set `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces, metrics and logs to a collector; headers, timeouts and `OTEL_SDK_DISABLED` are honoured. Unset means no telemetry is exported. |
 
-Run it behind a reverse proxy with TLS. The server uses `AUTH_BASE_URL` as its canonical origin and ignores forwarded host and protocol headers, except on `/forward-auth`, where they only decide where a browser returns after login. Rate limits key on the direct peer address unless `TRUST_PROXY=true`, in which case the last `X-Forwarded-For` hop set by your proxy is used. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
+Run it behind a reverse proxy with TLS. The server uses `CLANKERAUTH_BASE_URL` as its canonical origin and ignores forwarded host and protocol headers, except on `/forward-auth`, where they only decide where a browser returns after login. Rate limits key on the direct peer address unless `CLANKERAUTH_TRUST_PROXY=true`, in which case the last `X-Forwarded-For` hop set by your proxy is used. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
 
 Shutdown disconnects HTTP clients, including active streams, without waiting for response delivery. Already-running provider operations must settle before SQLite closes; an uncancellable operation that never settles can still delay shutdown.
 
@@ -58,7 +58,7 @@ notes.home.example {
     not header Authorization *
     not path /mcp /mcp/* /.well-known/* /healthz
   }
-  forward_auth @browser https://auth.home.example {
+  forward_auth @browser https://clankerauth.home.example {
     uri /forward-auth?resource=https://notes.home.example/
     copy_headers Authorization
   }
@@ -66,7 +66,7 @@ notes.home.example {
 }
 ```
 
-Set `AUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, here `home.example`; forward auth is served only when it is set. The owner's issuer session cookie never leaves the issuer host. After login the browser passes through `/forward-auth/continue`, which sets a separate forward cookie on that domain: the session sealed under the server secret, meaningful only to `/forward-auth`. Apps behind the proxy therefore see the forward cookie and the access token, and neither can administer the issuer; an app could at most use the cookie to obtain tokens for other resources under the same domain, which in a single-owner network are the owner's own. Sign-out at the issuer or at `https://auth.home.example/forward-auth/logout?rd=<page>` invalidates every copy of the cookie; it is a plain link, so any page under the domain can sign the owner out, which a single-owner network accepts. Logout always ends the session first, so an `rd` outside the cookie domain is answered with a redirect to `/login` rather than an error; only `/forward-auth/continue` refuses an unusable `rd` with 400, because it has nowhere to send the browser afterwards. The token's `client_id` is `forward-auth` and it carries all of the resource's scopes. The built-in administration resource is refused. The app verifies a signed token for its own resource rather than trusting proxy headers, so reaching it directly yields only `401`s.
+Set `CLANKERAUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, here `home.example`; forward auth is served only when it is set. The owner's issuer session cookie never leaves the issuer host. After login the browser passes through `/forward-auth/continue`, which sets a separate forward cookie on that domain: the session sealed under the server secret, meaningful only to `/forward-auth`. Apps behind the proxy therefore see the forward cookie and the access token, and neither can administer the issuer; an app could at most use the cookie to obtain tokens for other resources under the same domain, which in a single-owner network are the owner's own. Sign-out at the issuer or at `https://clankerauth.home.example/forward-auth/logout?rd=<page>` invalidates every copy of the cookie; it is a plain link, so any page under the domain can sign the owner out, which a single-owner network accepts. Logout always ends the session first, so an `rd` outside the cookie domain is answered with a redirect to `/login` rather than an error; only `/forward-auth/continue` refuses an unusable `rd` with 400, because it has nowhere to send the browser afterwards. The token's `client_id` is `forward-auth` and it carries all of the resource's scopes. The built-in administration resource is refused. The app verifies a signed token for its own resource rather than trusting proxy headers, so reaching it directly yields only `401`s.
 
 ## Protect a resource server
 
@@ -76,9 +76,9 @@ Verify access tokens with Better Auth's helper, pinning issuer and audience:
 import { requestToResourceInput, verifyAccessTokenRequest } from "better-auth/oauth2";
 
 const claims = await verifyAccessTokenRequest(requestToResourceInput(request), {
-  jwksUrl: "https://auth.internal/api/auth/jwks",
+  jwksUrl: "https://clankerauth.internal/api/auth/jwks",
   verifyOptions: {
-    issuer: "https://auth.internal/api/auth",
+    issuer: "https://clankerauth.internal/api/auth",
     audience: "https://notes.internal/",
     algorithms: ["EdDSA"],
     typ: "at+jwt",
@@ -93,7 +93,7 @@ For CLIs and automation, the owner creates **API keys** with explicit per-resour
 
 ```http
 POST /api/issuer/verifyApiKey
-Authorization: Bearer ca_…
+Authorization: Bearer clankerauth_…
 Content-Type: application/json
 
 { "resource": "https://notes.internal/" }
@@ -129,13 +129,13 @@ and are exposed at `POST /api/<groupName>/<actionName>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
-| Action                 | Access                                                      | Transport |
-| ---------------------- | ----------------------------------------------------------- | --------- |
-| `setupStatus`          | Public                                                      | HTTP      |
-| `setupOwner`           | Public; succeeds only before an owner exists                | HTTP      |
-| `verifyApiKey`         | Bearer API key scoped to the requested resource             | HTTP      |
-| Administration actions | Owner session cookie (SameSite)                             | HTTP      |
-| Administration tools   | OAuth access token for `<AUTH_BASE_URL>/mcp`, scope `admin` | MCP       |
+| Action                 | Access                                                                         | Transport |
+| ---------------------- | ------------------------------------------------------------------------------ | --------- |
+| `setupStatus`          | Public                                                                         | HTTP      |
+| `setupOwner`           | Public; succeeds only before an owner exists                                   | HTTP      |
+| `verifyApiKey`         | Bearer API key scoped to the requested resource                                | HTTP      |
+| Administration actions | Owner session cookie (SameSite)                                                | HTTP      |
+| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:admin` | MCP       |
 
 Issuer actions use the `issuer` group; owner operations use `administration`. The
 dashboard uses the direct typed action client. HTTP schema-error handling returns
@@ -146,16 +146,16 @@ validation/internal-error messages. Successful tool results use `structuredConte
 
 ### Connect to administration MCP
 
-Point an OAuth-capable MCP client at `<AUTH_BASE_URL>/mcp`. The client discovers
+Point an OAuth-capable MCP client at `<CLANKERAUTH_BASE_URL>/mcp`. The client discovers
 this issuer, registers using CIMD or DCR, and opens the owner login and consent
-page. Approving the `admin` scope grants full administration access, including
+page. Approving the `clankerauth:admin` scope grants full administration access, including
 client and API-key creation. Create and rotate operations return secrets once.
 No separate dashboard grant is needed.
 
 For browser-hosted MCP clients, add their origins to the server environment:
 
 ```sh
-MCP_ALLOWED_ORIGINS=https://mcp.example.com,http://localhost:5173
+CLANKERAUTH_MCP_ALLOWED_ORIGINS=https://mcp.example.com,http://localhost:5173
 ```
 
 These are exact web origins, without paths, trailing slashes, or wildcards. The
@@ -165,17 +165,17 @@ Actual MCP requests require OAuth bearer tokens; browser clients should omit
 cookies. Native and server clients that send no Origin need no allowlist entry.
 This setting does not grant OAuth access or relax the dashboard's cookie policy.
 
-The built-in **Clanker Auth administration** resource is created at startup.
+The built-in **clankerauth administration** resource is created at startup.
 Its display name can be changed; its identifier and scope are fixed, and the
 resource cannot be deleted. Protected-resource metadata
-is public at `/.well-known/oauth-protected-resource/mcp` and advertises `admin`
+is public at `/.well-known/oauth-protected-resource/mcp` and advertises `clankerauth:admin`
 and `offline_access`. Clients must send the resource parameter during authorization
-and token exchange. The authentication challenge requests only `admin`. Clients
+and token exchange. The authentication challenge requests only `clankerauth:admin`. Clients
 that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with scope `admin`, and their client must still exist and not be blocked. **Block client** and deletion therefore end MCP access on the next request; **Revoke authorization** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
+Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with scope `clankerauth:admin`, and their client must still exist and not be blocked. **Block client** and deletion therefore end MCP access on the next request; **Revoke authorization** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
 session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
@@ -185,12 +185,12 @@ SSE remains unsupported. Request bodies are limited to 64 KiB; larger uploads ar
 `GET /openapi.json` is public.
 
 ```sh
-curl "$AUTH_BASE_URL/api/administration/listClients" \
+curl "$CLANKERAUTH_BASE_URL/api/administration/listClients" \
   -H "Cookie: $OWNER_COOKIE" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See the breaking [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

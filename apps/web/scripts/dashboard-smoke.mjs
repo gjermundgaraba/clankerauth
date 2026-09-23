@@ -116,7 +116,7 @@ try {
           };
 
           machineKeys.push(key);
-          response = ok({ ...key, key: "ca_fixture-once-only" }, 201);
+          response = ok({ ...key, key: "clankerauth_fixture-once-only" }, 201);
           break;
         }
 
@@ -146,7 +146,7 @@ try {
 
           assert.ok(previous);
 
-          if (previous.builtIn) assert.deepEqual(payload.scopes, ["admin"]);
+          if (previous.builtIn) assert.deepEqual(payload.scopes, ["clankerauth:admin"]);
           data.resources = data.resources.map((resource) =>
             resource.identifier === payload.identifier ? { ...resource, ...payload } : resource,
           );
@@ -296,8 +296,8 @@ try {
       resource,
       {
         identifier: `${origin}/mcp`,
-        name: "Clanker Auth administration",
-        scopes: ["admin"],
+        name: "clankerauth administration",
+        scopes: ["clankerauth:admin"],
         builtIn: true,
       },
     ],
@@ -459,11 +459,11 @@ try {
   await keyForm.locator('[name="name"]').fill("Automation key");
   await keyForm.locator('[name="key-scope"]').check();
   await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
-  await page.locator("#credentials").filter({ hasText: "ca_fixture-once-only" }).waitFor();
+  await page.locator("#credentials").filter({ hasText: "clankerauth_fixture-once-only" }).waitFor();
   await waitForIdle();
   assert.equal(
     await page.locator("#credentials pre").textContent(),
-    "Automation key\nca_fixture-once-only",
+    "Automation key\nclankerauth_fixture-once-only",
   );
   await page.getByRole("button", { name: "Disable key", exact: true }).click();
   await page.getByRole("button", { name: "Enable key", exact: true }).waitFor();
@@ -515,7 +515,7 @@ try {
   await page.getByRole("button", { name: "Retry refresh", exact: true }).waitFor();
   assert.equal(machineKeys.length, 0);
   assert.equal(await page.locator("#credentials").isVisible(), false);
-  assert.equal(await page.getByText("ca_fixture-once-only", { exact: false }).count(), 0);
+  assert.equal(await page.getByText("clankerauth_fixture-once-only", { exact: false }).count(), 0);
   listResponse = async () => ok(data);
   await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
   await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
@@ -523,10 +523,10 @@ try {
   await keyForm.locator('[name="name"]').fill("Dismiss credentials");
   await keyForm.locator('[name="key-scope"]').check();
   await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
-  await page.locator("#credentials").filter({ hasText: "ca_fixture-once-only" }).waitFor();
+  await page.locator("#credentials").filter({ hasText: "clankerauth_fixture-once-only" }).waitFor();
   await waitForIdle();
   await page.locator("#credentials button").click();
-  assert.equal(await page.getByText("ca_fixture-once-only", { exact: false }).count(), 0);
+  assert.equal(await page.getByText("clankerauth_fixture-once-only", { exact: false }).count(), 0);
   await page.getByRole("button", { name: "Delete key", exact: true }).click();
   await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
   assert.equal(count("POST /api/administration/createApiKey"), 2);

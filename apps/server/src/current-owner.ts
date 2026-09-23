@@ -16,7 +16,7 @@ export class CurrentOwner extends Context.Service<
     readonly email: string;
     readonly providerHeaders: Effect.Effect<Headers, ApiError, Scope.Scope>;
   }
->()("ClankerAuth/CurrentOwner") {}
+>()("clankerauth/CurrentOwner") {}
 
 const fail = (error: ApiError) => Effect.flatMap(apiErrorResponse(error), Effect.fail);
 

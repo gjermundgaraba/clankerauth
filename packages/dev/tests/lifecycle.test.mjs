@@ -137,7 +137,7 @@ await test("a cookie domain serves forward auth: the signed-in owner gets a reso
   });
 
   try {
-    assert.equal(new URL(issuer.url).hostname, "auth.notes.localhost");
+    assert.equal(new URL(issuer.url).hostname, "clankerauth.notes.localhost");
     assert.equal(issuer.issuer, `${issuer.url}/api/auth`);
     // Node's fetch is a script's request, not a navigation, so no session is refused in place.
     const anonymous = await forward(issuer, "");
@@ -239,7 +239,7 @@ await test("a start refused after binding, by an invalid cookieDomain, frees its
   // Settings are validated only once the listener has chosen the port the issuer's URL needs.
   await assert.rejects(
     startDisposableIssuer({ ...options, port, cookieDomain: "localhost" }),
-    /AUTH_COOKIE_DOMAIN/,
+    /CLANKERAUTH_COOKIE_DOMAIN/,
   );
   assert.deepEqual(await directories(), before);
   assert.equal(await portFree(port), true);
@@ -472,7 +472,7 @@ await test("a data directory keeps the owner, the secret and the client across r
     assert.equal(first.port, port);
     assert.equal(new URL(first.url).port, String(port));
     const key = await first.apiKey({ permissions: { [resource.identifier]: ["example:read"] } });
-    assert.match(key, /^ca_/);
+    assert.match(key, /^clankerauth_/);
     await first.close();
     // The directory is the caller's, so closing leaves it alone.
     await access(join(directory, "credentials.json"));

@@ -7,7 +7,7 @@ import { providerSession } from "../src/provider-session.ts";
 test.each([false, true])(
   "stopping the issuer waits for provider session cleanup (failure: %s)",
   async (failCleanup) => {
-    const issuer = await openIssuer({ baseURL: "https://auth.example.internal" });
+    const issuer = await openIssuer({ baseURL: "https://clankerauth.example.internal" });
     const { service } = issuer;
     const allowDeletion = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
@@ -54,7 +54,7 @@ test.each([false, true])(
 );
 
 test("cancellation releases a temporary provider session that lasts at most one minute", async () => {
-  const issuer = await openIssuer({ baseURL: "https://auth.example.internal" });
+  const issuer = await openIssuer({ baseURL: "https://clankerauth.example.internal" });
   const { service } = issuer;
   let request: Fiber.Fiber<never, unknown> | undefined;
 

@@ -70,7 +70,7 @@ import { HttpClient } from "effect/unstable/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import type { AuthenticationError, ConfigurationError } from "@gjermundgaraba/clankerauth-sdk/errors";
 const verification: Effect.Effect<Verifier.Principal, AuthenticationError | ConfigurationError, HttpClient.HttpClient> =
-  Verifier.make({ issuer: "https://auth.example/api/auth", resource: "https://notes.example/" })
+  Verifier.make({ issuer: "https://clankerauth.example/api/auth", resource: "https://notes.example/" })
     .pipe(Effect.flatMap(verifier => verifier.verifyToken("token")));
 void verification;
 `,
@@ -114,7 +114,7 @@ void verification;
     Effect.runPromise(api.Verifier.make(options).pipe(Effect.provide(FetchHttpClient.layer)));
 
   const verifier = await make({
-    issuer: "https://auth.example/api/auth",
+    issuer: "https://clankerauth.example/api/auth",
     resource: "https://notes.example/",
   });
 
@@ -164,7 +164,7 @@ import { Effect } from "effect";
 import { Resource, CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { Principal, Session, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
 const make = Resource.make({
-  issuer: "https://auth.example/api/auth",
+  issuer: "https://clankerauth.example/api/auth",
   publicUrl: new URL("https://notes.example"),
   scopes: { read: "notes:read", write: "notes:write" },
 });
@@ -183,7 +183,7 @@ void page;
 
   const resource = await Effect.runPromise(
     Resource.make({
-      issuer: "https://auth.example/api/auth",
+      issuer: "https://clankerauth.example/api/auth",
       publicUrl: new URL("https://notes.example"),
       scopes: { read: "notes:read" },
     }).pipe(Effect.provide(FetchHttpClient.layer)),

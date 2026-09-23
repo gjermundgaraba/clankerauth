@@ -21,9 +21,9 @@ if (secret.length < 32)
 
 // Dev always uses its own identity state, even when production variables are exported.
 Object.assign(process.env, {
-  AUTH_BASE_URL: "http://localhost:3000",
-  BETTER_AUTH_SECRET: secret,
-  AUTH_DATABASE: fileURLToPath(new URL("auth.sqlite", directory)),
-  HOST: "127.0.0.1",
-  PORT: "3001",
+  CLANKERAUTH_BASE_URL: "http://localhost:3000",
+  CLANKERAUTH_BETTER_AUTH_SECRET: secret,
+  CLANKERAUTH_DATABASE: fileURLToPath(new URL("clankerauth.sqlite", directory)),
+  CLANKERAUTH_HOST: "127.0.0.1",
+  CLANKERAUTH_PORT: "3001",
 });

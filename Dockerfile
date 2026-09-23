@@ -12,7 +12,7 @@ COPY . .
 RUN pnpm build && pnpm --filter @clankerauth/server deploy --prod /out
 
 FROM node:26.8.2-bookworm-slim
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 AUTH_DATABASE=/data/auth.sqlite
+ENV NODE_ENV=production CLANKERAUTH_HOST=0.0.0.0 CLANKERAUTH_PORT=3000 CLANKERAUTH_DATABASE=/data/clankerauth.sqlite
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
 # Build hosts may copy restrictive modes; any runtime user must be able to read the app.
@@ -21,5 +21,5 @@ RUN mkdir /data && chown node:node /data && chmod 700 /data
 USER node
 EXPOSE 3000
 VOLUME /data
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+process.env.CLANKERAUTH_PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "dist/main.mjs"]

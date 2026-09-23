@@ -38,7 +38,7 @@ const program = Effect.scoped(
         nodeServer.closeAllConnections();
       }),
     );
-    yield* Effect.logInfo("Clanker Auth ready");
+    yield* Effect.logInfo("clankerauth ready");
     yield* Effect.never;
   }),
 );

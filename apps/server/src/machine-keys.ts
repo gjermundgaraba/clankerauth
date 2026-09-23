@@ -143,7 +143,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
       return { deleted: true };
     }),
     verify: Effect.fn("MachineKeys.verify")(function* (headers: Headers, identifier: string) {
-      const bearer = /^Bearer (ca_[^\s]+)$/i.exec(headers.get("authorization") ?? "")?.[1];
+      const bearer = /^Bearer (clankerauth_[^\s]+)$/i.exec(headers.get("authorization") ?? "")?.[1];
 
       if (!bearer) return yield* Effect.fail(new Unauthorized({ error: "API key required" }));
 

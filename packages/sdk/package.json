@@ -1,7 +1,7 @@
 {
   "name": "@gjermundgaraba/clankerauth-sdk",
-  "version": "0.8.0",
-  "description": "Effect-native Clanker Auth access-token and API-key verification, with optional effect-actions integration",
+  "version": "0.9.0",
+  "description": "Effect-native clankerauth access-token and API-key verification, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
     "type": "git",

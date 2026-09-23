@@ -33,7 +33,7 @@ const startServer = async () => {
     throw new Error("Expected TCP listener");
   const { port } = address;
   // Forward auth shares one cookie domain between the issuer and the apps behind the proxy.
-  const url = `http://auth.home.localhost:${port}`;
+  const url = `http://clankerauth.home.localhost:${port}`;
 
   const opened = await openIssuer({
     baseURL: url,

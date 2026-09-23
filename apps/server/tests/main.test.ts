@@ -34,7 +34,7 @@ async function reservePort() {
 
 function start(port: number) {
   const directory = mkdtempSync(join(tmpdir(), "clankerauth-main-"));
-  const database = join(directory, "auth.sqlite");
+  const database = join(directory, "clankerauth.sqlite");
   const url = `http://127.0.0.1:${port}`;
 
   const child = spawn(
@@ -44,12 +44,12 @@ function start(port: number) {
       cwd: directory,
       env: {
         ...process.env,
-        AUTH_BASE_URL: url,
-        BETTER_AUTH_SECRET: "test-only-secret-with-at-least-32-characters",
-        AUTH_DATABASE: database,
-        HOST: "127.0.0.1",
-        PORT: String(port),
-        MCP_ALLOWED_ORIGINS: "",
+        CLANKERAUTH_BASE_URL: url,
+        CLANKERAUTH_BETTER_AUTH_SECRET: "test-only-secret-with-at-least-32-characters",
+        CLANKERAUTH_DATABASE: database,
+        CLANKERAUTH_HOST: "127.0.0.1",
+        CLANKERAUTH_PORT: String(port),
+        CLANKERAUTH_MCP_ALLOWED_ORIGINS: "",
         OTEL_EXPORTER_OTLP_ENDPOINT: "",
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -86,7 +86,7 @@ test.each(["SIGINT", "SIGTERM"] as const)(
     await reservation.close();
     const server = start(reservation.port);
 
-    await vi.waitFor(() => expect(server.output()).toContain("Clanker Auth ready"), {
+    await vi.waitFor(() => expect(server.output()).toContain("clankerauth ready"), {
       timeout: 10000,
     });
     const health = await fetch(`${server.url}/healthz`);
@@ -129,7 +129,7 @@ test("an occupied port fails startup and releases the initialized database", asy
   await server.waitForExit();
   expect(server.child.exitCode).not.toBe(0);
   expect(server.output()).toContain("EADDRINUSE");
-  expect(server.output()).not.toContain("Clanker Auth ready");
+  expect(server.output()).not.toContain("clankerauth ready");
   expect(existsSync(server.database)).toBe(true);
   expect(existsSync(`${server.database}-wal`)).toBe(false);
 });

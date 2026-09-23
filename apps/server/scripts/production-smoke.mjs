@@ -31,11 +31,11 @@ const isString = (value) => Object.prototype.toString.call(value) === "[object S
 
 const env = {
   ...process.env,
-  AUTH_BASE_URL: baseURL,
-  BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-  AUTH_DATABASE: join(directory, "auth.sqlite"),
-  HOST: "127.0.0.1",
-  PORT: String(port),
+  CLANKERAUTH_BASE_URL: baseURL,
+  CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+  CLANKERAUTH_DATABASE: join(directory, "clankerauth.sqlite"),
+  CLANKERAUTH_HOST: "127.0.0.1",
+  CLANKERAUTH_PORT: String(port),
 };
 
 const password = randomBytes(24).toString("hex");
@@ -124,8 +124,8 @@ try {
 
   const builtin = {
     identifier: `${baseURL}/mcp`,
-    name: "Clanker Auth administration",
-    scopes: ["admin"],
+    name: "clankerauth administration",
+    scopes: ["clankerauth:admin"],
     builtIn: true,
   };
 
@@ -169,14 +169,14 @@ try {
   ).json();
 
   assert.equal(protectedResource.resource, builtin.identifier);
-  assert.deepEqual(protectedResource.scopes_supported, ["admin", "offline_access"]);
+  assert.deepEqual(protectedResource.scopes_supported, ["clankerauth:admin", "offline_access"]);
   const verifier = randomBytes(32).toString("base64url");
 
   const query = new URLSearchParams({
     client_id: registered.client_id,
     redirect_uri: "http://127.0.0.1:49152/callback",
     response_type: "code",
-    scope: "admin offline_access",
+    scope: "clankerauth:admin offline_access",
     resource: builtin.identifier,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
@@ -266,7 +266,7 @@ try {
     const page = await fetch(baseURL + path);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /<title>Clanker Auth<\/title>/);
+    assert.match(html, /<title>clankerauth<\/title>/);
     const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
     assert.ok(references.length > 0);
 

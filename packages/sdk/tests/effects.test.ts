@@ -34,7 +34,7 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
         scopes: { read: "notes:read" },
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      const fiber = yield* Effect.flip(resource.verifier.verifyToken("ca_test")).pipe(
+      const fiber = yield* Effect.flip(resource.verifier.verifyToken("clankerauth_test")).pipe(
         Effect.forkChild,
       );
 
@@ -164,7 +164,7 @@ test("diagnostic causes survive adapters but never enter public error schemas or
         scopes: { read: "notes:read" },
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      const failure = yield* Effect.flip(resource.verifier.verifyToken("ca_test"));
+      const failure = yield* Effect.flip(resource.verifier.verifyToken("clankerauth_test"));
       assert(failure instanceof ProviderUnavailable);
       assert.equal(failure.cause, transportCause);
 
@@ -185,7 +185,7 @@ test("diagnostic causes survive adapters but never enter public error schemas or
         try {
           const response = await web.handler(
             new Request("https://notes.example/private", {
-              headers: { authorization: "Bearer ca_test" },
+              headers: { authorization: "Bearer clankerauth_test" },
             }),
           );
 

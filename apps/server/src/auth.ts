@@ -78,7 +78,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     resources: [
       {
         identifier: mcpResource(settings.baseURL),
-        name: "Clanker Auth administration",
+        name: "clankerauth administration",
         allowedScopes: [...protocolScopes, mcpScope],
       },
     ],
@@ -142,7 +142,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
   );
 
   const options = {
-    appName: "Clanker Auth",
+    appName: "clankerauth",
     baseURL: settings.baseURL,
     secret: Redacted.value(settings.secret),
     database: { db: database.kysely, type: "sqlite", transaction: true },
@@ -199,7 +199,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     },
     plugins: [
       apiKey({
-        defaultPrefix: "ca_",
+        defaultPrefix: "clankerauth_",
         maximumNameLength: 100,
         enableSessionForAPIKeys: false,
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
@@ -261,7 +261,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
  * must outlive the HTTP server's: request fibers settle before the connection closes.
  */
 export class Auth extends Context.Service<Auth, Effect.Success<ReturnType<typeof openAuth>>>()(
-  "ClankerAuth/Auth",
+  "clankerauth/Auth",
 ) {
   /** Opens the database, runs the provider's migrations, and closes both with the scope. */
   static readonly layer = (settings: Settings, integrations: Integrations = {}) =>

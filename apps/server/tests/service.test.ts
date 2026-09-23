@@ -467,7 +467,7 @@ describe("owner boundary", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
       const html = await response.text();
-      expect(html).toContain("<title>Clanker Auth</title>");
+      expect(html).toContain("<title>clankerauth</title>");
       const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
       expect(references.length).toBeGreaterThan(0);
 

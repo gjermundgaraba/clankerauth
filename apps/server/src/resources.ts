@@ -5,7 +5,7 @@ import type { oauthProvider } from "@better-auth/oauth-provider";
 import { BadRequest, ClientAccess, NotFound, Resource } from "@clankerauth/admin-api";
 import { provider } from "./api-errors.ts";
 
-export const mcpScope = "admin";
+export const mcpScope = "clankerauth:admin";
 
 export const mcpResource = (baseURL: string) => `${baseURL}/mcp`;
 

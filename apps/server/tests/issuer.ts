@@ -12,7 +12,7 @@ const testSettings = (
   overrides: Partial<Settings> & Pick<Settings, "baseURL">,
 ): Settings => ({
   secret: Redacted.make(randomBytes(32).toString("hex")),
-  database: join(directory, "auth.sqlite"),
+  database: join(directory, "clankerauth.sqlite"),
   host: "127.0.0.1",
   port: Number(new URL(overrides.baseURL).port) || 3000,
   mcpAllowedOrigins: [],

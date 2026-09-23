@@ -113,7 +113,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   expect(await metadata.json()).toMatchObject({
     resource: `${baseURL}/mcp`,
     authorization_servers: [`${baseURL}/api/auth`],
-    scopes_supported: ["admin", "offline_access"],
+    scopes_supported: ["clankerauth:admin", "offline_access"],
     bearer_methods_supported: ["header"],
   });
 
@@ -313,11 +313,11 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
   const denied = await mcp(insufficient.tokens.access_token);
   expect(denied.status).toBe(403);
   expect(denied.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
-  expect(denied.headers.get("www-authenticate")).toContain('scope="admin"');
+  expect(denied.headers.get("www-authenticate")).toContain('scope="clankerauth:admin"');
   const valid = await mcpOAuthGrant(handle, baseURL, cookie);
   const parts = valid.tokens.access_token.split(".");
   parts[1] = Buffer.from(
-    JSON.stringify({ sub: "not-owner", aud: `${baseURL}/mcp`, scope: "admin" }),
+    JSON.stringify({ sub: "not-owner", aud: `${baseURL}/mcp`, scope: "clankerauth:admin" }),
   ).toString("base64url");
   expect((await mcp(parts.join("."))).status).toBe(401);
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -364,7 +364,7 @@ test.each(["block", "revoke"] as const)(
             redirect_uri: "http://127.0.0.1:9876/callback",
             response_type: "code",
             resource: `${baseURL}/mcp`,
-            scope: "admin",
+            scope: "clankerauth:admin",
             code_challenge: "x".repeat(43),
             code_challenge_method: "S256",
             state: "blocked",

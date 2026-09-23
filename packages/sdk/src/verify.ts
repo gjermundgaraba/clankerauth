@@ -224,7 +224,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   }, Effect.scoped);
 
   const verifyToken = Effect.fn("Verifier.verifyToken")(function* (token: string) {
-    const principal = yield* token.startsWith("ca_")
+    const principal = yield* token.startsWith("clankerauth_")
       ? options.apiKeys === false
         ? Effect.fail(unauthorized())
         : verifyKey(token)

@@ -12,8 +12,8 @@ const VerifyRequest = Schema.fromJsonString(Schema.Struct({ resource: Schema.Str
 export const startIssuer = async () => {
   const pair = await generateKeyPair("EdDSA");
   const jwk = { ...(await exportJWK(pair.publicKey)), kid: "fixture", alg: "EdDSA" };
-  const key = `ca_${randomBytes(32).toString("base64url")}`;
-  const readOnlyKey = `ca_${randomBytes(32).toString("base64url")}`;
+  const key = `clankerauth_${randomBytes(32).toString("base64url")}`;
+  const readOnlyKey = `clankerauth_${randomBytes(32).toString("base64url")}`;
 
   const keys = new Map([
     [key, ["notes:read", "notes:write"]],

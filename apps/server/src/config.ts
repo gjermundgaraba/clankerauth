@@ -32,14 +32,14 @@ const cookieDomainValid = (domain: string) => {
   }
 };
 
-/** HTTPS, or HTTP on loopback or anywhere with ALLOW_INSECURE_HTTP. */
+/** HTTPS, or HTTP on loopback or anywhere with CLANKERAUTH_ALLOW_INSECURE_HTTP. */
 export const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
   url.protocol === "https:" ||
   (url.protocol === "http:" &&
     (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || allowInsecureHttp));
 
 const originHelp =
-  "HTTPS origins (HTTP allowed on loopback, or anywhere with ALLOW_INSECURE_HTTP=true)";
+  "HTTPS origins (HTTP allowed on loopback, or anywhere with CLANKERAUTH_ALLOW_INSECURE_HTTP=true)";
 
 /** A bare origin: any path, query, fragment or credentials would stop matching what clients send. */
 const validOrigin = (value: string, allowInsecureHttp: boolean) =>
@@ -52,14 +52,18 @@ export const validateSettings = Effect.fnUntraced(function* (settings: Settings)
   const { allowInsecureHttp, baseURL, cookieDomain } = settings;
 
   if (!validOrigin(baseURL, allowInsecureHttp))
-    return yield* Effect.fail(new Error(`AUTH_BASE_URL must be one of: ${originHelp}`));
+    return yield* Effect.fail(new Error(`CLANKERAUTH_BASE_URL must be one of: ${originHelp}`));
 
   // Signing keys and session cookies are only as strong as this value.
   if (Redacted.value(settings.secret).length < 32)
-    return yield* Effect.fail(new Error("BETTER_AUTH_SECRET must have at least 32 characters"));
+    return yield* Effect.fail(
+      new Error("CLANKERAUTH_BETTER_AUTH_SECRET must have at least 32 characters"),
+    );
 
   if (!settings.mcpAllowedOrigins.every((origin) => validOrigin(origin, allowInsecureHttp)))
-    return yield* Effect.fail(new Error(`MCP_ALLOWED_ORIGINS must contain exact ${originHelp}`));
+    return yield* Effect.fail(
+      new Error(`CLANKERAUTH_MCP_ALLOWED_ORIGINS must contain exact ${originHelp}`),
+    );
 
   if (
     cookieDomain !== undefined &&
@@ -67,7 +71,7 @@ export const validateSettings = Effect.fnUntraced(function* (settings: Settings)
   )
     return yield* Effect.fail(
       new Error(
-        "AUTH_COOKIE_DOMAIN must be a bare parent domain of the AUTH_BASE_URL host, such as home.example",
+        "CLANKERAUTH_COOKIE_DOMAIN must be a bare parent domain of the CLANKERAUTH_BASE_URL host, such as home.example",
       ),
     );
 
@@ -76,17 +80,23 @@ export const validateSettings = Effect.fnUntraced(function* (settings: Settings)
 
 export const loadSettings = Effect.gen(function* () {
   const settings: Settings = {
-    baseURL: yield* Config.String("AUTH_BASE_URL"),
-    secret: yield* Config.Redacted("BETTER_AUTH_SECRET"),
-    database: yield* Config.String("AUTH_DATABASE").pipe(Config.withDefault("data/auth.sqlite")),
-    host: yield* Config.String("HOST").pipe(Config.withDefault("127.0.0.1")),
-    port: yield* Config.Port("PORT").pipe(Config.withDefault(3000)),
-    mcpAllowedOrigins: yield* Config.Array(Schema.Trim, "MCP_ALLOWED_ORIGINS").pipe(
+    baseURL: yield* Config.String("CLANKERAUTH_BASE_URL"),
+    secret: yield* Config.Redacted("CLANKERAUTH_BETTER_AUTH_SECRET"),
+    database: yield* Config.String("CLANKERAUTH_DATABASE").pipe(
+      Config.withDefault("data/clankerauth.sqlite"),
+    ),
+    host: yield* Config.String("CLANKERAUTH_HOST").pipe(Config.withDefault("127.0.0.1")),
+    port: yield* Config.Port("CLANKERAUTH_PORT").pipe(Config.withDefault(3000)),
+    mcpAllowedOrigins: yield* Config.Array(Schema.Trim, "CLANKERAUTH_MCP_ALLOWED_ORIGINS").pipe(
       Config.withDefault<readonly string[]>([]),
     ),
-    trustProxy: yield* Config.Boolean("TRUST_PROXY").pipe(Config.withDefault(false)),
-    allowInsecureHttp: yield* Config.Boolean("ALLOW_INSECURE_HTTP").pipe(Config.withDefault(false)),
-    cookieDomain: yield* Config.String("AUTH_COOKIE_DOMAIN").pipe(Config.withDefault(undefined)),
+    trustProxy: yield* Config.Boolean("CLANKERAUTH_TRUST_PROXY").pipe(Config.withDefault(false)),
+    allowInsecureHttp: yield* Config.Boolean("CLANKERAUTH_ALLOW_INSECURE_HTTP").pipe(
+      Config.withDefault(false),
+    ),
+    cookieDomain: yield* Config.String("CLANKERAUTH_COOKIE_DOMAIN").pipe(
+      Config.withDefault(undefined),
+    ),
   };
 
   return yield* validateSettings(settings);

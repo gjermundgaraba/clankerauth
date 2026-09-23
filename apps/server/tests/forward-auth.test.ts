@@ -7,7 +7,7 @@ import { createOwner } from "../src/auth.ts";
 import { forwardClientId, forwardCookie } from "../src/forward-auth.ts";
 import { openIssuer, type Issuer } from "./issuer.ts";
 
-const origin = "https://auth.home.example";
+const origin = "https://clankerauth.home.example";
 
 const resource = "https://notes.home.example/api";
 

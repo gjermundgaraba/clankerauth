@@ -1,6 +1,6 @@
 # @gjermundgaraba/clankerauth-sdk
 
-Effect-native [Clanker Auth](https://github.com/gjermundgaraba/clankerauth) verification. Verifies JWT access tokens and API keys, including the tokens a reverse proxy obtains through the issuer's forward auth for browser sessions. Optional **effect-actions** integration provides request-scoped identity, OAuth discovery, scope enforcement and a `session` contract a browser page can import on its own.
+Effect-native [clankerauth](https://github.com/gjermundgaraba/clankerauth) verification. Verifies JWT access tokens and API keys, including the tokens a reverse proxy obtains through the issuer's forward auth for browser sessions. Optional **effect-actions** integration provides request-scoped identity, OAuth discovery, scope enforcement and a `session` contract a browser page can import on its own.
 
 ## Install
 
@@ -41,7 +41,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
 const makeVerifier = Verifier.make({
-  issuer: "https://auth.internal/api/auth",
+  issuer: "https://clankerauth.internal/api/auth",
   resource: "https://notes.internal/",
   requiredScopes: ["notes:read"],
 }).pipe(Effect.provide(FetchHttpClient.layer));
@@ -50,7 +50,7 @@ const makeVerifier = Verifier.make({
 
 ## One resource per application
 
-Register **one** resource in the Clanker Auth dashboard, identified by the application's public origin root, written with its trailing slash: `https://notes.internal/`. That one resource covers `/api`, `/mcp` and any socket, with one RFC 9728 document at `/.well-known/oauth-protected-resource` and one `forward_auth` block in the proxy.
+Register **one** resource in the clankerauth dashboard, identified by the application's public origin root, written with its trailing slash: `https://notes.internal/`. That one resource covers `/api`, `/mcp` and any socket, with one RFC 9728 document at `/.well-known/oauth-protected-resource` and one `forward_auth` block in the proxy.
 
 `Resource.make` takes the public URL and derives that identifier itself, so the application never writes it twice and never writes a form an MCP client would rewrite. Any path on the URL is discarded. The official client's own `checkResourceAllowed` accepts an origin-root resource for an endpoint beneath it.
 
@@ -67,7 +67,7 @@ import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 const routes = Layer.unwrap(
   Effect.gen(function* () {
     const notes = yield* Resource.make({
-      issuer: "https://auth.internal/api/auth",
+      issuer: "https://clankerauth.internal/api/auth",
       publicUrl: new URL("https://notes.internal"),
       scopes: { read: "notes:read", write: "notes:write" },
     });
@@ -178,7 +178,7 @@ Both checks are raw string comparisons on the headers as sent. Nothing is parsed
 
 ## Browser applications
 
-A browser page holds no credential of its own: put it behind a reverse proxy with the issuer's forward auth, described in the Clanker Auth README, and the proxy adds the `Authorization` header this package verifies. What the page does need is who it is signed in as, and a way out:
+A browser page holds no credential of its own: put it behind a reverse proxy with the issuer's forward auth, described in the clankerauth README, and the proxy adds the `Authorization` header this package verifies. What the page does need is who it is signed in as, and a way out:
 
 ```ts
 import { Principal, Session, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";

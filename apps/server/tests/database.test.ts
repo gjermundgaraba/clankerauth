@@ -62,7 +62,7 @@ test("native SQLite queries share Kysely transactions and rollbacks", async () =
 
 test("native SQLite enables WAL, foreign keys, busy timeout and persists rows", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-database-"));
-  const filename = join(directory, "auth.sqlite");
+  const filename = join(directory, "clankerauth.sqlite");
 
   try {
     const database = await openDatabase(filename);

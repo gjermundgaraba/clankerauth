@@ -5,7 +5,7 @@ import { Cookies, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 export class ResponseCookies extends Context.Service<
   ResponseCookies,
   { readonly add: (setCookie: Iterable<string>) => Effect.Effect<void> }
->()("ClankerAuth/ResponseCookies") {}
+>()("clankerauth/ResponseCookies") {}
 
 /** Per request: collect cookies while the action runs, then attach them to its response. */
 export const responseCookies = HttpRouter.middleware<{ provides: ResponseCookies }>()((handler) =>

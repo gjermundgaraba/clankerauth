@@ -3,7 +3,7 @@ export interface DisposableIssuerOptions {
   client: { name: string; redirect: string; resources: string[] };
   /**
    * Serve forward auth for apps under this domain, such as `notes.localhost`. The issuer is
-   * then `http://auth.<cookieDomain>:<port>` on the same loopback listener, and the forward
+   * then `http://clankerauth.<cookieDomain>:<port>` on the same loopback listener, and the forward
    * cookie is shared with every host under the domain. Without it, the issuer is
    * `http://127.0.0.1:<port>` and the forward-auth routes are not served.
    */

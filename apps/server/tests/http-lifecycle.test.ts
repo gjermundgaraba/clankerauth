@@ -144,7 +144,11 @@ test("an in-process JWKS read is awaited by its request, so shutdown waits for i
 
   const { privateKey } = await generateKeyPair("EdDSA");
 
-  const token = await new SignJWT({ scope: "admin", client_id: "stalled", azp: "stalled" })
+  const token = await new SignJWT({
+    scope: "clankerauth:admin",
+    client_id: "stalled",
+    azp: "stalled",
+  })
     .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "unknown" })
     .setIssuer("https://issuer.example/api/auth")
     .setAudience("https://issuer.example/mcp")
