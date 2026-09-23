@@ -14,6 +14,12 @@ Install Effect in the application:
 vp add effect@4.0.0-rc.117
 ```
 
+The `/session` and `/effect-actions` entry points also need effect-actions 0.7 (the SDK's declarations are built against it):
+
+```sh
+vp add @gjermundgaraba/effect-actions@0.7.0
+```
+
 ## Entry points
 
 | Import                             | Needs effect-actions | Browser safe | What it holds                                     |
