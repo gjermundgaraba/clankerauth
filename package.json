@@ -14,7 +14,6 @@
     "test:lint": "node --test tools/oxlint/anti-slop/tests/policy.test.mjs"
   },
   "devDependencies": {
-    "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
