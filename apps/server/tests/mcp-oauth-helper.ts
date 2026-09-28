@@ -4,13 +4,17 @@ import { expect } from "vite-plus/test";
 export const administrationResource = (baseURL: string) => ({
   identifier: `${baseURL}/mcp`,
   name: "clankerauth administration",
-  scopes: ["clankerauth:admin"],
+  scopes: ["clankerauth:read", "clankerauth:write"],
   builtIn: true,
 });
 
 export type TestHandler = (request: Request) => Promise<Response>;
 
-type GrantOptions = { resource?: string; scope?: string; clientId?: string };
+/** `granted` is what the owner leaves ticked at consent; by default everything requested. */
+type GrantOptions = { resource?: string; scope?: string; granted?: string; clientId?: string };
+
+/** The consent page's submission; without `scope`, the owner approves everything requested. */
+type ConsentDecision = { accept: boolean; oauth_query: string; scope?: string };
 
 /** A native MCP client registers anonymously; the owner grants access through consent. */
 export async function mcpOAuthCode(
@@ -51,7 +55,7 @@ export async function mcpOAuthCode(
         redirect_uri: callback,
         response_type: "code",
         resource,
-        scope: options.scope ?? "offline_access clankerauth:admin",
+        scope: options.scope ?? "offline_access clankerauth:read clankerauth:write",
         code_challenge: createHash("sha256").update(verifier).digest("base64url"),
         code_challenge_method: "S256",
         state: "mcp-oauth-test",
@@ -64,11 +68,18 @@ export async function mcpOAuthCode(
   const location = new URL(authorization.headers.get("location") ?? "", baseURL);
   expect(location.pathname).toBe("/consent");
 
+  const decision: ConsentDecision = {
+    accept: true,
+    oauth_query: location.search.slice(1),
+  };
+
+  if (options.granted !== undefined) decision.scope = options.granted;
+
   const consent = await handle(
     new Request(`${baseURL}/api/auth/oauth2/consent`, {
       method: "POST",
       headers: { cookie, origin: baseURL, "content-type": "application/json" },
-      body: JSON.stringify({ accept: true, oauth_query: location.search.slice(1) }),
+      body: JSON.stringify(decision),
     }),
   );
 

@@ -145,7 +145,7 @@ test("an in-process JWKS read is awaited by its request, so shutdown waits for i
   const { privateKey } = await generateKeyPair("EdDSA");
 
   const token = await new SignJWT({
-    scope: "clankerauth:admin",
+    scope: "clankerauth:read clankerauth:write",
     client_id: "stalled",
     azp: "stalled",
   })

@@ -18,7 +18,7 @@ import {
   TooManyRequests,
   Unauthorized,
 } from "@clankerauth/admin-api";
-import { mcpResource, mcpScope } from "./resources.ts";
+import { administrationScopes, mcpResource } from "./resources.ts";
 import { Auth } from "./auth.ts";
 
 export const administrationResource = Effect.fn("AdministrationResource.make")(function* () {
@@ -29,7 +29,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const discovery = Authentication.protectedResource({
     resource,
     authorizationServers: [issuer],
-    scopesSupported: [mcpScope, "offline_access"],
+    scopesSupported: [administrationScopes.read, administrationScopes.write, "offline_access"],
   });
 
   // The SDK verifier reads JWKS from this issuer in-process. The raw verifier has no
@@ -46,7 +46,6 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const verifier = yield* Verifier.make({
     issuer,
     resource,
-    requiredScopes: [mcpScope],
     // The loopback serves provider routes only, so key verification must never reach the issuer.
     apiKeys: false,
   }).pipe(
@@ -80,11 +79,13 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
       Match.exhaustive,
     );
 
+  // Clients ask for what a challenge names. Naming both lets the owner decide at consent
+  // whether a client may change anything or only look.
+  const scope = `${administrationScopes.read} ${administrationScopes.write}`;
+
   /** The challenge for a request whose token was accepted but whose owner was not. */
   const challenge = (invalid: boolean) =>
-    discovery.challenge(
-      invalid ? { error: "invalid_token", scope: mcpScope } : { scope: mcpScope },
-    );
+    discovery.challenge(invalid ? { error: "invalid_token", scope } : { scope });
 
   return { discovery, verifier, refuse, challenge };
 });

@@ -562,7 +562,7 @@ test("official 2026-07-28 MCP client uses OAuth bearer authentication through na
 });
 
 test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
-  const permissions = { [`${origin}/mcp`]: ["clankerauth:admin"] };
+  const permissions = { [`${origin}/mcp`]: ["clankerauth:write"] };
 
   const created = await call("/api/administration/createApiKey", {
     name: "Invalid administration key",

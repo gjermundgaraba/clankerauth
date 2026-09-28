@@ -127,9 +127,13 @@ try {
   await page.waitForFunction(() => Boolean(window.mcpTest));
   const discovery = await page.evaluate(() => window.mcpTest.inspectDiscovery());
   assert.equal(discovery.status, 401);
-  assert.match(discovery.challenge, /scope="clankerauth:admin"/);
+  assert.match(discovery.challenge, /scope="clankerauth:read clankerauth:write"/);
   assert.match(discovery.challenge, /resource_metadata=/);
-  assert.deepEqual(discovery.resource.scopes_supported, ["clankerauth:admin", "offline_access"]);
+  assert.deepEqual(discovery.resource.scopes_supported, [
+    "clankerauth:read",
+    "clankerauth:write",
+    "offline_access",
+  ]);
 
   const start = await page.evaluate(() => window.mcpTest.connect());
   const authorization = new URL(start.authorizationUrl);
@@ -137,7 +141,7 @@ try {
   assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
   assert.deepEqual(
     new Set(authorization.searchParams.get("scope").split(" ")),
-    new Set(["clankerauth:admin", "offline_access"]),
+    new Set(["clankerauth:read", "clankerauth:write", "offline_access"]),
   );
   await page.goto(authorization.href);
   await page.getByLabel("Email", { exact: true }).fill("browser@example.internal");

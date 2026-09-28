@@ -1,18 +1,27 @@
+import { randomUUID } from "node:crypto";
 import { Clock, Effect, Schema, Semaphore } from "effect";
-import { persisted, type Sql, type SqliteRow } from "./database.ts";
+import type { Kysely } from "kysely";
+import {
+  persisted,
+  transaction,
+  type DatabaseSchema,
+  type Sql,
+  type SqliteRow,
+} from "./database.ts";
 import type { Auth } from "better-auth";
 import type { oauthProvider } from "@better-auth/oauth-provider";
 import { BadRequest, ClientAccess, NotFound, Resource } from "@clankerauth/admin-api";
 import { provider } from "./api-errors.ts";
+import { clearGrants } from "./grants.ts";
 
-export const mcpScope = "clankerauth:admin";
+/** The administration resource's fixed scopes: `read` allows listing, and `write` allows
+ * everything. */
+export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
 
 export const mcpResource = (baseURL: string) => `${baseURL}/mcp`;
 
 /** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
 export const protocolScopes = ["offline_access"];
-
-export const resourceReference = (identifier: string) => `resource:${identifier}`;
 
 const decodeScopes = persisted(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -28,17 +37,16 @@ const accessRows = persisted(Schema.Array(ClientAccess));
 
 const clientIds = persisted(Schema.Array(Schema.Struct({ clientId: Schema.String })));
 
+const clientOwners = persisted(
+  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) })),
+);
+
 type ResourceValue = typeof Resource.Type;
 
 type ResourceAuth = {
   api: Pick<
     Auth<{ plugins: [ReturnType<typeof oauthProvider>] }>["api"],
-    | "adminCreateOAuthResource"
-    | "adminUpdateOAuthResource"
-    | "adminDeleteOAuthResource"
-    | "adminLinkClientResource"
-    | "adminUnlinkClientResource"
-    | "updateOAuthClient"
+    "adminCreateOAuthResource" | "adminUpdateOAuthResource" | "adminDeleteOAuthResource"
   >;
 };
 
@@ -46,18 +54,19 @@ const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
 });
 
-const linkParams = (clientId: string, identifier: string) => ({
-  ...resourceParams(identifier),
-  client_id: encodeURIComponent(clientId),
-});
-
 // Provider APIs own their writes and transaction boundaries. Do not hold a separate
 // transaction while calling them on the shared connection. Mutations take one permit,
 // so their read-diff-write sequences never interleave.
+//
+// Client access applies to managed clients only: they skip consent, so their links are
+// the whole of what they may obtain. An automatic client may ask for any resource, and
+// consent decides; the provider's own per-client enforcement is off, so its links are
+// neither written nor read.
 export const resourceStore = Effect.fnUntraced(function* (
+  database: Kysely<DatabaseSchema>,
   sql: Sql,
   getAuth: () => ResourceAuth,
-  changed: (scopes: string[], identifiers: string[]) => void,
+  changed: (scopes: string[]) => void,
   reservedIdentifier: string,
 ) {
   const mutating = yield* Semaphore.make(1);
@@ -88,39 +97,47 @@ export const resourceStore = Effect.fnUntraced(function* (
     return rows[0] ? yield* decodeResource(rows[0]) : undefined;
   });
 
+  // Only managed clients have links; nothing writes them for automatic ones.
   const access = Effect.fn("Resources.access")(function* () {
     return yield* accessRows(
       yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId`,
     );
   });
 
-  const accessForClient = Effect.fn("Resources.accessForClient")(function* (clientId: string) {
+  const accessForClient = Effect.fn("Resources.accessForClient")(function* (
+    clientId: string,
+    query: Sql,
+  ) {
     return yield* accessRows(
-      yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE clientId = ${clientId} ORDER BY resourceId`,
+      yield* query`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE clientId = ${clientId} ORDER BY resourceId`,
     );
   });
 
+  const scopesOf = (catalog: readonly ResourceValue[], identifiers: readonly string[]) => [
+    ...new Set([
+      ...protocolScopes,
+      ...identifiers.flatMap(
+        (id) => catalog.find((resource) => resource.identifier === id)?.scopes ?? [],
+      ),
+    ]),
+  ];
+
   const validateSelection = Effect.fn("Resources.validateSelection")(function* (
+    catalog: readonly ResourceValue[],
     identifiers: readonly string[],
   ) {
     if (new Set(identifiers).size !== identifiers.length)
       return yield* Effect.fail(new BadRequest({ error: "Choose unique Resources" }));
 
-    return yield* Effect.forEach(identifiers, (id) =>
-      Effect.gen(function* () {
-        const resource = yield* get(id);
-
-        if (!resource) return yield* Effect.fail(new BadRequest({ error: "Unknown Resource" }));
-
-        return resource;
-      }),
-    );
+    if (!identifiers.every((id) => catalog.some((resource) => resource.identifier === id)))
+      return yield* Effect.fail(new BadRequest({ error: "Unknown Resource" }));
   });
 
   const scopesFor = Effect.fn("Resources.scopesFor")(function* (identifiers: readonly string[]) {
-    const resources = yield* validateSelection(identifiers);
+    const catalog = yield* list();
+    yield* validateSelection(catalog, identifiers);
 
-    return [...new Set([...protocolScopes, ...resources.flatMap((resource) => resource.scopes)])];
+    return scopesOf(catalog, identifiers);
   });
 
   // An identifier must already be the string a client sends back. A client asks for
@@ -159,39 +176,61 @@ export const resourceStore = Effect.fnUntraced(function* (
     return { identifier, name, scopes } satisfies ResourceValue;
   });
 
-  // A client's scope ceiling is the union of its resources' scopes, kept as a copy the
-  // provider reads on every request. It is written directly: the provider's update API
-  // demands ownership, and this way the copy can be rebuilt without an owner session.
-  const syncClient = Effect.fn("Resources.syncClient")(function* (clientId: string) {
-    const links = yield* accessForClient(clientId);
-    const scopes = yield* scopesFor(links.map((link) => link.resource));
-    yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId}`;
-  });
+  // A client's scope ceiling is a copy the provider reads on every request: the whole
+  // catalog for an automatic client, which the provider itself writes at registration
+  // and on every CIMD refresh, and the union of its resources' scopes for a managed one.
+  // Copies are written directly, so they can be rebuilt without an owner session, and only
+  // when they change.
+  const syncClient = Effect.fn("Resources.syncClient")(function* (
+    query: Sql,
+    catalog: readonly ResourceValue[],
+    clientId: string,
+  ) {
+    const links = yield* accessForClient(clientId, query);
 
-  const publish = (catalog: ResourceValue[]) =>
-    changed(
-      [...new Set([...protocolScopes, ...catalog.flatMap((resource) => resource.scopes)])],
-      catalog.map((resource) => resource.identifier),
+    const scopes = JSON.stringify(
+      scopesOf(
+        catalog,
+        links.map((link) => link.resource),
+      ),
     );
+
+    yield* query`UPDATE oauthClient SET scopes = ${scopes}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId} AND scopes IS NOT ${scopes}`;
+  });
 
   // Publishes the catalog and rebuilds every client's copy of it. A resource change and
   // its client copies are separate writes, so a failure between them heals here.
   const synchronize = Effect.fn("Resources.synchronize")(function* () {
-    publish(yield* list());
+    const catalog = yield* list();
+
+    const scopes = scopesOf(
+      catalog,
+      catalog.map((resource) => resource.identifier),
+    );
+
+    changed(scopes);
+    yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE userId IS NULL AND scopes IS NOT ${JSON.stringify(scopes)}`;
 
     for (const client of yield* clientIds(
-      yield* sql`SELECT clientId FROM oauthClient ORDER BY clientId`,
+      yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NOT NULL ORDER BY clientId`,
     ))
-      yield* syncClient(client.clientId);
+      yield* syncClient(sql, catalog, client.clientId);
   });
+
+  const reserved = (identifier: string) =>
+    identifier === reservedIdentifier
+      ? Effect.fail(new BadRequest({ error: "The administration Resource is fixed" }))
+      : Effect.void;
 
   return {
     list,
     get,
     access,
+    /** An automatic client may ask for any resource; a managed one only for its own. */
     hasAccess: Effect.fn("Resources.hasAccess")(function* (clientId: string, identifier: string) {
       const rows =
-        yield* sql`SELECT 1 FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier} LIMIT 1`;
+        yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (c.userId IS NULL
+        OR EXISTS (SELECT 1 FROM oauthClientResource l WHERE l.clientId = c.clientId AND l.resourceId = ${identifier}))`;
 
       return rows.length > 0;
     }),
@@ -199,6 +238,13 @@ export const resourceStore = Effect.fnUntraced(function* (
     synchronize,
     create: Effect.fn("Resources.create")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
+
+      // Recreating a resource revives nothing, even if its deletion never cleared its grants.
+      // Nothing is granted for an unknown resource, so none can appear before it exists.
+      if (!(yield* get(resource.identifier)))
+        yield* transaction(database, (query) =>
+          clearGrants(query, { resource: resource.identifier }),
+        );
       yield* provider(() =>
         getAuth().api.adminCreateOAuthResource({
           headers,
@@ -209,94 +255,79 @@ export const resourceStore = Effect.fnUntraced(function* (
           },
         }),
       );
-      // Publish before updating client scopes: the provider validates that union
-      // against its currently supported scopes. Keep defaults current after writes.
-      yield* synchronize();
-
-      // Automatically registered clients may request any resource, subject to consent.
-      const automatic = yield* clientIds(
-        yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NULL ORDER BY clientId`,
-      );
-
-      for (const client of automatic)
-        yield* provider(() =>
-          getAuth().api.adminLinkClientResource({
-            headers,
-            params: linkParams(client.clientId, resource.identifier),
-          }),
-        );
       yield* synchronize();
 
       return resource;
     }, serialized),
     update: Effect.fn("Resources.update")(function* (input: ResourceValue, headers: Headers) {
       const resource = yield* validateInput(input);
-      const builtIn = resource.identifier === reservedIdentifier;
-
-      if (builtIn && (resource.scopes.length !== 1 || resource.scopes[0] !== mcpScope))
-        return yield* Effect.fail(
-          new BadRequest({ error: "The administration Resource scopes are reserved" }),
-        );
+      yield* reserved(resource.identifier);
       yield* provider(() =>
         getAuth().api.adminUpdateOAuthResource({
           headers,
           params: resourceParams(resource.identifier),
-          body: builtIn
-            ? { name: resource.name }
-            : { name: resource.name, allowedScopes: [...protocolScopes, ...resource.scopes] },
+          body: { name: resource.name, allowedScopes: [...protocolScopes, ...resource.scopes] },
         }),
       );
-
-      if (!builtIn) yield* synchronize();
+      yield* synchronize();
 
       return resource;
     }, serialized),
     delete: Effect.fn("Resources.delete")(function* (identifier: string, headers: Headers) {
-      if (identifier === reservedIdentifier)
-        return yield* Effect.fail(
-          new BadRequest({ error: "The administration Resource is reserved" }),
-        );
+      yield* reserved(identifier);
       yield* provider(() =>
         getAuth().api.adminDeleteOAuthResource({
           headers,
           params: resourceParams(identifier),
         }),
       );
-      // The provider removes the resource and foreign keys remove its links.
-      // Existing grants retain provider semantics; current resource policy controls eligibility.
+      // The provider removes the resource and foreign keys remove its links; the
+      // authorization clients were given for it goes with it. Should this clear fail,
+      // create clears it before the identifier can be used again.
+      yield* transaction(database, (query) => clearGrants(query, { resource: identifier }));
       yield* synchronize();
 
       return { deleted: true };
     }, serialized),
+    // Links and the authorization they allowed change in one local transaction, so
+    // restoring access asks again rather than reviving a grant that removal missed.
     setAccess: Effect.fn("Resources.setAccess")(function* (
       clientId: string,
       identifiers: readonly string[],
-      headers: Headers,
     ) {
-      const clients = yield* sql`SELECT id FROM oauthClient WHERE clientId = ${clientId}`;
+      const [client] = yield* clientOwners(
+        yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
+      );
 
-      if (!clients.length) return yield* Effect.fail(new NotFound({ error: "Client not found" }));
-      yield* validateSelection(identifiers);
-      const previous = (yield* accessForClient(clientId)).map((link) => link.resource);
+      if (!client) return yield* Effect.fail(new NotFound({ error: "Client not found" }));
 
-      for (const identifier of previous.filter((id) => !identifiers.includes(id)))
-        yield* provider(() =>
-          getAuth().api.adminUnlinkClientResource({
-            headers,
-            params: linkParams(clientId, identifier),
+      if (client.userId === null)
+        return yield* Effect.fail(
+          new BadRequest({
+            error: "Automatic Clients may ask for any Resource; revoke or block them instead",
           }),
         );
+      const catalog = yield* list();
+      yield* validateSelection(catalog, identifiers);
+      const now = yield* Clock.currentTimeMillis;
 
-      for (const identifier of identifiers.filter((id) => !previous.includes(id)))
-        yield* provider(() =>
-          getAuth().api.adminLinkClientResource({
-            headers,
-            params: linkParams(clientId, identifier),
-          }),
-        );
-      yield* syncClient(clientId);
+      yield* transaction(database, (query) =>
+        Effect.gen(function* () {
+          const previous = (yield* accessForClient(clientId, query)).map((link) => link.resource);
 
-      return yield* accessForClient(clientId);
+          for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
+            yield* query`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
+            yield* clearGrants(query, { clientId, resource: identifier });
+          }
+
+          for (const identifier of identifiers)
+            yield* query`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt)
+              VALUES (${randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
+          yield* syncClient(query, catalog, clientId);
+        }),
+      );
+
+      return yield* accessForClient(clientId, sql);
     }, serialized),
   };
 });

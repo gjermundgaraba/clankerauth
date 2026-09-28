@@ -1,5 +1,5 @@
-import { Effect } from "effect";
-import { NotFound } from "@clankerauth/admin-api";
+import { Effect, Exit } from "effect";
+import { BadRequest, NotFound } from "@clankerauth/admin-api";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { createHash } from "node:crypto";
 import { convertSetCookieToCookie } from "better-auth/test";
@@ -70,14 +70,19 @@ async function request(path: string, body?: AuthRequestBody, authenticated = fal
   return issuer.service.auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
 }
 
-function authorization(id: string, identifier = resource, port = 4184) {
+function authorization(
+  id: string,
+  identifier = resource,
+  port = 4184,
+  scope = "offline_access resource:read",
+) {
   return (
     "/oauth2/authorize?" +
     new URLSearchParams({
       client_id: id,
       redirect_uri: `http://127.0.0.1:${port}/callback`,
       response_type: "code",
-      scope: "offline_access resource:read",
+      scope,
       resource: identifier,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
@@ -140,8 +145,40 @@ const refresh = (id: string, token: string) =>
 const blocked = (id: string) =>
   Effect.runPromise(issuer.service.sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`);
 
-const consentRequired = async (id: string) =>
-  (await request(authorization(id), undefined, true)).headers.get("location") ?? "";
+const consentRequired = async (id: string, identifier = resource, scope?: string) =>
+  (await request(authorization(id, identifier, 4184, scope), undefined, true)).headers.get(
+    "location",
+  ) ?? "";
+
+const second = "https://second.example/mcp";
+
+const addSecond = () =>
+  Effect.runPromise(
+    issuer.service.resources.create(
+      { identifier: second, name: "Second", scopes: ["second:read"] },
+      ownerHeaders(),
+    ),
+  );
+
+/** A first-party public client with access to the test resource, which skips consent. */
+async function managed() {
+  const client = await issuer.service.auth.api.adminCreateOAuthClient({
+    headers: ownerHeaders(),
+    body: {
+      client_name: "Managed client",
+      redirect_uris: [callback],
+      application_type: "native",
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      scope: "offline_access resource:read",
+      skip_consent: true,
+    },
+  });
+
+  await Effect.runPromise(issuer.service.resources.setAccess(client.client_id, [resource]));
+
+  return client.client_id;
+}
 
 const cimdTransport = async () => {
   fetches++;
@@ -201,7 +238,7 @@ test("DCR infers native callbacks, keeps PKCE and consent, and revocation ends r
   expect(await consentRequired(client.client_id)).toContain("/consent");
 });
 
-test("DCR cannot self-assert consent bypass or unknown resources", async () => {
+test("DCR cannot self-assert consent bypass, and its resource list is ignored", async () => {
   expect(
     (
       await request("/oauth2/register", {
@@ -218,48 +255,38 @@ test("DCR cannot self-assert consent bypass or unknown resources", async () => {
         client_name: "Untrusted",
         redirect_uris: [callback],
         token_endpoint_auth_method: "none",
-        resources: ["https://unconfigured.example/mcp"],
+        resources: [resource, "https://unconfigured.example/mcp"],
       })
     ).status,
-  ).toBe(400);
+  ).toBe(201);
 });
 
 test.each(["dcr", "cimd"])(
-  "%s clients gain new resource eligibility and deletion revokes dependent grants",
+  "%s clients may ask for resources added later, and deletion revokes dependent grants",
   async (source) => {
     const client = source === "dcr" ? await register() : { client_id: clientId };
-
-    if (source === "cimd") await request(authorization(clientId));
-    const second = "https://second.example/mcp";
-    await Effect.runPromise(
-      issuer.service.resources.create(
-        { identifier: second, name: "Second", scopes: ["second:read"] },
-        ownerHeaders(),
-      ),
-    );
-    expect(
-      await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, second)),
-    ).toBe(true);
     const tokens = await grant(client.client_id);
+    await addSecond();
+    expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
+      "/consent",
+    );
     await Effect.runPromise(issuer.service.resources.delete(resource, ownerHeaders()));
-    expect(
-      await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, resource)),
-    ).toBe(false);
     expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+    expect(await consentRequired(client.client_id)).not.toContain("/consent");
   },
 );
 
-test("the owner can narrow an automatic client's resource access", async () => {
+test("automatic clients have no configurable resource access", async () => {
   const client = await register();
+
   expect(
-    await Effect.runPromise(issuer.service.resources.hasAccess(client.client_id, resource)),
-  ).toBe(true);
-  await Effect.runPromise(issuer.service.resources.setAccess(client.client_id, [], ownerHeaders()));
-  expect(await consentRequired(client.client_id)).not.toContain("/consent");
-  await Effect.runPromise(
-    issuer.service.resources.setAccess(client.client_id, [resource], ownerHeaders()),
+    await Effect.runPromise(Effect.flip(issuer.service.resources.setAccess(client.client_id, []))),
+  ).toEqual(
+    new BadRequest({
+      error: "Automatic Clients may ask for any Resource; revoke or block them instead",
+    }),
   );
-  expect(await consentRequired(client.client_id)).toContain("/consent");
+  expect(await Effect.runPromise(issuer.service.resources.access())).toEqual([]);
 });
 
 test("blocking uses the provider's disabled flag and survives CIMD metadata rediscovery", async () => {
@@ -316,4 +343,157 @@ test("CIMD rejects malformed metadata before persisting a client", async () => {
       issuer.service.sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
     ),
   ).toEqual([]);
+});
+
+test("revoking one resource leaves the client's other authorization", async () => {
+  await addSecond();
+  const client = await register();
+  const tokens = await grant(client.client_id);
+
+  const response = await request(
+    authorization(client.client_id, second, 4184, "offline_access second:read"),
+    undefined,
+    true,
+  );
+
+  const location = new URL(response.headers.get("location")!, baseURL);
+
+  const consent = await request(
+    "/oauth2/consent",
+    { accept: true, oauth_query: location.search.slice(1) },
+    true,
+  );
+
+  expect(consent.status, await consent.clone().text()).toBe(200);
+  const listed = await Effect.runPromise(issuer.service.clients.connections());
+  expect(listed.map((connection) => [connection.resource, connection.scopes])).toEqual([
+    [resource, ["resource:read"]],
+    [second, ["second:read"]],
+  ]);
+  expect(listed[0]?.approvedAt).not.toBeNull();
+  expect(listed[0]?.refreshedAt).not.toBeNull();
+  // Approved but the code was never exchanged, so no refresh token exists.
+  expect(listed[1]?.refreshedAt).toBeNull();
+
+  await Effect.runPromise(issuer.service.clients.revoke(client.client_id, second));
+  expect(
+    (await Effect.runPromise(issuer.service.clients.connections())).map((c) => c.resource),
+  ).toEqual([resource]);
+  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
+  expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
+    "/consent",
+  );
+});
+
+test("the owner can delete an automatic client, which may register again", async () => {
+  const client = await register();
+  const tokens = await grant(client.client_id);
+  expect(await Effect.runPromise(issuer.service.clients.delete(client.client_id))).toEqual({
+    deleted: true,
+  });
+  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  expect(
+    await Effect.runPromise(Effect.flip(issuer.service.clients.delete(client.client_id))),
+  ).toEqual(new NotFound({ error: "Client not found" }));
+
+  expect(await consentRequired(clientId)).toContain("/consent");
+  await Effect.runPromise(issuer.service.clients.delete(clientId));
+  expect(await consentRequired(clientId)).toContain("/consent");
+});
+
+test("a recreated resource does not revive authorization given for the deleted one", async () => {
+  const client = await register();
+  const tokens = await grant(client.client_id);
+  await Effect.runPromise(issuer.service.resources.delete(resource, ownerHeaders()));
+  await Effect.runPromise(
+    issuer.service.resources.create(
+      { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
+      ownerHeaders(),
+    ),
+  );
+  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+  expect(await consentRequired(client.client_id)).toContain("/consent");
+});
+
+test("creating a resource clears authorization a failed deletion left behind", async () => {
+  const client = await register();
+  const tokens = await grant(client.client_id);
+  await Effect.runPromise(
+    issuer.service
+      .sql`CREATE TRIGGER fail_clear BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`,
+  );
+  expect(
+    Exit.isFailure(
+      await Effect.runPromiseExit(issuer.service.resources.delete(resource, ownerHeaders())),
+    ),
+  ).toBe(true);
+  await Effect.runPromise(issuer.service.sql`DROP TRIGGER fail_clear`);
+  expect(await Effect.runPromise(issuer.service.resources.get(resource))).toBeUndefined();
+
+  await Effect.runPromise(
+    issuer.service.resources.create(
+      { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
+      ownerHeaders(),
+    ),
+  );
+  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+  expect(await consentRequired(client.client_id)).toContain("/consent");
+});
+
+test("the 0.10.0 upgrade runs once, clearing stored authorization and automatic clients' links", async () => {
+  const client = await register();
+  const tokens = await grant(client.client_id);
+  // A link an earlier version gave an automatic client, on a database it last opened.
+  await Effect.runPromise(
+    issuer.service
+      .sql`INSERT INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES ('earlier', ${client.client_id}, ${resource}, ${new Date().toISOString()})`,
+  );
+  const first = await managed();
+  await Effect.runPromise(issuer.service.sql`PRAGMA user_version = 0`);
+  issuer = await issuer.reopen();
+
+  // Managed clients keep their access; only the automatic client's link goes.
+  expect(await Effect.runPromise(issuer.service.resources.access())).toEqual([
+    { client_id: first, resource },
+  ]);
+
+  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  expect(await Effect.runPromise(issuer.service.sql`PRAGMA user_version`)).toEqual([
+    { user_version: 1 },
+  ]);
+});
+
+test("a managed client, which skips consent, shows a connection while it holds a refresh token", async () => {
+  const id = await managed();
+  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+
+  const response = await request(authorization(id), undefined, true);
+  expect(response.status, await response.clone().text()).toBe(302);
+  const code = new URL(response.headers.get("location")!).searchParams.get("code");
+  expect(code).toBeTypeOf("string");
+
+  const tokens = await request("/oauth2/token", {
+    grant_type: "authorization_code",
+    client_id: id,
+    code: code!,
+    code_verifier: verifier,
+    redirect_uri: callback,
+    resource,
+  });
+
+  expect(tokens.status, await tokens.clone().text()).toBe(200);
+  const [connection, ...rest] = await Effect.runPromise(issuer.service.clients.connections());
+  expect(rest).toEqual([]);
+  expect(connection).toMatchObject({
+    client_id: id,
+    resource,
+    scopes: ["resource:read"],
+    approvedAt: null,
+  });
+  expect(connection?.refreshedAt).not.toBeNull();
+
+  await Effect.runPromise(issuer.service.clients.revoke(id, resource));
+  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
 });

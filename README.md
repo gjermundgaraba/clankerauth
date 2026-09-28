@@ -39,10 +39,10 @@ Shutdown disconnects HTTP clients, including active streams, without waiting for
 
 Add a **Resource** in the dashboard. Its identifier is the exact URL that clients send as the `resource` parameter and that becomes the token audience; its scopes are the permissions it defines. Then:
 
-- **MCP clients** onboard themselves. Point the client at your MCP server; it discovers this issuer from the server's protected-resource metadata, registers through CIMD or DCR, and asks the owner for consent once per resource.
-- **Your own applications** are registered by the owner under **Register client** with one or more exact redirect URIs. They are first party: a signed-in owner is sent straight back with a code, with no consent screen. Confidential clients authenticate with HTTP Basic or a secret in the request body and receive a one-time secret. Name, redirect URIs and application type can be edited later.
+- **MCP clients** onboard themselves. Point the client at your MCP server; it discovers this issuer from the server's protected-resource metadata, registers through CIMD or DCR, and asks the owner for consent once per resource. Such an automatic client may ask for any resource, including ones added later; consent is the gate. The owner can untick requested scopes on the consent screen to grant less than was asked.
+- **Your own applications** are registered by the owner under **Register client** with one or more exact redirect URIs. They are first party: a signed-in owner is sent straight back with a code, with no consent screen, so the owner chooses which resources each may obtain. Confidential clients authenticate with HTTP Basic or a secret in the request body and receive a one-time secret. Name, redirect URIs and application type can be edited later.
 
-Every authorization request names exactly one `resource`; token requests may omit it and reuse the resource bound to the code or refresh token. The owner's login session lasts 30 days and slides with use, so signing in for one application signs in for all of them. Access tokens are EdDSA JWTs valid for fifteen minutes; refresh tokens last 30 days and rotate on every use, with a thirty-second reuse window so a retried refresh does not revoke the family. The dashboard lists every client: **Revoke authorization** clears its stored grants, **Block client** also stops it from authorizing again. Neither recalls an already-issued access token; it expires within fifteen minutes.
+Every authorization request names exactly one `resource`; token requests may omit it and reuse the resource bound to the code or refresh token. The owner's login session lasts 30 days and slides with use, so signing in for one application signs in for all of them. Access tokens are EdDSA JWTs valid for fifteen minutes; refresh tokens last 30 days and rotate on every use, with a thirty-second reuse window so a retried refresh does not revoke the family. The dashboard shows each client's connections, the authorization it holds: every resource it has a consent or a live refresh token for, with its scopes, the approval time and when it last received a refresh token. A managed client skips consent, so it shows a connection while it holds a refresh token. **Revoke** ends one connection and **Revoke all** ends every one; the client must authorize again, and an automatic one asks for consent. Removing a resource from a managed client's access, or deleting the resource, also revokes that authorization, so restoring access never revives it. **Block client** revokes everything and stops the client from authorizing again. **Delete client** forgets any client; an automatic one can register again, so block it to keep it out. None of these recalls an already-issued access token; it expires within fifteen minutes.
 
 Discovery is served at `/.well-known/oauth-authorization-server/api/auth`. There is no OpenID Connect: no ID tokens, no UserInfo, and `openid` is not a supported scope.
 
@@ -129,13 +129,13 @@ and are exposed at `POST /api/<groupName>/<actionName>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
-| Action                 | Access                                                                         | Transport |
-| ---------------------- | ------------------------------------------------------------------------------ | --------- |
-| `setupStatus`          | Public                                                                         | HTTP      |
-| `setupOwner`           | Public; succeeds only before an owner exists                                   | HTTP      |
-| `verifyApiKey`         | Bearer API key scoped to the requested resource                                | HTTP      |
-| Administration actions | Owner session cookie (SameSite)                                                | HTTP      |
-| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:admin` | MCP       |
+| Action                 | Access                                                                                                                       | Transport |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `setupStatus`          | Public                                                                                                                       | HTTP      |
+| `setupOwner`           | Public; succeeds only before an owner exists                                                                                 | HTTP      |
+| `verifyApiKey`         | Bearer API key scoped to the requested resource                                                                              | HTTP      |
+| Administration actions | Owner session cookie (SameSite)                                                                                              | HTTP      |
+| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:read` to list, or `clankerauth:write` for everything | MCP       |
 
 Issuer actions use the `issuer` group; owner operations use `administration`. The
 dashboard uses the direct typed action client. HTTP schema-error handling returns
@@ -148,8 +148,9 @@ validation/internal-error messages. Successful tool results use `structuredConte
 
 Point an OAuth-capable MCP client at `<CLANKERAUTH_BASE_URL>/mcp`. The client discovers
 this issuer, registers using CIMD or DCR, and opens the owner login and consent
-page. Approving the `clankerauth:admin` scope grants full administration access, including
-client and API-key creation. Create and rotate operations return secrets once.
+page. `clankerauth:read` allows the listing tools: clients, resources, connections and
+API-key metadata. `clankerauth:write` allows every tool, including client and API-key
+creation, and so amounts to access to every resource. Untick `clankerauth:write` on the consent screen to give an agent read-only access. Create and rotate operations return secrets once.
 No separate dashboard grant is needed.
 
 For browser-hosted MCP clients, add their origins to the server environment:
@@ -166,16 +167,16 @@ cookies. Native and server clients that send no Origin need no allowlist entry.
 This setting does not grant OAuth access or relax the dashboard's cookie policy.
 
 The built-in **clankerauth administration** resource is created at startup.
-Its display name can be changed; its identifier and scope are fixed, and the
-resource cannot be deleted. Protected-resource metadata
-is public at `/.well-known/oauth-protected-resource/mcp` and advertises `clankerauth:admin`
-and `offline_access`. Clients must send the resource parameter during authorization
-and token exchange. The authentication challenge requests only `clankerauth:admin`. Clients
+It is fixed: every start restores its name and scopes, and it cannot be edited or deleted. Protected-resource metadata
+is public at `/.well-known/oauth-protected-resource/mcp` and advertises `clankerauth:read`,
+`clankerauth:write` and `offline_access`. Clients must send the resource parameter during authorization
+and token exchange. The authentication challenge requests both administration scopes, so
+the owner decides at consent. Clients
 that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with scope `clankerauth:admin`, and their client must still exist and not be blocked. **Block client** and deletion therefore end MCP access on the next request; **Revoke authorization** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
+Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` fails with `Forbidden`. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
 session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
@@ -190,7 +191,7 @@ curl "$CLANKERAUTH_BASE_URL/api/administration/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See the breaking [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

@@ -111,6 +111,12 @@ export const ClientUpdateInput = Schema.Struct({
 
 export const ClientId = Schema.Struct({ client_id: Schema.String });
 
+/** Without a resource, every authorization the client holds. */
+export const ClientRevokeInput = Schema.Struct({
+  client_id: Schema.String,
+  resource: Schema.optional(Schema.String),
+});
+
 export const ClientBlockInput = Schema.Struct({
   client_id: Schema.String,
   blocked: Schema.Boolean,
@@ -165,6 +171,20 @@ export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.S
  * the host's time zone; every value this issuer writes carries `Z`.
  */
 const Timestamp = Schema.DateTimeUtcFromString;
+
+/**
+ * What a client holds for one resource: a consent, a live refresh token, or both. A
+ * managed client skips consent, so `approvedAt` is null for it and it shows only while it
+ * holds a refresh token. `scopes` are the consent's, else the newest token's.
+ * `refreshedAt` is when the newest live refresh token was issued, at sign-in or on refresh.
+ */
+export const Connection = Schema.Struct({
+  client_id: Schema.String,
+  resource: Schema.String,
+  scopes: Schema.Array(Schema.String),
+  approvedAt: Schema.NullOr(Timestamp),
+  refreshedAt: Schema.NullOr(Timestamp),
+});
 
 export const ApiKeyInput = Schema.Struct({
   name: Schema.String,
@@ -236,6 +256,7 @@ export const ClientListResult = Schema.Struct({
   clients: Schema.Array(Client),
   resources: Schema.Array(ResourceSummary),
   clientAccess: Schema.Array(ClientAccess),
+  connections: Schema.Array(Connection),
   email: Schema.String,
   issuer: Schema.String,
 });
@@ -243,7 +264,8 @@ export const ClientListResult = Schema.Struct({
 export const Administration = ActionGroup.make(
   { name: "administration", errors, schemaError },
   Action.make("listClients", {
-    description: "List clients, resources and access grants.",
+    description:
+      "List clients, resources, managed clients' resource access (what they may obtain), and every client's connections (what it holds).",
     access: "read",
     success: ClientListResult,
   }),
@@ -260,15 +282,17 @@ export const Administration = ActionGroup.make(
     success: Client,
   }),
   Action.make("deleteClient", {
-    description: "Delete a first-party OAuth client.",
+    description:
+      "Delete a client and its stored authorization. An automatic client can register again; block it to keep it out.",
     access: "write",
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
   Action.make("revokeClient", {
-    description: "Revoke a client’s authorization grants.",
+    description:
+      "Revoke a client’s stored authorization, for one resource or all. It must authorize again; an automatic client asks for consent.",
     access: "write",
-    input: ClientId,
+    input: ClientRevokeInput,
     success: Schema.Struct({ revoked: Schema.Boolean }),
   }),
   Action.make("blockClient", {
@@ -284,7 +308,8 @@ export const Administration = ActionGroup.make(
     success: ClientCredentials,
   }),
   Action.make("setClientAccess", {
-    description: "Set the resources a client may request.",
+    description:
+      "Set the resources a managed client may obtain. Removing one revokes its authorization for it. Automatic clients may ask for any resource with consent.",
     access: "write",
     input: ClientAccessInput,
     success: ClientAccessResult,
@@ -303,7 +328,7 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("deleteResource", {
     description:
-      "Delete a resource and its client-resource links. Stored authorization grants and API-key permissions are retained; recreating the resource can restore access.",
+      "Delete a resource, its client access and every client’s authorization for it. API-key permissions are retained; recreating the resource restores them.",
     access: "write",
     input: ResourceId,
     success: Schema.Struct({ deleted: Schema.Boolean }),

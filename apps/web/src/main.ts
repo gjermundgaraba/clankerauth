@@ -9,6 +9,7 @@ import {
   errors,
   type Client,
   type ClientCredentials,
+  type Connection,
   type MachineKey,
   type ResourceSummary,
 } from "@clankerauth/admin-api";
@@ -20,6 +21,8 @@ type ClientView = typeof Client.Type;
 type ResourceView = typeof ResourceSummary.Type;
 
 type KeyView = typeof MachineKey.Type;
+
+type ConnectionView = typeof Connection.Type;
 
 const api = ActionHttpClient.promise(Http);
 
@@ -191,10 +194,11 @@ async function consent() {
     <label>Callback destination<code>${escape(redirect ?? "Not supplied in this request")}</code></label>
     <p class="help">The client supplies its display name. Review the identifier and callback before approving.</p>
     <div class="resource"><span class="eyebrow">ONLY FOR THIS RESOURCE</span>${resources.map((r) => `<code>${escape(r)}</code>`).join("")}</div>
-    <h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><span>✓</span><code>${escape(scope)}</code></li>`).join("")}</ul>
+    <form id="consent"><h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><label class="checkbox"><input type="checkbox" name="scope" value="${escape(scope)}" checked><code>${escape(scope)}</code></label></li>`).join("")}</ul>
+    <p class="help">Untick anything this Client should not get. It receives only what stays ticked.</p>
     ${query.has("claims") ? `<h3>Additional identity claims</h3><pre>${escape(query.get("claims")!)}</pre>` : ""}
     <p class="help">Access tokens expire after fifteen minutes. Offline access lets the Client renew them until you revoke its authorization.</p>
-    <p id="message" role="alert"></p><form id="consent"><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
+    <p id="message" role="alert"></p><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
   const form = document.querySelector<HTMLFormElement>("#consent")!;
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -204,8 +208,17 @@ async function consent() {
       throw new Error("Consent must be decided with the Allow or Deny button.");
 
     const accept = submitter.value === "allow";
+
+    const granted = Array.from(new FormData(form).getAll("scope"), String);
+
     void submit(async () => {
-      const result = await auth.oauth2.consent({ accept });
+      // The provider refuses an empty scope, and leaving it out approves what was requested.
+      if (accept && scopes.length && !granted.length)
+        throw new Error("Tick at least one permission, or deny the request.");
+
+      const result = await auth.oauth2.consent(
+        accept && granted.length ? { accept, scope: granted.join(" ") } : { accept },
+      );
 
       if (result.error)
         throw new Error("Authorization could not be completed. Restart from your application.");
@@ -364,14 +377,15 @@ const keyChoices = (
     )
     .join("") || '<p class="help">Add a Resource to grant access.</p>';
 
-const resourceCard = (resource: ResourceView, dependents: readonly ClientView[]) =>
+const resourceCard = (resource: ResourceView, connected: readonly ClientView[]) =>
   `<article class="resource"><h3>${escape(resource.name)}</h3>${resourceSummary(resource)}
-  <p class="help dependencies">Managed Clients with access: ${dependents.length ? dependents.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
-  ${resource.builtIn ? '<p class="help">Built-in administration resource. OAuth access tokens are required; its scopes and identifier are fixed.</p>' : ""}
-  <details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label>
-  ${resource.builtIn ? "" : `<label>Scopes<input name="scopes" value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but stored grants are kept and work again if the scope is restored.</p>`}
-  <button>Save resource</button></form></details>
-  ${resource.builtIn ? "" : `<button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`}</article>`;
+  <p class="help dependencies">Connected Clients: ${connected.length ? connected.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
+  ${
+    resource.builtIn
+      ? '<p class="help">Built-in administration resource, fixed. OAuth access tokens are required. clankerauth:read allows listing; clankerauth:write also allows every change.</p>'
+      : `<details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but approvals are kept and work again if the scope is restored.</p><button>Save resource</button></form></details>
+  <button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`
+  }</article>`;
 
 const resourceForm = () =>
   `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application\u2019s origin root with its trailing slash.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
@@ -392,42 +406,53 @@ const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
 const keyForm = (resources: readonly ResourceView[]) =>
   `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
 
+const when = (value: DateTime.Utc) =>
+  escape(DateTime.formatLocal(value, { dateStyle: "medium", timeStyle: "short" }));
+
+const connectionRow = (connection: ConnectionView, resources: readonly ResourceView[]) => {
+  const resource = resources.find((resource) => resource.identifier === connection.resource);
+
+  const history = [
+    connection.approvedAt ? `Approved ${when(connection.approvedAt)}` : "First party, no consent",
+    connection.refreshedAt ? `last token ${when(connection.refreshedAt)}` : "no refresh token",
+  ].join(" · ");
+
+  return `<div class="allowed-resource connection"><strong>${escape(resource?.name ?? connection.resource)}</strong><code>${escape(connection.resource)}</code><span class="muted">${escape(connection.scopes.join(" · ") || "No Resource scopes")}</span><p class="help">${history}</p><button class="secondary" data-disconnect="${escape(connection.client_id)}" data-resource="${escape(connection.resource)}">Revoke</button></div>`;
+};
+
 const clientCard = (
   client: ClientView,
   resources: readonly ResourceView[],
   allowed: readonly string[],
+  connections: readonly ConnectionView[],
 ) => {
   const managed = isManaged(client);
   const id = escape(client.client_id);
 
-  const eligible =
-    resources
-      .flatMap((resource) =>
-        allowed.includes(resource.identifier)
-          ? [
-              `<div class="allowed-resource"><strong>${escape(resource.name)}</strong>${resourceSummary(resource)}</div>`,
-            ]
-          : [],
-      )
-      .join("") || '<p class="help">No Resource access configured.</p>';
+  const connected =
+    connections.map((connection) => connectionRow(connection, resources)).join("") ||
+    `<p class="help">${managed ? "Holds no refresh token." : "No Resource approved yet."}</p>`;
 
-  const access = `<details><summary>Manage access</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">${managed ? "" : "Automatic Clients receive access to new Resources; each still needs your consent. "}Removing access stops new authorization and refresh; use Revoke authorization to clear issued grants.</p><button>Save access</button></form></details>`;
+  // Automatic clients may ask for any Resource; consent decides.
+  const access = managed
+    ? `<details><summary>Allowed Resources · ${allowed.length} of ${resources.length}</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">This Client skips consent for the Resources ticked here. Unticking one revokes its authorization for it.</p><button>Save access</button></form></details>`
+    : '<p class="help">May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.</p>';
 
   const edit = managed
     ? `<details><summary>Edit client</summary><form data-client-edit="${id}"><label>Client name<input name="name" required maxlength="100" value="${escape(client.client_name ?? "")}"></label><label>Redirect URIs (one per line)<textarea name="redirect_uris" required rows="3">${escape(client.redirect_uris.join("\n"))}</textarea></label><label class="checkbox"><input type="checkbox" name="native" ${client.application_type === "native" ? "checked" : ""}>Native / desktop client (loopback redirect)</label><p class="help">The authentication method is fixed at registration.</p><button>Save client</button></form></details>`
     : "";
 
   const actions = [
-    `<button class="secondary" data-revoke="${id}">Revoke authorization</button>`,
+    `<button class="secondary" data-revoke="${id}">Revoke all</button>`,
     `<button class="secondary" data-block="${id}" data-blocked="${client.blocked ? "true" : "false"}">${client.blocked ? "Unblock client" : "Block client"}</button>`,
     managed && client.token_endpoint_auth_method !== "none"
       ? `<button class="secondary" data-rotate="${id}">Rotate secret</button>`
       : "",
-    managed ? `<button class="danger" data-delete="${id}">Delete client</button>` : "",
+    `<button class="danger" data-delete="${id}" data-managed="${managed}">Delete client</button>`,
   ].join("");
 
   return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URIs${client.redirect_uris.map((uri) => `<code>${escape(uri)}</code>`).join("")}</label>
-  <h3>${managed ? "Allowed Resources" : "Resources eligible for consent"}</h3>${eligible}${access}${edit}<div class="actions">${actions}</div></article>`;
+  <h3>Connections</h3>${connected}${access}${edit}<div class="actions">${actions}</div></article>`;
 };
 
 const registerForm = (resources: readonly ResourceView[]) =>
@@ -452,6 +477,9 @@ async function dashboard() {
       .filter((access) => access.client_id === clientId)
       .map((access) => access.resource);
 
+  const connections = (clientId: string) =>
+    data.connections.filter((connection) => connection.client_id === clientId);
+
   main.className = "dashboard";
   main.innerHTML = `
     <div class="page-title"><div><p class="eyebrow">CONTROL PLANE</p><h1>Clients and Resources</h1><p class="muted">Signed in as ${escape(data.email)}</p></div><button id="logout" class="secondary">Sign out</button></div>
@@ -467,9 +495,10 @@ async function dashboard() {
         .map((resource) =>
           resourceCard(
             resource,
-            data.clients.filter(
-              (client) =>
-                isManaged(client) && allowed(client.client_id).includes(resource.identifier),
+            data.clients.filter((client) =>
+              connections(client.client_id).some(
+                (connection) => connection.resource === resource.identifier,
+              ),
             ),
           ),
         )
@@ -493,7 +522,9 @@ async function dashboard() {
       data.clients.length,
       "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking or blocking stops new authorization and refresh at once; already-issued access tokens stay valid until they expire, at most fifteen minutes.",
       data.clients
-        .map((client) => clientCard(client, resources, allowed(client.client_id)))
+        .map((client) =>
+          clientCard(client, resources, allowed(client.client_id), connections(client.client_id)),
+        )
         .join("") ||
         empty(
           "No Clients registered",
@@ -595,15 +626,10 @@ async function dashboard() {
 
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]"))
     onSubmit(edit, async (target) => {
-      const resource = resources.find(
-        (resource) => resource.identifier === target.dataset.resourceEdit,
-      )!;
-
       await request(
         api.administration.updateResource({
           identifier: target.dataset.resourceEdit!,
-          name: textField(new FormData(target), "name"),
-          scopes: resource.builtIn ? resource.scopes : resourceFields(new FormData(target)).scopes,
+          ...resourceFields(new FormData(target)),
         }),
       );
       await refreshDashboard();
@@ -637,7 +663,7 @@ async function dashboard() {
 
       if (removed.length)
         confirmed(
-          `Remove access to ${removed.join(", ")}? Stored consent remains until revoked.`,
+          `Remove access to ${removed.join(", ")}? This revokes the Client\u2019s authorization for ${removed.length === 1 ? "it" : "them"}.`,
           save,
         );
       else void submit(save);
@@ -664,10 +690,24 @@ async function dashboard() {
   });
   onClick("[data-revoke]", (button) => {
     const client_id = button.dataset.revoke!;
-    confirmed("Revoke this Client’s authorization? It can request consent again.", async () => {
-      await request(api.administration.revokeClient({ client_id }));
-      await refreshDashboard();
-    });
+    confirmed(
+      "Revoke all of this Client’s authorization? It must authorize again, and an automatic Client asks for consent.",
+      async () => {
+        await request(api.administration.revokeClient({ client_id }));
+        await refreshDashboard();
+      },
+    );
+  });
+  onClick("[data-disconnect]", (button) => {
+    const client_id = button.dataset.disconnect!;
+    const resource = button.dataset.resource!;
+    confirmed(
+      `Revoke this Client’s authorization for ${resource}? It must authorize again, and an automatic Client asks for consent.`,
+      async () => {
+        await request(api.administration.revokeClient({ client_id, resource }));
+        await refreshDashboard();
+      },
+    );
   });
   onClick("[data-block]", (button) => {
     const client_id = button.dataset.block!;
@@ -691,7 +731,13 @@ async function dashboard() {
   });
   onClick("[data-delete]", (button) => {
     const client_id = button.dataset.delete!;
-    confirmed("Delete this Client and its grants?", async () => {
+
+    const prompt =
+      button.dataset.managed === "true"
+        ? "Delete this Client and its authorization?"
+        : "Forget this Client and its authorization? It can register again; block it to keep it out.";
+
+    confirmed(prompt, async () => {
       await request(api.administration.deleteClient({ client_id }));
       pendingCredentials.delete(client_id);
       renderCredentials();
@@ -701,7 +747,7 @@ async function dashboard() {
   onClick("[data-resource-delete]", (button) => {
     const identifier = button.dataset.resourceDelete!;
     confirmed(
-      `Delete Resource ${identifier}? Stored grants are kept and may become usable again if it is recreated.`,
+      `Delete Resource ${identifier}? Every Client\u2019s authorization for it is revoked; API-key grants are kept.`,
       async () => {
         await request(api.administration.deleteResource({ identifier }));
         await refreshDashboard();

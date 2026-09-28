@@ -755,7 +755,6 @@ describe("OAuth boundaries and lifecycle", () => {
     const invalidRequests: Record<string, string>[] = [
       { code_challenge_method: "plain" },
       { redirect_uri: "http://127.0.0.1:9876/evil" },
-      { resource: resourceB },
       { resource: "" },
     ];
 
@@ -773,6 +772,30 @@ describe("OAuth boundaries and lifecycle", () => {
     );
 
     expect((await multiple.json()).error).toBe("invalid_target");
+
+    // A resource outside a managed client's access is refused by the issuer itself, as
+    // JSON rather than a redirect to the client, even for silent authorization.
+    const unallowed = await request(
+      authorization(app.client_id, resourceB, { prompt: "none" }).path,
+    );
+
+    expect(unallowed.status).toBe(400);
+    expect(await unallowed.json()).toMatchObject({
+      error: "invalid_target",
+      error_description: "Client access is required",
+    });
+
+    // A forced consent screen is shown before client access is checked; approving it
+    // for a resource the client lacks is refused before any consent or code exists.
+    const forced = await request(authorization(app.client_id, resourceB).path);
+    const consentQuery = new URL(forced.headers.get("location")!, settings.baseURL).search;
+
+    const refused = await request("/api/auth/oauth2/consent", {
+      accept: true,
+      oauth_query: consentQuery.slice(1),
+    });
+
+    expect((await refused.json()).error).toBe("invalid_target");
     const grant = await authorize(app.client_id);
 
     const wrongVerifier = await request(
@@ -1042,7 +1065,7 @@ describe("dashboard resources and client access", () => {
     expect(reserved.status).toBe(400);
     expect(await reserved.json()).toEqual(
       Schema.encodeSync(BadRequest)(
-        new BadRequest({ error: "The administration Resource is reserved" }),
+        new BadRequest({ error: "The administration Resource is fixed" }),
       ),
     );
 
@@ -1333,32 +1356,31 @@ describe("dashboard resources and client access", () => {
     expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
   });
 
-  test("unlink denies access while re-add restores retained grants and consent", async () => {
+  test("removing access revokes that resource's authorization and leaves the others", async () => {
     const app = await client();
     expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
     const issuedA = await tokens(app.client_id, resourceA);
     const issuedB = await tokens(app.client_id, resourceB);
     const pendingA = await authorize(app.client_id, resourceA);
 
-    const consentsBefore = await Effect.runPromise(
-      service.sql`SELECT * FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY id`,
-    );
+    const consents = () =>
+      Effect.runPromise(
+        service.sql`SELECT referenceId FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
+      );
 
+    const consentsBefore = await consents();
+    expect(consentsBefore).toContainEqual({ referenceId: `resource:${resourceA}` });
     expect((await access(app.client_id, [resourceB])).status).toBe(200);
-    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
-    expect(
-      await Effect.runPromise(
-        service.sql`SELECT * FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY id`,
-      ),
-    ).toEqual(consentsBefore);
-    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(200);
-    expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(200);
-    expect((await refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
-    const again = await request(authorization(app.client_id, resourceA, { prompt: "none" }).path);
-    expect(new URL(again.headers.get("location")!, settings.baseURL).searchParams.has("code")).toBe(
-      true,
+    expect(await consents()).toEqual(
+      consentsBefore.filter((row) => row.referenceId !== `resource:${resourceA}`),
     );
+    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
+
+    // Restoring access does not revive what removal revoked.
+    expect((await access(app.client_id, [resourceA, resourceB])).status).toBe(200);
+    expect((await refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
+    expect((await exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
+    expect((await refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
 
     const unaffected = await request(
       authorization(app.client_id, resourceB, {

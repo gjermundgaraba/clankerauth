@@ -12,6 +12,8 @@ import { Conflict } from "@clankerauth/admin-api";
 import { forwardTokens } from "./forward-auth.ts";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { clientStore } from "./clients.ts";
+import { resourceReference } from "./grants.ts";
+import { upgrade } from "./upgrades.ts";
 import {
   getOAuthProviderState,
   oauthProvider,
@@ -20,13 +22,7 @@ import {
 import { provider } from "./api-errors.ts";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
-import {
-  mcpResource,
-  mcpScope,
-  protocolScopes,
-  resourceReference,
-  resourceStore,
-} from "./resources.ts";
+import { administrationScopes, mcpResource, protocolScopes, resourceStore } from "./resources.ts";
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
@@ -59,7 +55,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
   );
 
   const { sql } = database;
-  const clients = clientStore(database.kysely);
+  const clients = clientStore(database.kysely, sql);
 
   // Setup creates the only account, so the owner is whichever user exists.
   const owner = Effect.fn("Auth.owner")(function* () {
@@ -74,14 +70,15 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     loginPage: "/login",
     consentPage: "/consent",
     scopes: [...protocolScopes],
-    // The provider seeds this once and never reverts the owner's later name edits.
+    // The administration resource is fixed: every start re-applies its name and scopes.
     resources: [
       {
         identifier: mcpResource(settings.baseURL),
         name: "clankerauth administration",
-        allowedScopes: [...protocolScopes, mcpScope],
+        allowedScopes: [...protocolScopes, administrationScopes.read, administrationScopes.write],
       },
     ],
+    resourceSeedMode: "merge",
     rateLimit: { register: { window: 60, max: 10 } },
     postLogin: {
       page: "/consent",
@@ -118,8 +115,10 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
     clientRegistrationRequirePKCE: true,
-    clientRegistrationDefaultResources: Array<string>(),
-    enforcePerClientResources: true,
+    // Client access is enforced by consentReferenceId above, where an automatic client
+    // may ask for any resource and a managed one only for its own. The provider's check
+    // would need every automatic client linked to every resource.
+    enforcePerClientResources: false,
     accessTokenExpiresIn: accessTokenLifetime,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
     // A retried refresh inside the window replays the same replacement instead of revoking the family.
@@ -132,11 +131,11 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
   });
 
   const resources = yield* resourceStore(
+    database.kysely,
     sql,
     () => auth,
-    (scopes, identifiers) => {
+    (scopes) => {
       oauthPlugin.options.scopes = scopes;
-      oauthPlugin.options.clientRegistrationDefaultResources = identifiers;
     },
     mcpResource(settings.baseURL),
   );
@@ -184,6 +183,10 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
             })
           )
             ctx.body.application_type = "native";
+
+          // Automatic clients may ask for any resource with consent, so a registration's
+          // own resource list means nothing here; the provider would refuse it instead.
+          delete ctx.body.resources;
         }
       }),
     },
@@ -233,6 +236,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     if (plan.schemaProblems.length)
       return yield* Effect.fail(new Error("Database schema requires manual repair"));
     yield* Effect.tryPromise(() => plan.runMigrations());
+    yield* upgrade(database.kysely, sql);
     const auth = betterAuth(options);
     // Provider initialization seeds the administration resource; publish the catalog after it.
     const context = yield* Effect.tryPromise(() => auth.$context);

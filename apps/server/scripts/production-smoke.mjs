@@ -125,7 +125,7 @@ try {
   const builtin = {
     identifier: `${baseURL}/mcp`,
     name: "clankerauth administration",
-    scopes: ["clankerauth:admin"],
+    scopes: ["clankerauth:read", "clankerauth:write"],
     builtIn: true,
   };
 
@@ -169,14 +169,18 @@ try {
   ).json();
 
   assert.equal(protectedResource.resource, builtin.identifier);
-  assert.deepEqual(protectedResource.scopes_supported, ["clankerauth:admin", "offline_access"]);
+  assert.deepEqual(protectedResource.scopes_supported, [
+    "clankerauth:read",
+    "clankerauth:write",
+    "offline_access",
+  ]);
   const verifier = randomBytes(32).toString("base64url");
 
   const query = new URLSearchParams({
     client_id: registered.client_id,
     redirect_uri: "http://127.0.0.1:49152/callback",
     response_type: "code",
-    scope: "clankerauth:admin offline_access",
+    scope: "clankerauth:read clankerauth:write offline_access",
     resource: builtin.identifier,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",

@@ -113,7 +113,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   expect(await metadata.json()).toMatchObject({
     resource: `${baseURL}/mcp`,
     authorization_servers: [`${baseURL}/api/auth`],
-    scopes_supported: ["clankerauth:admin", "offline_access"],
+    scopes_supported: ["clankerauth:read", "clankerauth:write", "offline_access"],
     bearer_methods_supported: ["header"],
   });
 
@@ -164,6 +164,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
         },
       });
 
+      console.log("CREATED", JSON.stringify(created.content));
       expect(created.isError).toBe(false);
       expect(created.structuredContent).toMatchObject({
         value: { client_secret: expect.any(String) },
@@ -313,11 +314,15 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
   const denied = await mcp(insufficient.tokens.access_token);
   expect(denied.status).toBe(403);
   expect(denied.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
-  expect(denied.headers.get("www-authenticate")).toContain('scope="clankerauth:admin"');
+  expect(denied.headers.get("www-authenticate")).toContain('scope="clankerauth:read"');
   const valid = await mcpOAuthGrant(handle, baseURL, cookie);
   const parts = valid.tokens.access_token.split(".");
   parts[1] = Buffer.from(
-    JSON.stringify({ sub: "not-owner", aud: `${baseURL}/mcp`, scope: "clankerauth:admin" }),
+    JSON.stringify({
+      sub: "not-owner",
+      aud: `${baseURL}/mcp`,
+      scope: "clankerauth:read clankerauth:write",
+    }),
   ).toString("base64url");
   expect((await mcp(parts.join("."))).status).toBe(401);
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -325,17 +330,88 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
   expect((await mcp(valid.tokens.access_token)).status).toBe(401);
 });
 
-test("administration resource permits persistent renaming but reserves its scopes and identity", async () => {
+test("the administration resource is fixed, and every start restores it", async () => {
   const resource = administrationResource(baseURL);
   expect((await admin("createResource", resource)).status).toBe(400);
-  expect((await admin("updateResource", { ...resource, scopes: ["everything"] })).status).toBe(400);
+  expect((await admin("updateResource", { ...resource, name: "Renamed" })).status).toBe(400);
   expect((await admin("deleteResource", { identifier: resource.identifier })).status).toBe(400);
-  const renamed = { ...resource, name: "My administration" };
-  expect((await admin("updateResource", renamed)).status).toBe(200);
+  await Effect.runPromise(
+    issuer.service
+      .sql`UPDATE oauthResource SET name = 'Tampered', allowedScopes = ${JSON.stringify(["offline_access"])} WHERE identifier = ${resource.identifier}`,
+  );
   await handle.dispose();
   issuer = await issuer.reopen();
   handle = application(issuer.service);
-  expect((await (await admin("listClients", {})).json()).resources).toEqual([renamed]);
+  expect((await (await admin("listClients", {})).json()).resources).toEqual([resource]);
+});
+
+test("a read token may only list, a write token may do anything, and neither admits nothing", async () => {
+  // The client asks for both; the owner unticks write at consent.
+  const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie, {
+    granted: "offline_access clankerauth:read",
+  });
+
+  expect(tokens.scope).toBe("offline_access clankerauth:read");
+
+  const { connections } = await (await admin("listClients", {})).json();
+  expect(
+    connections.find((connection: { client_id: string }) => connection.client_id === client_id)
+      ?.scopes,
+  ).toEqual(["clankerauth:read"]);
+
+  await withMcpClient(
+    {
+      fetch: handle,
+      path: "/mcp",
+      baseUrl: baseURL,
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    },
+    async (client) => {
+      expect((await client.callTool({ name: "listClients", arguments: {} })).isError).toBe(false);
+      expect((await client.callTool({ name: "listApiKeys", arguments: {} })).isError).toBe(false);
+
+      const refused = await client.callTool({
+        name: "createApiKey",
+        arguments: { name: "Escalation", permissions: {}, expiresAt: null },
+      });
+
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(refused.content)).toContain("clankerauth:write");
+    },
+  );
+  expect((await (await admin("listApiKeys", {})).json()).keys).toEqual([]);
+
+  // Write allows everything, listing included.
+  const writeOnly = await mcpOAuthGrant(handle, baseURL, cookie, {
+    scope: "offline_access clankerauth:write",
+  });
+
+  await withMcpClient(
+    {
+      fetch: handle,
+      path: "/mcp",
+      baseUrl: baseURL,
+      headers: { authorization: `Bearer ${writeOnly.tokens.access_token}` },
+    },
+    async (client) => {
+      expect((await client.callTool({ name: "listClients", arguments: {} })).isError).toBe(false);
+
+      const revoked = await client.callTool({
+        name: "revokeClient",
+        arguments: { client_id: writeOnly.client_id },
+      });
+
+      expect(revoked.isError).toBe(false);
+    },
+  );
+
+  // A token with neither scope is refused at admission, with a challenge naming read.
+  const neither = await mcpOAuthGrant(handle, baseURL, cookie, { scope: "offline_access" });
+  const refused = await mcp(neither.tokens.access_token);
+
+  expect(refused.status).toBe(403);
+  expect(refused.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+  expect(refused.headers.get("www-authenticate")).toContain('scope="clankerauth:read"');
 });
 
 test.each(["block", "revoke"] as const)(
@@ -364,7 +440,7 @@ test.each(["block", "revoke"] as const)(
             redirect_uri: "http://127.0.0.1:9876/callback",
             response_type: "code",
             resource: `${baseURL}/mcp`,
-            scope: "clankerauth:admin",
+            scope: "clankerauth:read clankerauth:write",
             code_challenge: "x".repeat(43),
             code_challenge_method: "S256",
             state: "blocked",
@@ -426,6 +502,7 @@ test("MCP protocol and owner-identity operations do not acquire provider session
         },
       });
 
+      console.log("CREATED", JSON.stringify(created.content));
       expect(created.isError).toBe(false);
 
       const key = Schema.decodeUnknownSync(

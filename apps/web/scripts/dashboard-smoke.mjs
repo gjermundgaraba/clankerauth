@@ -28,6 +28,7 @@ try {
   const calls = [];
   const registrations = [];
   const keyUpdates = [];
+  const revocations = [];
 
   const resource = {
     builtIn: false,
@@ -51,6 +52,7 @@ try {
     clients: [],
     resources: [],
     clientAccess: [],
+    connections: [],
   };
 
   const ok = (body, status = 200) => ({ status, json: body });
@@ -145,8 +147,7 @@ try {
           );
 
           assert.ok(previous);
-
-          if (previous.builtIn) assert.deepEqual(payload.scopes, ["clankerauth:admin"]);
+          assert.equal(previous.builtIn, false);
           data.resources = data.resources.map((resource) =>
             resource.identifier === payload.identifier ? { ...resource, ...payload } : resource,
           );
@@ -172,6 +173,7 @@ try {
           break;
         case "POST /api/administration/revokeClient":
           assert.equal(request.postDataJSON().client_id, data.clients[0].client_id);
+          revocations.push(request.postDataJSON());
           response = ok({ revoked: true });
           break;
         case "POST /api/administration/blockClient": {
@@ -297,7 +299,7 @@ try {
       {
         identifier: `${origin}/mcp`,
         name: "clankerauth administration",
-        scopes: ["clankerauth:admin"],
+        scopes: ["clankerauth:read", "clankerauth:write"],
         builtIn: true,
       },
     ],
@@ -310,17 +312,21 @@ try {
   await waitForIdle();
   assert.equal(await retry.count(), 0);
   assert.equal(await page.locator("#message").textContent(), "");
-  const builtInEdit = page.locator(`[data-resource-edit="${origin}/mcp"]`);
-  await builtInEdit.locator("..").getByText("Edit resource", { exact: true }).click();
-  assert.equal(await builtInEdit.locator('[name="scopes"]').count(), 0);
-  await builtInEdit.locator('[name="name"]').fill("My administration");
-  await builtInEdit.getByRole("button", { name: "Save resource", exact: true }).click();
-  await page.getByRole("heading", { name: "My administration", exact: true }).waitFor();
-  await waitForIdle();
+  // The built-in administration resource is fixed and cannot carry API-key grants.
+  assert.equal(await page.locator(`[data-resource-edit="${origin}/mcp"]`).count(), 0);
   assert.equal(
-    await page.locator("#key-create").getByText("My administration", { exact: true }).count(),
+    await page
+      .locator("#key-create")
+      .getByText("clankerauth administration", { exact: true })
+      .count(),
     0,
   );
+  const fixtureEdit = page.locator(`[data-resource-edit="${resource.identifier}"]`);
+  await fixtureEdit.locator("..").getByText("Edit resource", { exact: true }).click();
+  await fixtureEdit.locator('[name="name"]').fill("Renamed fixture");
+  await fixtureEdit.getByRole("button", { name: "Save resource", exact: true }).click();
+  await page.getByRole("heading", { name: "Renamed fixture", exact: true }).waitFor();
+  await waitForIdle();
   assert.equal(await page.locator("[data-resource-delete]").count(), 1);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
   assert.equal(
@@ -428,18 +434,38 @@ try {
     ...data,
     clients: [automatic],
     clientAccess: [{ client_id: automatic.client_id, resource: resource.identifier }],
+    connections: [
+      {
+        client_id: automatic.client_id,
+        resource: resource.identifier,
+        scopes: ["fixture:read"],
+        approvedAt: "2026-09-10T12:00:00.000Z",
+        refreshedAt: null,
+      },
+    ],
   };
   listResponse = async () => ok(data);
   await retry.click();
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
   await waitForIdle();
   assert.match(await page.locator(".client").textContent(), /Client ID Metadata Document/);
-  assert.equal(await page.locator("[data-client-edit], [data-delete], [data-rotate]").count(), 0);
-  assert.equal(await page.locator("[data-client-access]").count(), 1);
+  assert.match(await page.locator(".connection").textContent(), /Approved .* no refresh token/);
+  assert.match(
+    await page.locator(".resource").first().textContent(),
+    /Connected Clients: Existing client/,
+  );
+  assert.equal(await page.locator("[data-client-edit], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-delete]").count(), 1);
+  assert.equal(await page.locator("[data-client-access]").count(), 0);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
-  await page.getByRole("button", { name: "Revoke authorization", exact: true }).click();
+  await page.getByRole("button", { name: "Revoke", exact: true }).click();
   await waitForIdle();
-  assert.equal(count("POST /api/administration/revokeClient"), 1);
+  await page.getByRole("button", { name: "Revoke all", exact: true }).click();
+  await waitForIdle();
+  assert.deepEqual(revocations, [
+    { client_id: automatic.client_id, resource: resource.identifier },
+    { client_id: automatic.client_id },
+  ]);
   await page.getByRole("button", { name: "Block client", exact: true }).click();
   await page.getByRole("button", { name: "Unblock client", exact: true }).waitFor();
   await waitForIdle();
@@ -452,7 +478,7 @@ try {
   await page.reload();
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
   assert.match(await page.locator(".client").textContent(), /Dynamic registration/);
-  assert.equal(await page.locator("[data-client-edit], [data-delete], [data-rotate]").count(), 0);
+  assert.equal(await page.locator("[data-client-edit], [data-rotate]").count(), 0);
 
   // API keys preserve explicit scope selection and show plaintext only until acknowledged.
   const keyForm = page.locator("#key-create");
@@ -536,7 +562,7 @@ try {
   // Consent renders the actual identifier/callback and escapes client-supplied display names.
   const callback = "http://127.0.0.1:43129/callback";
   await page.goto(
-    `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "fixture:read", sig: "fixture" })}`,
+    `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "offline_access fixture:read", sig: "fixture" })}`,
   );
   await page.getByRole("heading", { name: "Allow this connection?" }).waitFor();
   const consent = await page.locator(".consent").textContent();
@@ -553,15 +579,26 @@ try {
   protocol.on("Page.frameRequestedNavigation", (event) => {
     if (event.url === callback) navigations.push(event);
   });
-  await page.route(`${origin}/api/auth/oauth2/consent`, (route) =>
-    route.fulfill(ok({ redirect: true, url: callback })),
-  );
+  const approvals = [];
+  await page.route(`${origin}/api/auth/oauth2/consent`, (route) => {
+    approvals.push(route.request().postDataJSON());
+
+    return route.fulfill(ok({ redirect: true, url: callback }));
+  });
+  // Unticking every permission is refused before anything is sent.
+  await page.locator('.consent [name="scope"][value="offline_access"]').uncheck();
+  await page.locator('.consent [name="scope"][value="fixture:read"]').uncheck();
+  await page.getByRole("button", { name: "Allow access", exact: false }).click();
+  await page.locator("#message").filter({ hasText: "Tick at least one permission" }).waitFor();
+  // A narrowed approval names only what stays ticked.
+  await page.locator('.consent [name="scope"][value="fixture:read"]').check();
   await page.route(callback, (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Application callback</h1>" }),
   );
   await page.getByRole("button", { name: "Allow access", exact: false }).click();
   await page.getByRole("heading", { name: "Application callback" }).waitFor();
   assert.equal(navigations.length, 1, "consent must navigate to the callback exactly once");
+  assert.deepEqual(approvals, [{ accept: true, scope: "fixture:read" }]);
   await protocol.detach();
   assert.deepEqual(errors, []);
   console.log("Dashboard browser regressions passed.");

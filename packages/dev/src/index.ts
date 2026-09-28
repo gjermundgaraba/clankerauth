@@ -243,6 +243,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
             Effect.provideService(CurrentOwner, {
               userId,
               email: owner.email,
+              writable: true,
               providerHeaders: Effect.succeed(headers),
             }),
           );

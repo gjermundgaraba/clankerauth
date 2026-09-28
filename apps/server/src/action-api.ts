@@ -1,12 +1,19 @@
 import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { HttpServerRequest } from "effect/unstable/http";
-import { Http, Administration, IssuerActions, InternalServerError } from "@clankerauth/admin-api";
+import {
+  Http,
+  Administration,
+  Forbidden,
+  IssuerActions,
+  InternalServerError,
+} from "@clankerauth/admin-api";
 import manifest from "../package.json" with { type: "json" };
 import { administration } from "./administration.ts";
 import { administrationResource } from "./administration-resource.ts";
 import { machineKeys } from "./machine-keys.ts";
-import { bearerOwner, sessionOwner } from "./current-owner.ts";
+import { bearerOwner, CurrentOwner, sessionOwner } from "./current-owner.ts";
+import { administrationScopes } from "./resources.ts";
 import { responseCookies } from "./response-cookies.ts";
 import { Auth } from "./auth.ts";
 
@@ -68,8 +75,21 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         path: "/mcp",
         // Native MCP admission needs this allowlist even after owner authentication.
         allowedOrigins: mcpAllowedOrigins,
-        instructions:
-          "Owner administration. Mutations change authorization policy; create/rotate actions return secrets once.",
+        instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
+        // Tools are listed to every caller; a read-only token is refused per call.
+        errors: [Forbidden],
+        before: (action) =>
+          action.access === "read"
+            ? Effect.void
+            : Effect.flatMap(CurrentOwner, ({ writable }) =>
+                writable
+                  ? Effect.void
+                  : Effect.fail(
+                      new Forbidden({
+                        error: `This action requires the ${administrationScopes.write} scope`,
+                      }),
+                    ),
+              ),
       }).pipe(Layer.provide((yield* bearerOwner(adminResource)).layer));
 
       return Layer.mergeAll(httpRoutes, mcpRoutes, adminResource.discovery.layer);

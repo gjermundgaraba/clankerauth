@@ -5,6 +5,7 @@ import type {
   ClientUpdateInput,
   ClientBlockInput,
   ClientId,
+  ClientRevokeInput,
   ClientAccessInput,
   Resource,
   ResourceId,
@@ -72,6 +73,7 @@ export const administration = Effect.map(Auth, (service) => {
       const catalog = yield* Effect.all({
         resources: service.resources.list(),
         clientAccess: service.resources.access(),
+        connections: service.clients.connections(),
       });
 
       return {
@@ -81,6 +83,7 @@ export const administration = Effect.map(Auth, (service) => {
           builtIn: resource.identifier === mcpResource(settings.baseURL),
         })),
         clientAccess: catalog.clientAccess,
+        connections: catalog.connections,
         email,
         issuer: `${settings.baseURL}/api/auth`,
       };
@@ -110,7 +113,7 @@ export const administration = Effect.map(Auth, (service) => {
       );
 
       yield* service.resources
-        .setAccess(client.client_id, input.resources, headers)
+        .setAccess(client.client_id, input.resources)
         .pipe(
           Effect.tapError(() =>
             provider(() =>
@@ -140,14 +143,9 @@ export const administration = Effect.map(Auth, (service) => {
       );
     }),
     access: Effect.fn("Administration.access")(function* (input: typeof ClientAccessInput.Type) {
-      const { providerHeaders } = yield* CurrentOwner;
-      const headers = yield* providerHeaders;
+      yield* CurrentOwner;
 
-      const clientAccess = yield* service.resources.setAccess(
-        input.client_id,
-        input.resources,
-        headers,
-      );
+      const clientAccess = yield* service.resources.setAccess(input.client_id, input.resources);
 
       return { clientAccess };
     }),
@@ -175,17 +173,16 @@ export const administration = Effect.map(Auth, (service) => {
 
       return yield* service.resources.delete(input.identifier, headers);
     }),
-    delete: Effect.fn("Administration.delete")(function* (body: typeof ClientId.Type) {
-      const { providerHeaders } = yield* CurrentOwner;
-      const headers = yield* providerHeaders;
-      yield* provider(() => auth.api.deleteOAuthClient({ headers, body }));
-
-      return { deleted: true };
-    }),
-    revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientId.Type) {
+    // The provider deletes only clients a user owns; automatic clients have no owner.
+    delete: Effect.fn("Administration.delete")(function* (input: typeof ClientId.Type) {
       yield* CurrentOwner;
 
-      return yield* service.clients.revoke(input.client_id);
+      return yield* service.clients.delete(input.client_id);
+    }),
+    revoke: Effect.fn("Administration.revoke")(function* (input: typeof ClientRevokeInput.Type) {
+      yield* CurrentOwner;
+
+      return yield* service.clients.revoke(input.client_id, input.resource);
     }),
     block: Effect.fn("Administration.block")(function* (input: typeof ClientBlockInput.Type) {
       yield* CurrentOwner;

@@ -259,24 +259,14 @@ describe("API integration", () => {
       expect(listing.clients).toHaveLength(1);
       expect(listing.clients[0]).toMatchObject({ client_id, onboarding: "dcr", blocked: false });
       expect(listing.clients[0]).not.toHaveProperty("client_secret");
-      expect(listing.clientAccess).toEqual([
-        { client_id, resource: `${settings.baseURL}/mcp` },
-        { client_id, resource },
-      ]);
-      // The owner may narrow an automatic client's resource access.
+      // An automatic client may ask for any resource; consent decides, not client access.
+      expect(listing.clientAccess).toEqual([]);
+      expect(listing.connections).toEqual([]);
       expect(
-        yield* api.administration.setClientAccess({ payload: { client_id, resources: [] } }),
-      ).toEqual({ clientAccess: [] });
-      expect(
-        yield* api.administration.setClientAccess({
-          payload: { client_id, resources: [`${settings.baseURL}/mcp`, resource] },
-        }),
-      ).toEqual({
-        clientAccess: [
-          { client_id, resource: `${settings.baseURL}/mcp` },
-          { client_id, resource },
-        ],
-      });
+        (yield* Effect.flip(
+          api.administration.setClientAccess({ payload: { client_id, resources: [] } }),
+        ))._tag,
+      ).toBe("BadRequest");
       // The provider refuses to edit clients the owner does not own.
       expect(
         (yield* Effect.flip(
@@ -314,9 +304,11 @@ describe("API integration", () => {
       ).toEqual({
         deleted: true,
       });
-      expect((yield* api.administration.listClients({ payload: {} })).clientAccess).toEqual([
-        { client_id, resource: `${settings.baseURL}/mcp` },
-      ]);
+      expect(
+        (yield* api.administration.listClients({ payload: {} })).resources.map(
+          (entry) => entry.identifier,
+        ),
+      ).toEqual([`${settings.baseURL}/mcp`]);
 
       // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
       // and nullable live metadata is omitted rather than invented.

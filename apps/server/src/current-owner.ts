@@ -1,11 +1,13 @@
 import { Context, Effect, Schema, type Scope } from "effect";
 import { type Headers as HttpHeaders, HttpServerRequest } from "effect/unstable/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { InsufficientScope } from "@gjermundgaraba/clankerauth-sdk/errors";
 import { Unauthorized } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
 import { apiErrorResponse, provider, type ApiError } from "./api-errors.ts";
 import { persisted } from "./database.ts";
 import { providerSession } from "./provider-session.ts";
+import { administrationScopes } from "./resources.ts";
 import { Auth } from "./auth.ts";
 
 /** Authenticated per request, never supplied by action arguments or at startup. */
@@ -14,6 +16,8 @@ export class CurrentOwner extends Context.Service<
   {
     readonly userId: string;
     readonly email: string;
+    /** Whether the caller may change anything; the dashboard session always may. */
+    readonly writable: boolean;
     readonly providerHeaders: Effect.Effect<Headers, ApiError, Scope.Scope>;
   }
 >()("clankerauth/CurrentOwner") {}
@@ -36,6 +40,7 @@ export const sessionOwner = Effect.map(Auth, (service) =>
         providerHeaders: Effect.succeed(headers),
         userId: session.user.id,
         email: session.user.email,
+        writable: true,
       };
     }).pipe(Effect.catch(fail)),
   ),
@@ -75,6 +80,14 @@ export const bearerOwner = Effect.fnUntraced(function* (resource: Administration
         .pipe(Effect.mapError((error) => resource.refuse(error, credential)));
 
       if (principal.actor.kind !== "client") return yield* Effect.fail(rejected());
+      // Write allows everything, read allows listing, and a token with neither is refused
+      // here with a challenge; the MCP hook requires write for changes.
+      const writable = principal.scopes.includes(administrationScopes.write);
+
+      if (!writable && !principal.scopes.includes(administrationScopes.read))
+        return yield* Effect.fail(
+          resource.refuse(new InsufficientScope({ scope: administrationScopes.read }), credential),
+        );
 
       const rows = yield* service.sql`SELECT u.id, u.email FROM user u
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
@@ -87,6 +100,7 @@ export const bearerOwner = Effect.fnUntraced(function* (resource: Administration
       return {
         userId: owner.id,
         email: owner.email,
+        writable,
         providerHeaders: providerSession(service, owner.id),
       };
     }).pipe(
