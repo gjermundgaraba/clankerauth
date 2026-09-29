@@ -9,7 +9,7 @@
  * by these routes alone. It resolves to the live session, so sign-out revokes it.
  */
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
-import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { allowedScheme, withinDomain } from "./config.ts";
 import { provider, respond } from "./api-errors.ts";

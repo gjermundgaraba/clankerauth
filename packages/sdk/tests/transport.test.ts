@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "vite-plus/test";
 import { Effect } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ProviderUnavailable } from "../src/errors.ts";
 import { execute } from "../src/transport.ts";
 import { withHttp } from "./support.ts";

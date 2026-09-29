@@ -6,7 +6,7 @@ import {
   HttpIncomingMessage,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 export const createNodeServer = (listener?: RequestListener) =>
   createServer({ requestTimeout: 15000, headersTimeout: 10000 }, listener);

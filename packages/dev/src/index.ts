@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Context, Effect, Exit, Fiber, FileSystem, Layer, Redacted, Schema, Scope } from "effect";
 import { NodeFileSystem } from "@effect/platform-node";
-import { Cookies, FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Cookies, FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { administration } from "../../../apps/server/src/administration.ts";
 import { nodeHandler } from "../../../apps/server/src/app.ts";
 import { Auth, createOwner } from "../../../apps/server/src/auth.ts";

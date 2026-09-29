@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import { request } from "node:http";
 import { Deferred, Effect, Exit, Schema, Scope, Stream } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createNodeServer, requestPolicy } from "../src/node-http.ts";
 
 const scopes: Scope.Closeable[] = [];

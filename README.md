@@ -143,7 +143,8 @@ dashboard uses the direct typed action client. HTTP schema-error handling return
 sanitized `BadRequest` JSON (400) for malformed input and `InternalServerError`
 JSON (500) for invalid handler output. MCP uses native tool errors: declared domain
 failures are JSON text with `isError: true`, while schema failures use native
-validation/internal-error messages. Successful tool results use `structuredContent.value`.
+validation/internal-error messages. Successful tool results return the action's output
+as `structuredContent`.
 
 ### Connect to administration MCP
 

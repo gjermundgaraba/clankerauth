@@ -9,7 +9,7 @@
  * and `notes.example:443` are different hosts here, as they are to a browser's cookie.
  */
 import { Effect } from "effect";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 export interface Options {
   /**

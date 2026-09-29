@@ -33,6 +33,18 @@ const typeCheck = (file) =>
     { cwd: directory },
   );
 
+/** The version the workspace tests against, which the isolated installation must use too. */
+const tested = async (dependency) =>
+  `${dependency}@${JSON.parse(await readFile(join(root, "node_modules", dependency, "package.json"), "utf8")).version}`;
+
+/** Imports an entry point the way a consumer in the isolated installation resolves it. */
+const load = async (specifier) => {
+  const file = join(directory, `${specifier.replaceAll(/[^\w-]/gu, "_")}.mjs`);
+  await writeFile(file, `export * from "${specifier}";`);
+
+  return import(pathToFileURL(file).href);
+};
+
 try {
   // pnpm resolves the workspace catalog protocol in the packed manifest; npm would not.
   await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: root });
@@ -43,7 +55,14 @@ try {
   );
   await execute(
     "npm",
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(directory, tarball)],
+    [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      join(directory, tarball),
+      await tested("effect"),
+    ],
     { cwd: directory },
   );
   const installed = join(directory, "node_modules", name);
@@ -52,6 +71,17 @@ try {
   assert.equal(manifest.sideEffects, false);
   assert.equal(manifest.peerDependenciesMeta["@gjermundgaraba/effect-actions"].optional, true);
   assert.equal(manifest.dependencies["@gjermundgaraba/effect-actions"], undefined);
+  // The application's Effect is the SDK's: a second copy would split its types and services.
+  assert.ok(manifest.peerDependencies.effect);
+  assert.equal(manifest.dependencies.effect, undefined);
+
+  // The README's install line is the peer range, so it cannot drift past a breaking minor.
+  assert.ok(
+    (await readFile(join(installed, "README.md"), "utf8")).includes(
+      `@gjermundgaraba/effect-actions@${manifest.peerDependencies["@gjermundgaraba/effect-actions"]}`,
+    ),
+    "The README's effect-actions install line does not match the peer range",
+  );
 
   // Every entry point ships declarations; a build that emits only some of them is
   // invisible until a consumer imports the one that is missing.
@@ -65,7 +95,7 @@ try {
     join(directory, "consumer.ts"),
     `
 import { Effect } from "effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import type { AuthenticationError, ConfigurationError } from "@gjermundgaraba/clankerauth-sdk/errors";
 const verification: Effect.Effect<Verifier.Principal, AuthenticationError | ConfigurationError, HttpClient.HttpClient> =
@@ -77,8 +107,7 @@ void verification;
   // Core consumers type-check without installing effect-actions or skipping declarations.
   await typeCheck("consumer.ts");
 
-  await writeFile(join(directory, "consumer.mjs"), `export * from "${name}";`);
-  const api = await import(pathToFileURL(join(directory, "consumer.mjs")).href);
+  const api = await load(name);
 
   for (const exported of ["Verifier", "RequestPolicy"])
     assert(exported in api, `Missing core export: ${exported}`);
@@ -87,8 +116,7 @@ void verification;
   for (const absent of ["Unauthorized", "InsufficientScope", "authenticationErrors"])
     assert(!(absent in api), `Root re-exports an error: ${absent}`);
 
-  await writeFile(join(directory, "errors.mjs"), `export * from "${name}/errors";`);
-  const errors = await import(pathToFileURL(join(directory, "errors.mjs")).href);
+  const errors = await load(`${name}/errors`);
 
   for (const exported of [
     "Unauthorized",
@@ -100,13 +128,8 @@ void verification;
     assert(exported in errors, `Missing error export: ${exported}`);
 
   // Resolve Effect from the isolated installation, not the workspace's development dependencies.
-  const { Effect } = await import(
-    pathToFileURL(join(directory, "node_modules/effect/dist/index.js")).href
-  );
-
-  const { FetchHttpClient } = await import(
-    pathToFileURL(join(directory, "node_modules/effect/dist/unstable/http/index.js")).href
-  );
+  const { Effect } = await load("effect");
+  const { FetchHttpClient } = await load("effect/http");
 
   const make = (options) =>
     Effect.runPromise(api.Verifier.make(options).pipe(Effect.provide(FetchHttpClient.layer)));
@@ -119,16 +142,14 @@ void verification;
   const missing = await Effect.runPromise(Effect.flip(verifier.verify(null)));
   assert(missing instanceof errors.Unauthorized);
 
-  await writeFile(join(directory, "key-list.mjs"), `export * from "${name}/key-list";`);
-  const keyList = await import(pathToFileURL(join(directory, "key-list.mjs")).href);
+  const keyList = await load(`${name}/key-list`);
 
   for (const exported of ["seal", "open", "digest", "type", "lifetime", "Entry", "Grant", "Claims"])
     assert(exported in keyList, `Missing key-list export: ${exported}`);
 
   // Verify API keys offline against the installed fake issuer, and a revocation in the
   // next list, through the installed package.
-  await writeFile(join(directory, "testing.mjs"), `export * from "${name}/testing";`);
-  const { startFakeIssuer } = await import(pathToFileURL(join(directory, "testing.mjs")).href);
+  const { startFakeIssuer } = await load(`${name}/testing`);
   const notes = "http://127.0.0.1:7337/";
   const issuer = await startFakeIssuer({ resource: notes, scopes: ["notes:read", "notes:write"] });
 
@@ -161,7 +182,7 @@ void verification;
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      `@gjermundgaraba/effect-actions@${manifest.peerDependencies["@gjermundgaraba/effect-actions"]}`,
+      await tested("@gjermundgaraba/effect-actions"),
     ],
     { cwd: directory },
   );
@@ -186,8 +207,7 @@ void page;
   );
   // The effect-actions package must also expose valid declarations.
   await typeCheck("integration.ts");
-  await writeFile(join(directory, "integration.mjs"), `export * from "${name}/effect-actions";`);
-  const { Resource } = await import(pathToFileURL(join(directory, "integration.mjs")).href);
+  const { Resource } = await load(`${name}/effect-actions`);
 
   const resource = await Effect.runPromise(
     Resource.make({

@@ -158,7 +158,7 @@ try {
   assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("createClient"));
   const created = await page.evaluate(() => window.mcpTest.createClient());
   assert.equal(created.isError, false, JSON.stringify(created));
-  assert.equal(created.structuredContent.value.client_name, "Created by browser MCP");
+  assert.equal(created.structuredContent.client_name, "Created by browser MCP");
   const refreshed = await page.evaluate(() => window.mcpTest.refresh());
   assert.deepEqual(refreshed, { result: "AUTHORIZED", rotated: true, hasAccessToken: true });
   assert.deepEqual(tokenGrants, ["authorization_code", "refresh_token"]);

@@ -1,6 +1,6 @@
 import { Cause, Clock, Effect, Exit, Ref, Result, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import {
   ConfigurationError,
   InsufficientScope,

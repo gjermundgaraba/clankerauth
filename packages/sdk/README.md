@@ -8,16 +8,16 @@ Effect-native [clankerauth](https://github.com/gjermundgaraba/clankerauth) verif
 vp add @gjermundgaraba/clankerauth-sdk
 ```
 
-Install Effect in the application:
+Effect is a peer: the application installs Effect 4, still a release candidate, and the SDK shares that copy.
 
 ```sh
-vp add effect@4.0.0-rc.117
+vp add effect@rc
 ```
 
-The `/session` and `/effect-actions` entry points also need effect-actions 0.7 (the SDK's declarations are built against it):
+The `/session` and `/effect-actions` entry points also need effect-actions, an optional peer. Install this range: the SDK's declarations are built against it, and under `skipLibCheck` they silently degrade to `any` with another.
 
 ```sh
-vp add @gjermundgaraba/effect-actions@0.7.0
+vp add @gjermundgaraba/effect-actions@^0.8.0
 ```
 
 ## Entry points
@@ -39,7 +39,7 @@ Core consumers do not need effect-actions or `skipLibCheck`.
 
 ```ts
 import { Effect } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
 const makeVerifier = Verifier.make({
@@ -60,7 +60,7 @@ Acquire the resource once at application construction, never per request.
 
 ```ts
 import { Effect, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { authenticationErrors } from "@gjermundgaraba/clankerauth-sdk/errors";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
@@ -91,7 +91,7 @@ const routes = Layer.unwrap(
 ).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
-Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the matching `@effect/platform-node@4.0.0-rc.117` package. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Every authentication response carries `Cache-Control: no-store`.
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the release that matches your Effect. Discovery is public; do not wrap it in authentication. Discovery cache policy belongs to the host. Every authentication response carries `Cache-Control: no-store`.
 
 The supplied `HttpClient` must not retry credential exchanges or follow redirects. The SDK overrides only FetchHttpClient's redirect policy to reject redirects, preserves other caller-provided fetch defaults, and never installs retry middleware.
 

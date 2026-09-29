@@ -164,11 +164,8 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
         },
       });
 
-      console.log("CREATED", JSON.stringify(created.content));
       expect(created.isError).toBe(false);
-      expect(created.structuredContent).toMatchObject({
-        value: { client_secret: expect.any(String) },
-      });
+      expect(created.structuredContent).toMatchObject({ client_secret: expect.any(String) });
       const listing = await client.callTool({ name: "listClients", arguments: {} });
       expect(listing.isError).toBe(false);
       expect(JSON.stringify(listing.structuredContent)).not.toContain('"client_secret":');
@@ -502,12 +499,11 @@ test("MCP protocol and owner-identity operations do not acquire provider session
         },
       });
 
-      console.log("CREATED", JSON.stringify(created.content));
       expect(created.isError).toBe(false);
 
-      const key = Schema.decodeUnknownSync(
-        Schema.Struct({ value: Schema.Struct({ keyId: Schema.String }) }),
-      )(created.structuredContent).value;
+      const key = Schema.decodeUnknownSync(Schema.Struct({ keyId: Schema.String }))(
+        created.structuredContent,
+      );
 
       const updated = await client.callTool({
         name: "updateApiKey",

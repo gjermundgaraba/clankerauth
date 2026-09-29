@@ -256,7 +256,7 @@ try {
 
   assert.equal(mcp.status, 200);
   assert.match(mcp.headers.get("content-type"), /application\/json/);
-  assert.deepEqual((await mcp.json()).result.structuredContent.value.resources, [
+  assert.deepEqual((await mcp.json()).result.structuredContent.resources, [
     builtin,
     { ...resource, builtIn: false },
   ]);

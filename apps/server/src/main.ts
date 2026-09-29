@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
-import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
-import { Otlp, OtlpSerialization } from "effect/unstable/observability";
+import { FetchHttpClient, HttpRouter } from "effect/http";
+import { Otlp, OtlpSerialization } from "effect/observability";
 import { application } from "./app.ts";
 import { Auth } from "./auth.ts";
 import { loadSettings } from "./config.ts";

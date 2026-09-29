@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 import { Clock, Deferred, Effect, Fiber, Layer, Schema } from "effect";
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError";
+import { HttpClientError, TransportError } from "effect/http/HttpClientError";
 import { TestClock } from "effect/testing";
 import {
   HttpClient,
@@ -10,7 +10,7 @@ import {
   HttpRouter,
   HttpServer,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   authenticationErrors,
   InsufficientScope,

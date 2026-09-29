@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ProviderUnavailable } from "./errors.ts";
 
 // Node transports do not follow redirects by default. Also pin FetchHttpClient's policy;

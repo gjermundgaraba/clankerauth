@@ -9,7 +9,7 @@
  */
 import { Effect, Layer, Match } from "effect";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import type { AuthenticationError } from "@gjermundgaraba/clankerauth-sdk/errors";
 import { Forbidden, ServiceUnavailable, Unauthorized } from "@clankerauth/admin-api";

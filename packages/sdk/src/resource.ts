@@ -1,7 +1,7 @@
 import { Clock, Context, Duration, Effect, Result, Schema, SchemaAST } from "effect";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
   authenticationErrors,
   ConfigurationError,

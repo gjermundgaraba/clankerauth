@@ -1,9 +1,5 @@
 import { Effect, Option, Predicate, Schema, SchemaAST } from "effect";
-import {
-  type Headers as HttpHeaders,
-  HttpServerError,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { type Headers as HttpHeaders, HttpServerError, HttpServerResponse } from "effect/http";
 import { type APIError, isAPIError } from "better-auth/api";
 import {
   errors,

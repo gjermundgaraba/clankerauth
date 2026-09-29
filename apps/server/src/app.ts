@@ -2,12 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Layer, Schema } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
-import {
-  HttpPlatform,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { HttpPlatform, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { provider, respond } from "./api-errors.ts";
 import { Auth } from "./auth.ts";
 import { actionRoutes } from "./action-api.ts";

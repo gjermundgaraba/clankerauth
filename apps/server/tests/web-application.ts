@@ -1,5 +1,5 @@
 import { Effect, Layer, Option } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import { application } from "../src/app.ts";
 import { Auth } from "../src/auth.ts";
 

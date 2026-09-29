@@ -1,5 +1,5 @@
 import { Context, Effect, Schema, type Scope } from "effect";
-import { type Headers as HttpHeaders, HttpServerRequest } from "effect/unstable/http";
+import { type Headers as HttpHeaders, HttpServerRequest } from "effect/http";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { InsufficientScope } from "@gjermundgaraba/clankerauth-sdk/errors";
 import { Unauthorized } from "@clankerauth/admin-api";

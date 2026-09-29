@@ -9,7 +9,7 @@ import {
 import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
 import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 import { Effect, Exit, Layer, Result, Scope, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
@@ -613,18 +613,16 @@ test("official 2026-07-28 MCP client uses OAuth bearer authentication through na
         const listing = await client.callTool({ name: "listClients", arguments: {} });
         expect(listing.isError).toBe(false);
         expect(listing.structuredContent).toMatchObject({
-          value: {
-            email: "owner@example.internal",
-            resources: [
-              administrationResource(origin),
-              {
-                identifier: resource,
-                name: "Example",
-                scopes: ["example:read", "example:write"],
-                builtIn: false,
-              },
-            ],
-          },
+          email: "owner@example.internal",
+          resources: [
+            administrationResource(origin),
+            {
+              identifier: resource,
+              name: "Example",
+              scopes: ["example:read", "example:write"],
+              builtIn: false,
+            },
+          ],
         });
 
         const malformed = await client.callTool({

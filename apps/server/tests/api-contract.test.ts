@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { Effect, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { HttpApiClient } from "effect/unstable/httpapi";
+import { FetchHttpClient } from "effect/http";
+import { HttpApiClient } from "effect/http-api";
 import { Api, BadRequest } from "@clankerauth/admin-api";
 import { webApplication as application } from "./web-application.ts";
 import { openIssuer, type Issuer } from "./issuer.ts";
@@ -415,19 +415,25 @@ describe("API integration", () => {
     );
   });
 
-  test("malformed setup payload returns 400 without reflecting sensitive input", async () => {
-    const response = await appFetch(`${settings.baseURL}/api/issuer/setupOwner`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: { sensitive: password } }),
-    });
+  test("malformed or undeclared setup input returns 400 without reflecting sensitive input", async () => {
+    for (const payload of [
+      { email, password: { sensitive: password } },
+      { email, password, extra: password },
+    ]) {
+      const response = await appFetch(`${settings.baseURL}/api/issuer/setupOwner`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    expect(response.status).toBe(400);
-    const body = await response.text();
-    expect(body).not.toContain(password);
-    expect(JSON.parse(body)).toEqual(
-      Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
-    );
+      expect(response.status).toBe(400);
+      const body = await response.text();
+      expect(body).not.toContain(password);
+      expect(JSON.parse(body)).toEqual(
+        Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" })),
+      );
+    }
+
     expect(await Effect.runPromise(issuer.service.owner())).toBeUndefined();
   });
 });

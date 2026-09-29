@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { SignJWT } from "jose";
 import * as KeyList from "../src/key-list.ts";
 import { startFakeIssuer } from "../src/testing.ts";
@@ -7,7 +7,7 @@ import { startFakeIssuer } from "../src/testing.ts";
 export const publicUrl = "http://127.0.0.1:7337";
 
 export const withHttp = <A, E>(
-  effect: Effect.Effect<A, E, import("effect/unstable/http/HttpClient").HttpClient>,
+  effect: Effect.Effect<A, E, import("effect/http/HttpClient").HttpClient>,
 ) => effect.pipe(Effect.provide(FetchHttpClient.layer));
 
 /** The published fake issuer, with a read-write key (`key-1`) and a read-only key (`key-2`). */

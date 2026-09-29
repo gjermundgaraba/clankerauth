@@ -8,7 +8,7 @@ import { forwardClientId } from "../src/forward-auth.ts";
 import { openIssuer } from "./issuer.ts";
 import { createNodeServer } from "../src/node-http.ts";
 import { Effect, Exit, Schema, Scope } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Unauthorized } from "@gjermundgaraba/clankerauth-sdk/errors";
 

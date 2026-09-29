@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import { Cookies, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { Cookies, HttpRouter, HttpServerResponse } from "effect/http";
 
 /** Set-Cookie values an action attaches to its own HTTP response. */
 export class ResponseCookies extends Context.Service<
