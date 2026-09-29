@@ -8,3 +8,4 @@ data/
 *.sqlite*
 .amp/portals/
 .amp/in/
+.vitest/
