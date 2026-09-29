@@ -52,7 +52,7 @@ Register one resource per application, identified by its public origin root with
 
 ## API keys
 
-The API-key plugin is used unpatched. Its per-key rate limit counts up to 1,000 verifications per key until a full minute of inactivity has elapsed. Its listing reads one database page and paginates in memory, so the dashboard shows at most the first 100 keys.
+The API-key plugin is used unpatched, for creating, updating and deleting keys and for storing their SHA-256 digests. Nothing calls its verification endpoint: `MachineKeys.keyList` reads the `apikey` table directly and seals one entry per enabled, unexpired key from the stored digest, so a resource server verifies keys offline and the plugin's per-key rate limit, which counts only its own verifications, is off. A row that no longer decodes is logged and left out, so a broken key fails closed on its own. One server-only endpoint, `signDocument`, signs both key lists and forward-auth tokens with the JWT plugin's key; each caller builds its whole payload, times included, from the Effect clock. Its listing reads one database page and paginates in memory, so the dashboard shows at most the first 100 keys; key lists read every key.
 
 ## Effect boundaries
 

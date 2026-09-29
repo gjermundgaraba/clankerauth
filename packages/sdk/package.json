@@ -1,7 +1,7 @@
 {
   "name": "@gjermundgaraba/clankerauth-sdk",
-  "version": "0.10.0",
-  "description": "Effect-native clankerauth access-token and API-key verification, with optional effect-actions integration",
+  "version": "0.11.0",
+  "description": "Effect-native clankerauth access-token and offline API-key verification, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,6 +29,14 @@
     "./effect-actions": {
       "types": "./dist/effect-actions.d.ts",
       "import": "./dist/effect-actions.js"
+    },
+    "./key-list": {
+      "types": "./dist/key-list.d.ts",
+      "import": "./dist/key-list.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
     }
   },
   "publishConfig": {

@@ -1,4 +1,4 @@
-import { Context, Effect, Result, Schema, SchemaAST } from "effect";
+import { Clock, Context, Duration, Effect, Result, Schema, SchemaAST } from "effect";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -7,10 +7,10 @@ import {
   ConfigurationError,
   InsufficientScope,
   ProviderUnavailable,
-  RateLimited,
   Unauthorized,
 } from "./errors.ts";
 import type { AuthenticationError } from "./errors.ts";
+import { keyListRefresh } from "./refresh.ts";
 import { Session } from "./session.ts";
 import * as Verifier from "./verify.ts";
 
@@ -60,7 +60,7 @@ export interface Options {
    */
   readonly publicUrl: URL;
   readonly scopes: Scopes;
-  /** `false` rejects API keys without consulting the issuer; only OAuth access tokens are accepted. */
+  /** `false` refuses API keys without reading the issuer's key list; only OAuth access tokens are accepted. */
   readonly apiKeys?: boolean;
 }
 
@@ -109,15 +109,19 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
   });
 
   // A request must not wait on an issuer that does not answer: the transport is
-  // interrupted and the credential refused as unavailable.
+  // interrupted and the credential refused as unavailable. A key list read gives up
+  // sooner, so a held list still decides a key.
   const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.timeoutOrElse(effect, {
       duration: "5 seconds",
       orElse: () => Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
     });
 
+  const verify = (authorization: string | null | undefined) =>
+    deadline(unbounded.verify(authorization));
+
   const verifier: Verifier.Verifier = {
-    verify: (authorization) => deadline(unbounded.verify(authorization)),
+    verify,
     verifyToken: (token) => deadline(unbounded.verifyToken(token)),
   };
 
@@ -126,14 +130,12 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
 
   /**
    * The one header besides the content type that a refusal carries: an RFC 6750
-   * challenge naming only the missing scope, or an RFC 6585 retry hint.
+   * challenge naming only the missing scope.
    */
   const refusalHeader = (
     error: AuthenticationError,
     credential: boolean,
   ): readonly [string, string] | undefined => {
-    if (error instanceof RateLimited) return ["retry-after", "60"];
-
     if (error instanceof InsufficientScope)
       return ["www-authenticate", challengeValue("insufficient_scope", error.scope)];
 
@@ -167,6 +169,19 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
       ? options.scopes.write
       : undefined;
 
+  /** The principal an Authorization header value has for `access`, or its refusal. */
+  const principalFor = Effect.fn("Resource.principal")(function* (
+    authorization: string | null | undefined,
+    access: Action.Access,
+  ) {
+    const principal = yield* verify(authorization);
+    const missing = access === "write" ? missingScope(principal) : undefined;
+
+    if (missing !== undefined) return yield* new InsufficientScope({ scope: missing });
+
+    return principal;
+  });
+
   /**
    * Verify one Authorization header value outside an Effect router: a Node `upgrade`
    * handler, a socket, a per-request endpoint. `access` is the same declaration an
@@ -176,17 +191,36 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
     authorization: string | null | undefined,
     access: Action.Access,
   ) {
-    const verified = yield* Effect.result(verifier.verify(authorization));
+    const verified = yield* Effect.result(principalFor(authorization, access));
 
     if (Result.isFailure(verified)) return yield* refuse(verified.failure, authorization);
-    const principal = verified.success;
-    const missing = access === "write" ? missingScope(principal) : undefined;
 
-    if (missing !== undefined)
-      return yield* refuse(new InsufficientScope({ scope: missing }), authorization);
-
-    return { ok: true, principal } satisfies Admission;
+    return { ok: true, principal: verified.success } satisfies Admission;
   });
+
+  /**
+   * Hold what `admit` let in, such as a socket, to the same header value and `access`:
+   * fails with the first refusal, once a token expires or a key is revoked, expires or
+   * loses the scope. Never succeeds; race it against the connection.
+   */
+  const watch = (authorization: string | null | undefined, access: Action.Access) =>
+    Effect.forever(
+      Effect.gen(function* () {
+        const principal = yield* principalFor(authorization, access);
+        const now = yield* Clock.currentTimeMillis;
+        const remaining = Math.max(0, (principal.expiresAt ?? Infinity) - now);
+
+        // A key is checked again against each refreshed list, until it expires.
+        if (principal.actor.kind === "key")
+          return yield* Effect.sleep(Math.min(remaining, Duration.toMillis(keyListRefresh)));
+
+        // An access token cannot be revoked and never becomes valid again, so its expiry is
+        // all that ends it: no second JWKS read that an issuer outage could fail.
+        yield* Effect.sleep(remaining);
+
+        return yield* new Unauthorized({ message: "Authentication required" });
+      }),
+    );
 
   /**
    * The effect-actions pre-handler hook, bound once per surface. A read needs nothing
@@ -220,6 +254,7 @@ export const make = Effect.fn("Resource.make")(function* (options: Options) {
     verifier,
     discovery,
     admit,
+    watch,
     authorize,
     session,
     resource: identifier,

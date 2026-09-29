@@ -1,10 +1,8 @@
-import { Clock, DateTime, Effect } from "effect";
+import { Clock, DateTime, Effect, Schema } from "effect";
+import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
   BadRequest,
-  Forbidden,
   KeyPermissions,
-  TooManyRequests,
-  Unauthorized,
   type ApiKeyId,
   type ApiKeyInput,
   type ApiKeyUpdate,
@@ -13,9 +11,18 @@ import { Auth } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
 import { CurrentOwner } from "./current-owner.ts";
 import { provider } from "./api-errors.ts";
-import { persisted } from "./database.ts";
 
-const permissions = persisted(KeyPermissions);
+const permissions = Schema.decodeUnknownEffect(KeyPermissions);
+
+const storedKey = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    id: Schema.String,
+    key: Schema.String,
+    referenceId: Schema.String,
+    expiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+    permissions: Schema.NullOr(Schema.fromJsonString(KeyPermissions)),
+  }),
+);
 
 const summary = Effect.fnUntraced(function* (key: {
   id: string;
@@ -29,7 +36,21 @@ const summary = Effect.fnUntraced(function* (key: {
     keyId: key.id,
     name: key.name ?? "",
     enabled: key.enabled,
-    permissions: yield* permissions(key.permissions ?? {}),
+    // Permissions that no longer decode grant nothing: key lists already leave the key
+    // out, and it is listed with none, so the owner can still see and delete it.
+    permissions: yield* permissions(key.permissions ?? {}).pipe(
+      Effect.catch(() =>
+        Effect.as(
+          Effect.logWarning(
+            "An API key's stored permissions do not decode; it is listed with none",
+            {
+              keyId: key.id,
+            },
+          ),
+          {},
+        ),
+      ),
+    ),
     expiresAt: key.expiresAt ? DateTime.fromDateUnsafe(key.expiresAt) : null,
     createdAt: DateTime.fromDateUnsafe(key.createdAt),
   };
@@ -142,38 +163,74 @@ export const machineKeys = Effect.map(Auth, (service) => {
 
       return { deleted: true };
     }),
-    verify: Effect.fn("MachineKeys.verify")(function* (headers: Headers, identifier: string) {
-      const bearer = /^Bearer (clankerauth_[^\s]+)$/i.exec(headers.get("authorization") ?? "")?.[1];
+    /**
+     * Every enabled, unexpired key granted on the resource, with the scopes it still
+     * defines, sealed and signed for offline verification. An unknown resource, and the
+     * administration resource, which keys never reach, get a list with no entries.
+     */
+    keyList: Effect.fn("MachineKeys.keyList")(function* (identifier: string) {
+      const now = yield* Clock.currentTimeMillis;
+      const resource = yield* service.resources.get(identifier);
 
-      if (!bearer) return yield* Effect.fail(new Unauthorized({ error: "API key required" }));
+      const available =
+        resource === undefined || identifier === mcpResource(service.settings.baseURL)
+          ? []
+          : resource.scopes;
 
-      const result = yield* provider(() =>
-        service.auth.api.verifyApiKey({ body: { key: bearer } }),
-      );
+      const rows = available.length
+        ? yield* service.sql`
+            SELECT id, key, referenceId, expiresAt, permissions FROM apikey
+            WHERE enabled = 1 AND (expiresAt IS NULL OR expiresAt > ${new Date(now).toISOString()})
+          `
+        : [];
 
-      if (!result.valid || !result.key) {
-        if (result.error?.code === "RATE_LIMITED")
-          return yield* Effect.fail(
-            new TooManyRequests({ error: "API key verification rate exceeded" }),
+      // A row that does not decode or seal fails closed on its own: that key is left out,
+      // and every other key, on every resource, is listed as before. Its digest is the
+      // entry's secret, so only the key's ID reaches the log.
+      const entries = yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const key = yield* storedKey(row);
+
+          const scopes = (key.permissions?.[identifier] ?? []).filter((scope) =>
+            available.includes(scope),
           );
 
-        return yield* Effect.fail(new Unauthorized({ error: "Invalid API key" }));
-      }
+          if (!scopes.length) return [];
 
-      const resource = yield* service.resources.get(identifier);
-      const grants = yield* permissions(result.key.permissions ?? {});
-      const scopes = (grants[identifier] ?? []).filter((scope) => resource?.scopes.includes(scope));
+          const entry = yield* Effect.tryPromise(() =>
+            KeyList.seal(new Uint8Array(Buffer.from(key.key, "base64url")), identifier, {
+              keyId: key.id,
+              ownerId: key.referenceId,
+              scopes,
+              expiresAt: key.expiresAt === null ? null : DateTime.toEpochMillis(key.expiresAt),
+            }),
+          );
 
-      if (!resource || !scopes.length)
-        return yield* Effect.fail(new Forbidden({ error: "No access to this Resource" }));
+          return [entry];
+        }).pipe(
+          Effect.catch(() =>
+            Effect.as(
+              Effect.logWarning("An API key row cannot be listed; it is left out of key lists", {
+                keyId: row.id,
+              }),
+              [],
+            ),
+          ),
+        ),
+      );
 
-      return {
-        keyId: result.key.id,
-        ownerId: result.key.referenceId,
-        resource: identifier,
-        scopes,
-        expiresAt: result.key.expiresAt ? DateTime.fromDateUnsafe(result.key.expiresAt) : null,
-      };
+      const iat = Math.floor(now / 1000);
+
+      const { token } = yield* provider(() =>
+        service.auth.api.signDocument({
+          body: {
+            typ: KeyList.type,
+            payload: { aud: identifier, iat, exp: iat + KeyList.lifetime, keys: entries.flat() },
+          },
+        }),
+      );
+
+      return { list: token };
     }),
   };
 });

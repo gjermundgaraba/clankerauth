@@ -1,14 +1,15 @@
-import { Cause, Clock, DateTime, Effect, Exit, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, Ref, Result, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   ConfigurationError,
   InsufficientScope,
   ProviderUnavailable,
-  RateLimited,
   Unauthorized,
 } from "./errors.ts";
 import type { AuthenticationError } from "./errors.ts";
+import * as KeyList from "./key-list.ts";
+import { keyListRefresh } from "./refresh.ts";
 import { execute } from "./transport.ts";
 
 export interface Principal {
@@ -19,9 +20,9 @@ export interface Principal {
     | { readonly kind: "key"; readonly keyId: string };
   /**
    * When this credential stops being valid, in epoch milliseconds: an access token's
-   * verified `exp`, so a host never decodes the token again. `undefined` for an API
-   * key, which has no token lifetime and is re-verified against the issuer on every
-   * request; a host that caches a key decision must choose its own bound.
+   * verified `exp`, so a host never decodes the token again, or an API key's expiry.
+   * `undefined` for a key that does not expire. A key can also be revoked before then;
+   * `Resource.watch` ends a connection at whichever comes first.
    */
   readonly expiresAt: number | undefined;
 }
@@ -30,7 +31,7 @@ export interface Options {
   readonly issuer: string;
   readonly resource: string;
   readonly requiredScopes?: readonly string[];
-  /** `false` rejects API keys without consulting the issuer; only OAuth access tokens are accepted. */
+  /** `false` refuses API keys without reading the issuer's key list; only OAuth access tokens are accepted. */
   readonly apiKeys?: boolean;
 }
 
@@ -59,18 +60,24 @@ const Claims = Schema.Struct({
   sub: Schema.NonEmptyString,
   client_id: Schema.NonEmptyString,
   scope: Schema.String,
+  iat: Schema.Finite,
   exp: Schema.Finite,
 });
 
-const KeyResponse = Schema.Struct({
-  keyId: Schema.NonEmptyString,
-  ownerId: Schema.NonEmptyString,
-  resource: Schema.String,
-  scopes: Schema.Array(Schema.NonEmptyString),
-  expiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-});
+/** The list document as the issuer's `keyList` action answers it. */
+const KeyListResponse = Schema.Struct({ list: Schema.String });
 
-const unauthorized = () => new Unauthorized({ message: "Authentication required" });
+const KeyListClaims = KeyList.Claims.pipe(Schema.fieldsAssign({ exp: Schema.Finite }));
+
+/** One verified key list: the entries it holds and how long they may decide. */
+interface Keys {
+  /** Epoch milliseconds: the end of the issuer's outage window for this list. */
+  readonly expiresAt: number;
+  readonly entries: ReadonlyMap<string, string>;
+}
+
+const unauthorized = (cause?: unknown) =>
+  new Unauthorized({ message: "Authentication required", cause });
 
 /** How long a JWKS document answers verification before it is read again. */
 const documentLifetime = "1 minute";
@@ -79,9 +86,16 @@ const documentLifetime = "1 minute";
 const failureCooldown = "5 seconds";
 
 /**
+ * How long a key list read may take. Under `Resource`'s five-second deadline, so a stalled
+ * issuer fails the read, not the request, and a held list still decides.
+ */
+const listReadTimeout = "3 seconds";
+
+/**
  * Acquire once per resource; transport is selected by the application, not the SDK.
  * Verification runs to completion: a deadline is the request edge's policy, which
  * `Resource` applies, so an in-process caller can await a provider call it cannot cancel.
+ * The one exception is a key list read, which gives up after three seconds.
  */
 export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const client = yield* HttpClient.HttpClient;
@@ -89,7 +103,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const endpoints = yield* Effect.try({
     try: () => ({
       jwks: new URL(`${options.issuer}/jwks`).href,
-      apiKey: new URL("/api/issuer/verifyApiKey", options.issuer).href,
+      keyList: new URL("/api/issuer/keyList", options.issuer).href,
     }),
     catch: () => new ConfigurationError({ message: "Invalid issuer URL" }),
   });
@@ -120,13 +134,16 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     Exit.isSuccess(exit) ? documentLifetime : failureCooldown,
   );
 
-  // Replaying that read must not hand a later request the interruption of an earlier
+  // Replaying a read must not hand a later request the interruption of an earlier
   // one's deadline; within the window the issuer simply was not reached.
-  const keys = Effect.catchCause(read, (cause) =>
-    Cause.hasInterrupts(cause)
-      ? Effect.fail(new ProviderUnavailable({ operation: "jwks.refresh" }))
-      : Effect.failCause(cause),
-  );
+  const replayed = <A>(cached: Effect.Effect<A, ProviderUnavailable>, operation: string) =>
+    Effect.catchCause(cached, (cause) =>
+      Cause.hasInterrupts(cause)
+        ? Effect.fail(new ProviderUnavailable({ operation }))
+        : Effect.failCause(cause),
+    );
+
+  const keys = replayed(read, "jwks.refresh");
 
   const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string) {
     const resolve = yield* keys;
@@ -138,31 +155,42 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     });
   });
 
-  const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
+  /**
+   * A document this issuer signed for this resource: EdDSA under a key it names, with the
+   * expected `typ`, issuer and audience, and not expired. Which claims it must carry is
+   * its schema's to say. `Unauthorized` means it is not to be trusted; what that amounts
+   * to is the caller's to say.
+   */
+  const verifySigned = Effect.fn("Verifier.signed")(function* (jws: string, typ: string) {
     const header = yield* Effect.try({
-      try: () => decodeProtectedHeader(token),
+      try: () => decodeProtectedHeader(jws),
       catch: unauthorized,
     });
 
     // The issuer always names its key, so key selection is never ambiguous. Reject other
-    // tokens before doing provider I/O; JOSE still enforces its algorithm allowlist.
+    // documents before doing provider I/O; JOSE still enforces its algorithm allowlist.
     if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
     const key = yield* signingKey(header.kid);
     const now = yield* Clock.currentTimeMillis;
 
     const { payload } = yield* Effect.tryPromise({
       try: () =>
-        jwtVerify(token, key, {
+        jwtVerify(jws, key, {
           issuer: options.issuer,
           audience: options.resource,
           algorithms: ["EdDSA"],
-          typ: "at+jwt",
-          requiredClaims: ["sub", "client_id", "scope", "iat", "exp"],
+          typ,
           currentDate: new Date(now),
         }),
       // Verification against a resolved key does no I/O either.
       catch: unauthorized,
     });
+
+    return payload;
+  });
+
+  const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
+    const payload = yield* verifySigned(token, "at+jwt");
 
     if (payload.cnf !== undefined) return yield* unauthorized();
 
@@ -179,49 +207,110 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     } satisfies Principal;
   });
 
-  const verifyKey = Effect.fn("Verifier.apiKey")(function* (key: string) {
-    const request = HttpClientRequest.post(endpoints.apiKey).pipe(
-      HttpClientRequest.setHeader("authorization", `Bearer ${key}`),
+  const listDocument = Effect.fn("Verifier.keyList")(function* () {
+    const request = HttpClientRequest.post(endpoints.keyList).pipe(
       HttpClientRequest.bodyJsonUnsafe({ resource: options.resource }),
     );
 
     const response = yield* execute(client, request);
 
-    // The issuer answers 403 for a key with no grant on this resource. That is the same
-    // case as a token for another audience: the credential is not this resource's.
-    if (response.status === 401 || response.status === 403) return yield* unauthorized();
-
-    if (response.status === 429)
-      return yield* new RateLimited({ message: "Authentication rate exceeded" });
-
     if (response.status !== 200)
       return yield* new ProviderUnavailable({
-        operation: "api-key.verify",
+        operation: "key-list.fetch",
         cause: { status: response.status },
       });
 
-    const body = yield* HttpClientResponse.schemaBodyJson(KeyResponse)(response).pipe(
-      Effect.mapError((cause) => new ProviderUnavailable({ operation: "api-key.response", cause })),
+    const { list } = yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(response).pipe(
+      Effect.mapError((cause) => new ProviderUnavailable({ operation: "key-list.decode", cause })),
     );
 
-    if (body.resource !== options.resource)
-      return yield* new ProviderUnavailable({ operation: "api-key.response" });
+    // A list that does not verify is no list: the held one keeps deciding.
+    const rejected = (cause: unknown) =>
+      new ProviderUnavailable({ operation: "key-list.verify", cause });
 
-    if (
-      body.expiresAt !== null &&
-      DateTime.toEpochMillis(body.expiresAt) <= (yield* Clock.currentTimeMillis)
-    )
+    const payload = yield* verifySigned(list, KeyList.type).pipe(
+      Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))),
+    );
+
+    const claims = yield* Schema.decodeUnknownEffect(KeyListClaims)(payload).pipe(
+      Effect.mapError(rejected),
+    );
+
+    return {
+      expiresAt: claims.exp * 1000,
+      entries: new Map(claims.keys.map((entry) => [entry.id, entry.sealed])),
+    } satisfies Keys;
+  }, Effect.scoped);
+
+  // While a list is held, a failing issuer is otherwise invisible until that list runs
+  // out. Reads are logged when they start failing and when they recover, not per retry.
+  const failing = yield* Ref.make(false);
+
+  const readList = yield* Effect.cachedWithTTL(
+    listDocument().pipe(
+      Effect.timeoutOrElse({
+        duration: listReadTimeout,
+        orElse: () => Effect.fail(new ProviderUnavailable({ operation: "key-list.timeout" })),
+      }),
+      Effect.tapError(({ operation }) =>
+        Effect.flatMap(Ref.getAndSet(failing, true), (was) =>
+          was
+            ? Effect.void
+            : Effect.logWarning(
+                "clankerauth key list reads are failing; a held list decides until it expires",
+                { operation },
+              ),
+        ),
+      ),
+      Effect.tap(() =>
+        Effect.flatMap(Ref.getAndSet(failing, false), (was) =>
+          was ? Effect.logInfo("clankerauth key list reads have recovered") : Effect.void,
+        ),
+      ),
+    ),
+    (exit) => (Exit.isSuccess(exit) ? keyListRefresh : failureCooldown),
+  );
+
+  // The list is verified once, when it is read. Holding its entries, not the document,
+  // is what lets keys verify through an outage that has already taken JWKS with it.
+  const held = yield* Ref.make<Keys | undefined>(undefined);
+
+  /** The last verified list, while it is inside its window. */
+  const keyList = Effect.gen(function* () {
+    const fetched = yield* Effect.result(replayed(readList, "key-list.refresh"));
+
+    if (Result.isSuccess(fetched)) yield* Ref.set(held, fetched.success);
+    const list = yield* Ref.get(held);
+
+    // A read is cached past its own check, so the window is checked on every use.
+    if (list !== undefined && list.expiresAt > (yield* Clock.currentTimeMillis)) return list;
+
+    return yield* Result.isFailure(fetched)
+      ? fetched.failure
+      : new ProviderUnavailable({ operation: "key-list.expired" });
+  });
+
+  const verifyKey = Effect.fn("Verifier.apiKey")(function* (key: string) {
+    const list = yield* keyList;
+
+    const grant = yield* Effect.tryPromise({
+      try: () => KeyList.open(key, options.resource, list.entries),
+      catch: unauthorized,
+    });
+
+    // No entry is the same case as a token for another audience: not this resource's.
+    if (grant === undefined) return yield* unauthorized();
+
+    if (grant.expiresAt !== null && grant.expiresAt <= (yield* Clock.currentTimeMillis))
       return yield* unauthorized();
 
     return {
-      subject: body.ownerId,
-      scopes: body.scopes,
-      actor: { kind: "key", keyId: body.keyId },
-      // A key's own expiry is enforced above, on every verification; it is not a
-      // lifetime a caller may hold a decision for.
-      expiresAt: undefined,
+      subject: grant.ownerId,
+      scopes: grant.scopes,
+      actor: { kind: "key", keyId: grant.keyId },
+      expiresAt: grant.expiresAt ?? undefined,
     } satisfies Principal;
-  }, Effect.scoped);
+  });
 
   const verifyToken = Effect.fn("Verifier.verifyToken")(function* (token: string) {
     const principal = yield* token.startsWith("clankerauth_")

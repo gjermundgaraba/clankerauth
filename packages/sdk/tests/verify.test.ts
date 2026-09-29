@@ -7,35 +7,26 @@ import {
   ConfigurationError,
   InsufficientScope,
   ProviderUnavailable,
-  RateLimited,
   Unauthorized,
 } from "../src/errors.ts";
-import { publicUrl, startIssuer } from "./issuer.ts";
-import { withHttp } from "./support.ts";
+import { publicUrl, startIssuer, withHttp } from "./support.ts";
 
 const resource = `${publicUrl}/api`;
 
-const withIssuer = async (
-  body: (
-    verifier: Verifier.Verifier,
-    issuer: Awaited<ReturnType<typeof startIssuer>>,
-  ) => Promise<void>,
-) => {
-  const issuer = await startIssuer();
+type Issuer = Awaited<ReturnType<typeof startIssuer>>;
+
+const verifierFor = (issuer: Issuer, target = resource) =>
+  Effect.runPromise(
+    withHttp(
+      Verifier.make({ issuer: issuer.issuer, resource: target, requiredScopes: ["notes:read"] }),
+    ),
+  );
+
+const withIssuer = async (body: (verifier: Verifier.Verifier, issuer: Issuer) => Promise<void>) => {
+  const issuer = await startIssuer(resource);
 
   try {
-    await body(
-      await Effect.runPromise(
-        withHttp(
-          Verifier.make({
-            issuer: issuer.issuer,
-            resource,
-            requiredScopes: ["notes:read"],
-          }),
-        ),
-      ),
-      issuer,
-    );
+    await body(await verifierFor(issuer), issuer);
   } finally {
     await issuer.close();
   }
@@ -43,19 +34,51 @@ const withIssuer = async (
 
 const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(effect));
 
-test("API keys verify on every request, carry the actor, and observe revocation", () =>
+test("API keys verify offline against one key list, with their actor, scopes and expiry", () =>
   withIssuer(async (verifier, issuer) => {
     const principal = await Effect.runPromise(verifier.verify(`Bearer ${issuer.key}`));
     assert.equal(principal.subject, "owner");
-    assert.deepEqual(principal.actor, { kind: "key", keyId: "writer" });
+    assert.deepEqual(principal.actor, { kind: "key", keyId: "key-1" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
-    assert.equal(issuer.count(), 1);
+    assert.equal(principal.expiresAt, undefined);
     assert.deepEqual((await Effect.runPromise(verifier.verifyToken(issuer.readOnlyKey))).scopes, [
       "notes:read",
     ]);
-    issuer.keys.delete(issuer.key);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof Unauthorized);
-    assert.equal(issuer.count(), 3);
+    // An unknown key has no entry to find: refused from the list already read.
+    assert(
+      (await failure(verifier.verifyToken(`clankerauth_${"x".repeat(43)}`))) instanceof
+        Unauthorized,
+    );
+    assert.equal(issuer.keyLists(), 1);
+
+    // Revocation reaches a verifier with its next list; a new one reads it now.
+    issuer.revoke(issuer.key);
+    await Effect.runPromise(verifier.verifyToken(issuer.key));
+    assert(
+      (await failure((await verifierFor(issuer)).verifyToken(issuer.key))) instanceof Unauthorized,
+    );
+
+    const expiresAt = new Date(Date.now() + 60_000);
+    const expiring = issuer.apiKey(undefined, expiresAt);
+    const listed = await verifierFor(issuer);
+    assert.equal(
+      (await Effect.runPromise(listed.verifyToken(expiring))).expiresAt,
+      expiresAt.getTime(),
+    );
+
+    // One key reaches several resources, with each resource's own scopes.
+    const reports = "https://reports.internal/api";
+
+    const both = issuer.apiKey({
+      [resource]: ["notes:write", "notes:read"],
+      [reports]: ["notes:read"],
+    });
+
+    const elsewhere = await verifierFor(issuer, reports);
+    assert.deepEqual((await Effect.runPromise(elsewhere.verifyToken(both))).scopes, ["notes:read"]);
+
+    // A key with no grant on a resource is not that resource's credential at all.
+    assert((await failure(elsewhere.verifyToken(issuer.readOnlyKey))) instanceof Unauthorized);
   }));
 
 test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", () =>
@@ -64,7 +87,7 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
     const principal = await Effect.runPromise(verifier.verify(`Bearer ${token}`));
     assert.deepEqual(principal.actor, { kind: "client", clientId: "fixture" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
-    assert.equal(issuer.count(), 0);
+    assert.equal(issuer.keyLists(), 0);
 
     const other = await Effect.runPromise(
       withHttp(Verifier.make({ issuer: issuer.issuer, resource: `${publicUrl}/mcp` })),
@@ -80,6 +103,7 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
       { client_id: undefined },
       { sub: "" },
       { scope: undefined },
+      { iat: undefined },
     ];
 
     for (const claim of claims)
@@ -87,8 +111,7 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
         (await failure(verifier.verifyToken(await issuer.sign(claim)))) instanceof Unauthorized,
       );
     assert(
-      (await failure(verifier.verifyToken(await issuer.sign({}, "api", "JWT")))) instanceof
-        Unauthorized,
+      (await failure(verifier.verifyToken(await issuer.sign({}, "JWT")))) instanceof Unauthorized,
     );
     await Effect.runPromise(
       verifier.verifyToken(await issuer.sign({ aud: [resource, "https://reports.internal/api"] })),
@@ -100,7 +123,7 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
     );
   }));
 
-test("malformed credentials, outages and rate limits remain distinct typed outcomes", () =>
+test("malformed credentials and outages remain distinct typed outcomes", () =>
   withIssuer(async (verifier, issuer) => {
     for (const header of [
       null,
@@ -111,20 +134,13 @@ test("malformed credentials, outages and rate limits remain distinct typed outco
       `Bearer ${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
     ])
       assert((await failure(verifier.verify(header))) instanceof Unauthorized);
-    assert.equal(issuer.count(), 0);
+    assert.equal(issuer.keyLists(), 0);
+    // Before any list is read, an unreachable issuer leaves a key undecided.
     issuer.fail(503);
     assert((await failure(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
     assert(
       (await failure(verifier.verifyToken(await issuer.sign()))) instanceof ProviderUnavailable,
     );
-    issuer.fail(429);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof RateLimited);
-    // A key with no grant on this resource is not this resource's credential at all.
-    issuer.fail(403);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof Unauthorized);
-    issuer.fail(undefined);
-    issuer.malform(true);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
   }));
 
 test("invalid standalone verifier configuration fails at construction", async () => {
@@ -135,14 +151,14 @@ test("invalid standalone verifier configuration fails at construction", async ()
   assert(error instanceof ConfigurationError);
 });
 
-test("issuer fixture rejects malformed API-key verification requests", async () => {
-  const issuer = await startIssuer();
+test("the fake issuer rejects malformed key list requests", async () => {
+  const issuer = await startIssuer(resource);
 
   try {
     for (const body of ["invalid", "{}", "[]", "null", '{"resource":42}']) {
-      const response = await fetch(new URL("/api/issuer/verifyApiKey", issuer.issuer), {
+      const response = await fetch(new URL("/api/issuer/keyList", issuer.issuer), {
         method: "POST",
-        headers: { authorization: `Bearer ${issuer.key}`, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body,
       });
 

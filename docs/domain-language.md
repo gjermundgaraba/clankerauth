@@ -17,6 +17,7 @@ Use these names in the dashboard, API, documentation and tests.
 | Access token         | The credential a client presents to a resource server. This service issues signed JWTs with audience and scope claims and a maximum lifetime of fifteen minutes.                                                                                                             |
 | Refresh token        | The credential a client presents to the authorization server to request replacement tokens without repeating the interactive flow. It is bound to the existing authorization and rotates when used.                                                                          |
 | Audience             | The target named in an access token's `aud` claim. Each request targets one resource, even when the client has access to several, and the token names only that resource.                                                                                                    |
+| Key list             | What a resource server verifies API keys against, offline: one per resource, signed by the issuer and valid for a day, holding a sealed entry for each key granted on that resource that only the key itself can find or read.                                               |
 
 **Application** means software in general; it is not a substitute for Client or Resource. One application can act as a client, host a resource, or do both. **API** means an interface; use Resource when referring to the protected target and Resource server when referring to its host.
 

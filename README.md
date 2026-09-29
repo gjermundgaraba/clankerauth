@@ -1,6 +1,6 @@
 # clankerauth
 
-A small self-hosted OAuth authorization server for private-network apps and MCP servers. One owner account with local password login and first-run setup in the browser. S256 PKCE on every flow, audience-bound JWT access tokens, rotating refresh tokens, scoped API keys, and automatic client onboarding through Client ID Metadata Documents (CIMD) and Dynamic Client Registration (DCR). No external identity provider, no open signup, no organizations.
+A small self-hosted OAuth authorization server for private-network apps and MCP servers. One owner account with local password login and first-run setup in the browser. S256 PKCE on every flow, audience-bound JWT access tokens, rotating refresh tokens, scoped API keys that resource servers verify offline, and automatic client onboarding through Client ID Metadata Documents (CIMD) and Dynamic Client Registration (DCR). No external identity provider, no open signup, no organizations.
 
 Built on Node 26, [Better Auth](https://better-auth.com) with its OAuth provider, API key and CIMD plugins, [Effect](https://effect.website), Vite+ and SQLite through `node:sqlite`.
 
@@ -89,19 +89,20 @@ const claims = await verifyAccessTokenRequest(requestToResourceInput(request), {
 
 MCP servers additionally publish RFC 9728 protected-resource metadata that lists this issuer under `authorization_servers`, and answer unauthenticated requests with a `WWW-Authenticate: Bearer resource_metadata="…"` challenge.
 
-For CLIs and automation, the owner creates **API keys** with explicit per-resource scopes. A resource server verifies one with:
+For CLIs and automation, the owner creates **API keys** with explicit per-resource scopes. A resource server verifies them offline, against its **key list**:
 
 ```http
-POST /api/issuer/verifyApiKey
-Authorization: Bearer clankerauth_…
+POST /api/issuer/keyList
 Content-Type: application/json
 
 { "resource": "https://notes.internal/" }
 ```
 
-`200` returns `{ keyId, ownerId, resource, scopes, expiresAt }`. `401` means the key is invalid, disabled or expired; `403` that it has no scopes on that resource; `429` that it exceeded 1,000 verifications in a minute. Every timestamp this issuer reads or writes is an ISO-8601 instant in UTC; a value without an offset is read as UTC, never as the host's local time. Verify on every request so that disabling a key takes effect on the next one. The dashboard lists the first 100 keys.
+`200` returns `{ list }`: a JWT with header `typ: key-list+jwt`, signed with the same EdDSA key as access tokens and published in the same JWKS, whose `aud` is the resource and whose `keys` claim holds one entry per enabled, unexpired key granted on it. An entry is found by, and sealed under, values derived from the key's SHA-256 digest and the resource identifier, so only a holder of the key can find or read it: its key ID, owner ID, the scopes it still has on that resource, and its expiry. Anyone else still sees how many entries the resource has, when they come and go, and roughly how large each grant is. An unknown resource, and administration, which keys never reach, get a list with no entries. The request needs no credential, so a resource server is configured with nothing but the issuer URL and its own resource identifier.
 
-[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names its public URL and its scopes and writes no authorization code. Two entry points, `/errors` and `/session`, are browser-safe: a page imports the error schemas, the `whoami` contract and the sign-out URL without pulling verification into its bundle. Its API is Effect-only. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, ships the development forward-auth edge so no application writes one again, and offers a signing fake issuer at `/testing` for tests that only need JWKS and key verification.
+A list is valid for 24 hours from `iat`, and the SDK reads the next one after a minute. So disabling, deleting, re-scoping or expiring a key takes effect within about a minute; a resource server that cannot reach the issuer keeps deciding from the last list it read, until that list expires. That day is also the longest a revoked key stays usable during an outage. Lists are re-signed on every read, so rotating the signing key needs nothing but publishing the new key. A key is a bearer secret: any resource it is granted on can replay it to the others, so give a resource you trust less its own key. Every timestamp this issuer reads or writes is an ISO-8601 instant in UTC; a value without an offset is read as UTC, never as the host's local time. The dashboard lists the first 100 keys.
+
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and offline API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names its public URL and its scopes and writes no authorization code. Two entry points, `/errors` and `/session`, are browser-safe: a page imports the error schemas, the `whoami` contract and the sign-out URL without pulling verification into its bundle. Its API is Effect-only, and its `/testing` entry is a signing fake issuer for tests that only need JWKS and key lists. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, and ships the development forward-auth edge so no application writes one again.
 
 ## Develop
 
@@ -133,7 +134,7 @@ operational `GET /healthz` endpoint are separate.
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `setupStatus`          | Public                                                                                                                       | HTTP      |
 | `setupOwner`           | Public; succeeds only before an owner exists                                                                                 | HTTP      |
-| `verifyApiKey`         | Bearer API key scoped to the requested resource                                                                              | HTTP      |
+| `keyList`              | Public; entries are sealed to the keys they describe                                                                         | HTTP      |
 | Administration actions | Owner session cookie (SameSite)                                                                                              | HTTP      |
 | Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:read` to list, or `clankerauth:write` for everything | MCP       |
 
@@ -191,7 +192,7 @@ curl "$CLANKERAUTH_BASE_URL/api/administration/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See the breaking [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

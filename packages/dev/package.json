@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-dev",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Disposable local clankerauth issuer for application development",
   "license": "MIT",
   "repository": {
@@ -21,10 +21,6 @@
     "./edge": {
       "types": "./dist/edge.d.ts",
       "import": "./dist/edge.mjs"
-    },
-    "./testing": {
-      "types": "./dist/testing.d.ts",
-      "import": "./dist/testing.mjs"
     }
   },
   "publishConfig": {

@@ -111,11 +111,14 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       201,
     );
 
-    const verifier = await Effect.runPromise(
-      Verifier.make({ issuer: issuer.issuer, resource, requiredScopes: ["notes:read"] }).pipe(
-        Effect.provide(FetchHttpClient.layer),
-      ),
-    );
+    const verifierFor = () =>
+      Effect.runPromise(
+        Verifier.make({ issuer: issuer.issuer, resource, requiredScopes: ["notes:read"] }).pipe(
+          Effect.provide(FetchHttpClient.layer),
+        ),
+      );
+
+    const verifier = await verifierFor();
 
     // After login the owner continues to the app, which sets the forward cookie; the proxy's
     // subrequest then yields a token the verifier accepts for this resource only.
@@ -141,7 +144,8 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       (error) => error instanceof Unauthorized,
     );
 
-    // API keys are verified online with their granted scopes and the key as actor.
+    // API keys verify offline, from the resource's key list, with their granted scopes and
+    // the key as actor.
     const created = await issuer.call("/api/administration/createApiKey", {
       name: "Backup script",
       permissions: { [resource]: ["notes:read"] },
@@ -163,8 +167,11 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       (await issuer.call("/api/administration/updateApiKey", { keyId, enabled: false })).status,
       200,
     );
+    // A disabled key is gone from the next list: a verifier holding this minute's list
+    // still accepts it, and one that reads the list now does not.
+    await Effect.runPromise(verifier.verifyToken(key));
     await assert.rejects(
-      Effect.runPromise(verifier.verifyToken(key)),
+      Effect.runPromise((await verifierFor()).verifyToken(key)),
       (error) => error instanceof Unauthorized,
     );
 

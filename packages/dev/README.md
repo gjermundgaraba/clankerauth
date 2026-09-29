@@ -107,25 +107,6 @@ Two optional test hooks help exercise integrations:
 
 ## A fake issuer for tests
 
-`@gjermundgaraba/clankerauth-dev/testing` is the issuer an application test usually wants: the two endpoints a resource server actually calls, and nothing else. It signs with a real EdDSA key and publishes it as JWKS, so every token still travels the resource server's own verifier — signature, issuer, audience, type, claims, scopes — without starting the whole issuer.
-
-```ts
-import { startFakeIssuer } from "@gjermundgaraba/clankerauth-dev/testing";
-
-const auth = await startFakeIssuer({
-  resource: "http://127.0.0.1:8080/",
-  scopes: ["notes:read", "notes:write"],
-});
-
-auth.issuer; // configure the resource server with this
-const token = await auth.sign(); // every claim is overridable: auth.sign({ exp, aud, scope })
-const key = auth.apiKey(["notes:read"]); // and auth.apiKey(scopes, someOtherResource)
-auth.revoke(key); // the next verification is 401, online, as the real issuer behaves
-auth.fail(503); // both endpoints answer this instead; auth.fail() restores them
-auth.verifications(); // how many API-key verifications were served
-await auth.close();
-```
-
-Use it for what a real issuer makes slow or awkward: a token that must expire in two seconds, a key granted on someone else's resource, an outage. Use `startDisposableIssuer` when the protocol itself is what the test is about — sign-in, consent, forward auth, dynamic registration.
+A test that needs only JWKS and key lists — a token that must expire in two seconds, a key granted on someone else's resource, an outage — wants the SDK's fake issuer, `@gjermundgaraba/clankerauth-sdk/testing`, instead of this package. Use `startDisposableIssuer` when the protocol itself is what the test is about — sign-in, consent, forward auth, dynamic registration.
 
 MIT licensed. The bundled third-party licenses are listed in `dist/THIRD_PARTY_NOTICES.txt`.

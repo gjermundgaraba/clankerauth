@@ -20,12 +20,6 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   }
 }
 
-export class RateLimited extends Schema.TaggedError<RateLimited>()(
-  "RateLimited",
-  { message: Schema.String },
-  { httpApiStatus: 429 },
-) {}
-
 export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
   "ProviderUnavailable",
   { operation: Schema.String },
@@ -58,15 +52,6 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()
  * What verification, admission and the authorization hook refuse with — one list, so a
  * surface declares `errors: authenticationErrors` and answers every refusal the same way.
  */
-export const authenticationErrors = [
-  Unauthorized,
-  InsufficientScope,
-  RateLimited,
-  ProviderUnavailable,
-] as const;
+export const authenticationErrors = [Unauthorized, InsufficientScope, ProviderUnavailable] as const;
 
-export type AuthenticationError =
-  | Unauthorized
-  | InsufficientScope
-  | RateLimited
-  | ProviderUnavailable;
+export type AuthenticationError = InstanceType<(typeof authenticationErrors)[number]>;

@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
-import { HttpServerRequest } from "effect/unstable/http";
 import {
   Http,
   Administration,
@@ -51,12 +50,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
             ),
           ),
         setupOwner: admin.setup,
-        verifyApiKey: ({ resource }) =>
-          Effect.gen(function* () {
-            const request = yield* HttpServerRequest.HttpServerRequest;
-
-            return yield* keys.verify(new Headers(request.headers), resource);
-          }),
+        keyList: ({ resource }) => keys.keyList(resource),
       });
 
       const adminResource = yield* administrationResource();

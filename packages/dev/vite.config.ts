@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 export default defineConfig({
   // Declared here rather than as a package script so it can opt out of the task cache:
   // `vp pack` clears dist before every build, and a replayed cache writes no files, so a
-  // cached declaration emit would leave the package without `edge.d.ts` and `testing.d.ts`.
+  // cached declaration emit would leave the package without `edge.d.ts`.
   run: {
     tasks: {
       build: {
@@ -15,7 +15,7 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: ["src/index.ts", "src/edge.ts", "src/testing.ts"],
+    entry: ["src/index.ts", "src/edge.ts"],
     platform: "node",
     target: "node26",
     format: ["esm"],

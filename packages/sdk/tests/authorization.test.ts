@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
+import { createServer, request } from "node:http";
+import { once } from "node:events";
 import { test } from "vite-plus/test";
 import { Effect, Schema } from "effect";
 import { checkResourceAllowed } from "@modelcontextprotocol/client";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { InsufficientScope, Unauthorized } from "../src/errors.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
-import { publicUrl, startIssuer } from "./issuer.ts";
-import { withHttp } from "./support.ts";
+import { publicUrl, startIssuer, withHttp } from "./support.ts";
 
 const read = Action.make("read", {
   description: "Read",
@@ -38,7 +39,7 @@ const decide = (resource: Resource.Resource, action: Action.Any, scopes: Readonl
   );
 
 test("the pre-handler hook refuses only writes, and names only the missing scope", async () => {
-  const issuer = await startIssuer();
+  const issuer = await startIssuer(`${publicUrl}/`);
 
   try {
     const resource = await resourceFor(issuer.issuer, guarded);
@@ -63,7 +64,7 @@ test("the pre-handler hook refuses only writes, and names only the missing scope
 });
 
 test("admission verifies outside a router and renders a ready-to-send refusal", async () => {
-  const issuer = await startIssuer();
+  const issuer = await startIssuer(`${publicUrl}/`);
 
   try {
     const resource = await resourceFor(issuer.issuer, guarded);
@@ -71,7 +72,7 @@ test("admission verifies outside a router and renders a ready-to-send refusal", 
     const admit = (authorization: string | undefined, access: Action.Access = "read") =>
       Effect.runPromise(resource.admit(authorization, access));
 
-    const token = await issuer.sign({}, "");
+    const token = await issuer.sign();
     const accepted = await admit(`Bearer ${token}`);
     assert.equal(accepted.ok, true);
     assert.equal(accepted.principal.subject, "owner");
@@ -114,24 +115,92 @@ test("admission verifies outside a router and renders a ready-to-send refusal", 
     assert.match(readOnly.refusal.headers["www-authenticate"] ?? "", /scope="notes:write"/u);
     assert.equal((await admit(`Bearer ${issuer.key}`, "write")).ok, true);
 
-    issuer.fail(429);
-    const limited = await admit(`Bearer ${issuer.key}`);
-    assert.equal(limited.ok, false);
-    assert.equal(limited.refusal.status, 429);
-    assert.equal(limited.refusal.headers["retry-after"], "60");
-    assert.equal(limited.refusal.headers["www-authenticate"], undefined);
-
+    // An outage after the key list was read is no refusal at all.
     issuer.fail(503);
-    const unavailable = await admit(`Bearer ${issuer.key}`);
+    assert.equal((await admit(`Bearer ${issuer.key}`)).ok, true);
+
+    // Before any list, a key cannot be decided; that refusal carries no challenge.
+    const cold = await resourceFor(issuer.issuer, guarded);
+    const unavailable = await Effect.runPromise(cold.admit(`Bearer ${issuer.key}`, "read"));
     assert.equal(unavailable.ok, false);
     assert.equal(unavailable.refusal.status, 503);
+    assert.equal(unavailable.refusal.headers["www-authenticate"], undefined);
   } finally {
     await issuer.close();
   }
 });
 
+test("a WebSocket upgrade is admitted by key, or refused before it is upgraded", async () => {
+  const issuer = await startIssuer(`${publicUrl}/`);
+  const resource = await resourceFor(issuer.issuer, guarded);
+
+  // A Node upgrade handler: the socket is switched only after admission.
+  const server = createServer().on("upgrade", async (incoming, socket) => {
+    const admission = await Effect.runPromise(
+      resource.admit(incoming.headers.authorization, "write"),
+    );
+
+    if (!admission.ok) {
+      const { status, headers, body } = admission.refusal;
+      const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+      socket.end([`HTTP/1.1 ${status} Refused`, ...lines, "", body].join("\r\n"));
+
+      return;
+    }
+
+    socket.end(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    );
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+
+  if (address === null || !(address instanceof Object)) throw new Error("No address");
+
+  const upgrade = async (authorization: string) => {
+    const outgoing = request({
+      host: "127.0.0.1",
+      port: address.port,
+      path: "/terminal",
+      headers: { connection: "upgrade", upgrade: "websocket", authorization },
+    });
+
+    outgoing.end();
+
+    const [event, value] = await Promise.race([
+      once(outgoing, "upgrade").then(
+        ([response, socket]) => ["upgrade", { response, socket }] as const,
+      ),
+      once(outgoing, "response").then(([response]) => ["response", { response }] as const),
+    ]);
+
+    if ("socket" in value) value.socket.destroy();
+    else value.response.resume();
+
+    return { event, status: value.response.statusCode };
+  };
+
+  try {
+    assert.deepEqual(await upgrade(`Bearer ${issuer.key}`), { event: "upgrade", status: 101 });
+    assert.deepEqual(await upgrade(`Bearer clankerauth_${"x".repeat(43)}`), {
+      event: "response",
+      status: 401,
+    });
+    // Admitted for writing, so a read-only key is refused before the socket switches.
+    assert.deepEqual(await upgrade(`Bearer ${issuer.readOnlyKey}`), {
+      event: "response",
+      status: 403,
+    });
+  } finally {
+    server.close();
+    await issuer.close();
+  }
+});
+
 test("a resource that accepts only access tokens refuses a key by shape alone", async () => {
-  const issuer = await startIssuer();
+  const issuer = await startIssuer(`${publicUrl}/`);
 
   try {
     const resource = await Effect.runPromise(
@@ -153,11 +222,11 @@ test("a resource that accepts only access tokens refuses a key by shape alone", 
       Schema.encodeSync(Unauthorized)(new Unauthorized({ message: "Authentication required" })),
     );
     // The issuer would have accepted this key. It was never asked: the prefix decides.
-    assert.equal(issuer.count(), 0);
+    assert.equal(issuer.keyLists(), 0);
 
     // Access tokens still verify, which is the only credential such a resource takes.
     const accepted = await Effect.runPromise(
-      resource.admit(`Bearer ${await issuer.sign({}, "")}`, "read"),
+      resource.admit(`Bearer ${await issuer.sign()}`, "read"),
     );
 
     assert.equal(accepted.ok, true);
@@ -167,7 +236,7 @@ test("a resource that accepts only access tokens refuses a key by shape alone", 
 });
 
 test("one resource at the origin root covers every surface an MCP client asks about", async () => {
-  const issuer = await startIssuer();
+  const issuer = await startIssuer(`${publicUrl}/`);
 
   try {
     // Any path on the public URL is discarded: the resource is the origin root.

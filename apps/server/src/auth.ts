@@ -9,7 +9,7 @@ import { apiKey } from "@better-auth/api-key";
 import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
 import { Conflict } from "@clankerauth/admin-api";
-import { forwardTokens } from "./forward-auth.ts";
+import { signer } from "./signing.ts";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { clientStore } from "./clients.ts";
 import { resourceReference } from "./grants.ts";
@@ -206,10 +206,12 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
         maximumNameLength: 100,
         enableSessionForAPIKeys: false,
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
-        rateLimit: { enabled: true, timeWindow: 60_000, maxRequests: 1000 },
+        // The plugin counts verifications through its own endpoint, which nothing calls:
+        // resource servers verify keys offline, against key lists.
+        rateLimit: { enabled: false },
       }),
       jwt(jwtOptions),
-      forwardTokens(jwtOptions, accessTokenLifetime),
+      signer(jwtOptions),
       oauthPlugin,
       cimd({
         fetchClientMetadataResource: (input, init) =>

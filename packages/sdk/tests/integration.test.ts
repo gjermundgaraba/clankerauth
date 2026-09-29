@@ -7,16 +7,10 @@ import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { mcpCall, mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
-import {
-  authenticationErrors,
-  InsufficientScope,
-  ProviderUnavailable,
-  Unauthorized,
-} from "../src/errors.ts";
+import { authenticationErrors, InsufficientScope, Unauthorized } from "../src/errors.ts";
 import { Session } from "../src/session.ts";
 import { CurrentPrincipal, Resource } from "../src/effect-actions.ts";
-import { publicUrl, startIssuer } from "./issuer.ts";
-import { withHttp } from "./support.ts";
+import { publicUrl, startIssuer, withHttp } from "./support.ts";
 
 // One resource per app, at the origin root, so /api, /mcp and a socket share it.
 const resourceId = `${publicUrl}/`;
@@ -39,7 +33,7 @@ const identity = Effect.map(CurrentPrincipal, (principal) =>
 );
 
 test("one resource protects HTTP and MCP, and the hook is the only authorization code", async () => {
-  const issuer = await startIssuer();
+  const issuer = await startIssuer(resourceId);
 
   const resource = await Effect.runPromise(
     withHttp(
@@ -99,7 +93,7 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
       ),
     );
 
-    assert.deepEqual(identities, ["writer", "reader"]);
+    assert.deepEqual(identities, ["key-1", "key-2"]);
     assert.equal(await (await call("notes/write", issuer.key)).json(), "written");
 
     // The session group is the SDK's own, answered from the verified credential.
@@ -134,7 +128,7 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
     tools.headers.set("cookie", "notes_session=not-a-bearer");
     assert.equal((await web.handler(tools)).status, 401);
     const authorized = mcpRequest({ url: `${publicUrl}/mcp`, method: "tools/list" });
-    authorized.headers.set("authorization", `Bearer ${await issuer.sign({}, "")}`);
+    authorized.headers.set("authorization", `Bearer ${await issuer.sign()}`);
     assert.equal((await web.handler(authorized)).status, 200);
 
     // The same hook runs on MCP: a refusal is the tool's declared failure.
@@ -142,7 +136,7 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
       await mcpCall(web.handler, {
         url: `${publicUrl}/mcp`,
         name: "write",
-        headers: { authorization: `Bearer ${await issuer.sign({ scope: "notes:read" }, "")}` },
+        headers: { authorization: `Bearer ${await issuer.sign({ scope: "notes:read" })}` },
       }),
       {
         isError: true,
@@ -152,20 +146,9 @@ test("one resource protects HTTP and MCP, and the hook is the only authorization
       },
     );
 
-    issuer.fail(429);
-    const limited = await call("notes/identity", issuer.key);
-    assert.equal(limited.status, 429);
-    assert.equal(limited.headers.get("retry-after"), "60");
-    assert.equal(limited.headers.get("www-authenticate"), null);
+    // An outage after the key list was read changes nothing for a key.
     issuer.fail(503);
-    const unavailable = await call("notes/identity", issuer.key);
-    assert.equal(unavailable.status, 503);
-    assert.deepEqual(
-      await unavailable.json(),
-      Schema.encodeSync(ProviderUnavailable)(
-        new ProviderUnavailable({ operation: "api-key.verify" }),
-      ),
-    );
+    assert.equal((await call("notes/identity", issuer.key)).status, 200);
   } finally {
     await web.dispose();
     await issuer.close();

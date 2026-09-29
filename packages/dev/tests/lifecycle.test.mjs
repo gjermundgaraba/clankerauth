@@ -9,7 +9,6 @@ import { connect } from "node:net";
 import { setTimeout } from "node:timers/promises";
 import { startDisposableIssuer } from "../dist/index.mjs";
 import { attach, reserveLoopbackPort } from "../dist/edge.mjs";
-import { startFakeIssuer } from "../dist/testing.mjs";
 
 const resource = {
   identifier: "http://127.0.0.1:9876/api",
@@ -24,6 +23,37 @@ const options = {
     redirect: "http://localhost:5173/auth/callback",
     resources: [resource.identifier],
   },
+};
+
+/**
+ * The entries of the key list a resource server reads for `asked`, or the status of a
+ * failed read. Entries are sealed to their keys; what they grant is the SDK's to open,
+ * and its tests and the server's do. Here, what matters is which keys are listed.
+ */
+const listed = async (issuer, asked) => {
+  const response = await fetch(new URL("/api/issuer/keyList", issuer), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ resource: asked }),
+  });
+
+  if (response.status !== 200) {
+    await response.body?.cancel();
+
+    return response.status;
+  }
+
+  const { list } = await response.json();
+
+  const [header, claims] = list
+    .split(".")
+    .slice(0, 2)
+    .map((part) => JSON.parse(Buffer.from(part, "base64url").toString()));
+
+  assert.equal(header.typ, "key-list+jwt");
+  assert.equal(claims.aud, asked);
+
+  return claims.keys;
 };
 
 const login = (issuer, owner = issuer.owner) =>
@@ -262,7 +292,7 @@ await test("close() does not wait for a request whose body never arrives", async
   await assert.rejects(access(issuer.directory), { code: "ENOENT" });
 });
 
-await test("bundled provider lists key metadata without plaintext and verifies keys online", async () => {
+await test("bundled provider lists key metadata without plaintext and keys for offline verification", async () => {
   const issuer = await startDisposableIssuer(options);
 
   try {
@@ -308,16 +338,8 @@ await test("bundled provider lists key metadata without plaintext and verifies k
 
     for (const key of created) assert.ok(!JSON.stringify(listing).includes(key.key));
 
-    const verify = () =>
-      fetch(`${issuer.url}/api/issuer/verifyApiKey`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${created[0].key}`, "content-type": "application/json" },
-        body: JSON.stringify({ resource: resource.identifier }),
-      });
-
-    const verified = await verify();
-    assert.equal(verified.status, 200);
-    assert.deepEqual((await verified.json()).scopes, ["example:read"]);
+    const entries = () => listed(`${issuer.url}/api/auth`, resource.identifier);
+    assert.equal((await entries()).length, created.length);
 
     const disabled = await fetch(`${issuer.url}/api/administration/updateApiKey`, {
       method: "POST",
@@ -327,9 +349,7 @@ await test("bundled provider lists key metadata without plaintext and verifies k
 
     assert.equal(disabled.status, 200);
     await disabled.body.cancel();
-    const rejected = await verify();
-    assert.equal(rejected.status, 401);
-    await rejected.body.cancel();
+    assert.equal((await entries()).length, created.length - 1);
   } finally {
     await issuer.close();
   }
@@ -504,15 +524,8 @@ await test("a data directory keeps the owner, the secret and the client across r
       assert.equal(state.clients.length, 1);
       assert.equal(state.resources.length, 2);
 
-      // The signing secret survived, so the key minted before the restart still verifies.
-      const verified = await fetch(`${second.url}/api/issuer/verifyApiKey`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ resource: resource.identifier }),
-      });
-
-      assert.equal(verified.status, 200);
-      assert.deepEqual((await verified.json()).scopes, ["example:read"]);
+      // The database survived, so the key minted before the restart is still listed.
+      assert.equal((await listed(`${second.url}/api/auth`, resource.identifier)).length, 1);
     } finally {
       await second.close();
     }
@@ -721,67 +734,4 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     await stopped;
     await issuer.close();
   }
-});
-
-await test("the fake issuer signs tokens, publishes its key and verifies API keys online", async () => {
-  const resource = "http://app.notes.localhost:9878/";
-  const fake = await startFakeIssuer({ resource, scopes: ["notes:read", "notes:write"] });
-
-  try {
-    const jwks = await (await fetch(`${fake.issuer}/jwks`)).json();
-    assert.equal(jwks.keys.length, 1);
-    assert.equal(jwks.keys[0].alg, "EdDSA");
-    assert.equal(jwks.keys[0].kid, "fixture");
-
-    const token = await fake.sign();
-
-    const [header, claims] = token
-      .split(".")
-      .slice(0, 2)
-      .map((part) => JSON.parse(Buffer.from(part, "base64url").toString()));
-
-    assert.equal(header.typ, "at+jwt");
-    assert.equal(claims.iss, fake.issuer);
-    assert.equal(claims.aud, resource);
-    assert.equal(claims.sub, "owner");
-    assert.equal(claims.scope, "notes:read notes:write");
-
-    // Every claim is the caller's to override, so a test can mint what it needs.
-    const expiring = JSON.parse(
-      Buffer.from((await fake.sign({ exp: 1, scope: "notes:read" })).split(".")[1], "base64url"),
-    );
-
-    assert.equal(expiring.exp, 1);
-    assert.equal(expiring.scope, "notes:read");
-
-    const verify = (key, asked = resource) =>
-      fetch(new URL("/api/issuer/verifyApiKey", fake.issuer), {
-        method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ resource: asked }),
-      });
-
-    const key = fake.apiKey(["notes:read"]);
-    const accepted = await verify(key);
-    assert.equal(accepted.status, 200);
-    assert.deepEqual((await accepted.json()).scopes, ["notes:read"]);
-    assert.equal(fake.verifications(), 1);
-
-    // A key granted on another resource is refused exactly as the real issuer refuses it.
-    const foreign = await verify(fake.apiKey(["notes:read"], "https://other.example/"));
-    assert.equal(foreign.status, 403);
-    assert.deepEqual(await foreign.json(), { error: "No access to this Resource" });
-
-    fake.revoke(key);
-    assert.equal((await verify(key)).status, 401);
-    fake.fail(503);
-    assert.equal((await verify(key)).status, 503);
-    assert.equal((await fetch(`${fake.issuer}/jwks`)).status, 503);
-    fake.fail();
-    assert.equal((await fetch(`${fake.issuer}/jwks`)).status, 200);
-  } finally {
-    await fake.close();
-  }
-
-  await assert.rejects(fetch(`${fake.issuer}/jwks`));
 });

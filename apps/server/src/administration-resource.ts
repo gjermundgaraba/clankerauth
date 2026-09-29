@@ -12,12 +12,7 @@ import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/unstable/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import type { AuthenticationError } from "@gjermundgaraba/clankerauth-sdk/errors";
-import {
-  Forbidden,
-  ServiceUnavailable,
-  TooManyRequests,
-  Unauthorized,
-} from "@clankerauth/admin-api";
+import { Forbidden, ServiceUnavailable, Unauthorized } from "@clankerauth/admin-api";
 import { administrationScopes, mcpResource } from "./resources.ts";
 import { Auth } from "./auth.ts";
 
@@ -46,7 +41,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const verifier = yield* Verifier.make({
     issuer,
     resource,
-    // The loopback serves provider routes only, so key verification must never reach the issuer.
+    // API keys never administer the issuer, and the loopback serves provider routes only.
     apiKeys: false,
   }).pipe(
     Effect.provide(
@@ -62,10 +57,6 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
         headers: {
           "www-authenticate": discovery.challenge({ error: "insufficient_scope", scope }),
         },
-      })),
-      Match.tag("RateLimited", () => ({
-        error: new TooManyRequests({ error: "Authentication rate exceeded" }),
-        headers: { "retry-after": "60" },
       })),
       Match.tag("ProviderUnavailable", () => ({
         error: new ServiceUnavailable({ error: "Request could not be completed" }),

@@ -221,7 +221,7 @@ const schemaError = {
 };
 
 // These actions have their own access rules, not an owner-session requirement.
-// They are HTTP-only: bootstrap and key introspection are not MCP administration tools.
+// They are HTTP-only: bootstrap and key lists are not MCP administration tools.
 export const IssuerActions = ActionGroup.make(
   { name: "issuer", errors, schemaError },
   Action.make("setupStatus", {
@@ -237,17 +237,12 @@ export const IssuerActions = ActionGroup.make(
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
     mcp: false,
   }),
-  Action.make("verifyApiKey", {
-    description: "Verify the bearer API key against one resource and return its granted scopes.",
+  Action.make("keyList", {
+    description:
+      "The signed list a resource server verifies API keys against: one sealed entry per key granted on the resource, readable only with that key.",
     access: "read",
     input: Schema.Struct({ resource: Schema.String }),
-    success: Schema.Struct({
-      keyId: Schema.String,
-      ownerId: Schema.String,
-      resource: Schema.String,
-      scopes: Schema.Array(Schema.String),
-      expiresAt: Schema.NullOr(Timestamp),
-    }),
+    success: Schema.Struct({ list: Schema.String }),
     mcp: false,
   }),
 );

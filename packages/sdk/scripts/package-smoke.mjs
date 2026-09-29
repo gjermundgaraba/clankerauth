@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { build } from "vite";
-import { publicUrl, startIssuer } from "../tests/issuer.ts";
 
 const execute = promisify(execFile);
 
@@ -94,7 +93,6 @@ void verification;
   for (const exported of [
     "Unauthorized",
     "InsufficientScope",
-    "RateLimited",
     "ProviderUnavailable",
     "ConfigurationError",
     "authenticationErrors",
@@ -121,26 +119,36 @@ void verification;
   const missing = await Effect.runPromise(Effect.flip(verifier.verify(null)));
   assert(missing instanceof errors.Unauthorized);
 
-  // Verify API-key authentication and revocation through the installed package.
-  const issuer = await startIssuer();
+  await writeFile(join(directory, "key-list.mjs"), `export * from "${name}/key-list";`);
+  const keyList = await import(pathToFileURL(join(directory, "key-list.mjs")).href);
+
+  for (const exported of ["seal", "open", "digest", "type", "lifetime", "Entry", "Grant", "Claims"])
+    assert(exported in keyList, `Missing key-list export: ${exported}`);
+
+  // Verify API keys offline against the installed fake issuer, and a revocation in the
+  // next list, through the installed package.
+  await writeFile(join(directory, "testing.mjs"), `export * from "${name}/testing";`);
+  const { startFakeIssuer } = await import(pathToFileURL(join(directory, "testing.mjs")).href);
+  const notes = "http://127.0.0.1:7337/";
+  const issuer = await startFakeIssuer({ resource: notes, scopes: ["notes:read", "notes:write"] });
 
   try {
-    const installedVerifier = await make({
-      issuer: issuer.issuer,
-      resource: `${publicUrl}/api`,
-    });
+    const key = issuer.apiKey();
+    const listed = () => make({ issuer: issuer.issuer, resource: notes });
+    const installedVerifier = await listed();
 
-    assert.deepEqual(await Effect.runPromise(installedVerifier.verifyToken(issuer.key)), {
+    assert.deepEqual(await Effect.runPromise(installedVerifier.verifyToken(key)), {
       subject: "owner",
       scopes: ["notes:read", "notes:write"],
-      actor: { kind: "key", keyId: "writer" },
-      // An API key has no token lifetime; it is re-verified on every request.
+      actor: { kind: "key", keyId: "key-1" },
+      // This key does not expire.
       expiresAt: undefined,
     });
-    issuer.keys.delete(issuer.key);
-    const revoked = await Effect.runPromise(Effect.flip(installedVerifier.verifyToken(issuer.key)));
+    await Effect.runPromise(installedVerifier.verifyToken(await issuer.sign()));
+    issuer.revoke(key);
+    const revoked = await Effect.runPromise(Effect.flip((await listed()).verifyToken(key)));
     assert(revoked instanceof errors.Unauthorized);
-    assert.equal(issuer.count(), 2);
+    assert.equal(issuer.keyLists(), 2);
   } finally {
     await issuer.close();
   }
@@ -222,7 +230,7 @@ void page;
 
   assert(code.length > 0, "The browser entry points produced no bundle");
 
-  for (const forbidden of ["jose", "verifyApiKey", "at+jwt"]) {
+  for (const forbidden of ["jose", "keyList", "key-list", "at+jwt"]) {
     assert(!code.includes(forbidden), `The browser bundle reaches server code: ${forbidden}`);
     assert(
       !modules.some((id) => id.includes(forbidden)),

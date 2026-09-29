@@ -8,57 +8,19 @@
  * forward cookie: the session cookie value encrypted under the server secret, accepted
  * by these routes alone. It resolves to the live session, so sign-out revokes it.
  */
-import { Effect, Layer, Option, Redacted, Schema } from "effect";
+import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { createAuthEndpoint } from "better-auth/api";
-import type { BetterAuthPlugin } from "better-auth";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
-import { signJWT, type JwtOptions } from "better-auth/plugins/jwt";
 import { allowedScheme, withinDomain } from "./config.ts";
 import { provider, respond } from "./api-errors.ts";
 import { mcpResource } from "./resources.ts";
-import { Auth } from "./auth.ts";
+import { accessTokenLifetime, Auth } from "./auth.ts";
 
 /** The `client_id` claim of forward-auth tokens. Not a registered client: administration
  * MCP joins tokens to the client table, so these tokens can never administer the issuer. */
 export const forwardClientId = "forward-auth";
 
 export const forwardCookie = "clankerauth_forward";
-
-/** The provider validates endpoint bodies through the Standard Schema interface. */
-const TokenRequest = Schema.toStandardSchemaV1(
-  Schema.Struct({ subject: Schema.String, audience: Schema.String, scope: Schema.String }),
-);
-
-/** Signs access tokens outside the OAuth flows, with the JWT plugin's key and the same
- * profile the provider uses for its own access tokens. Server-only: never routed. */
-export const forwardTokens = (jwt: JwtOptions, lifetimeSeconds: number) =>
-  ({
-    id: "forward-tokens",
-    endpoints: {
-      signForwardToken: createAuthEndpoint.serverOnly(
-        { method: "POST", body: TokenRequest },
-        async (ctx) => {
-          const iat = Math.floor(Date.now() / 1000);
-
-          const token = await signJWT(ctx, {
-            options: jwt,
-            header: { typ: "at+jwt" },
-            payload: {
-              sub: ctx.body.subject,
-              aud: ctx.body.audience,
-              client_id: forwardClientId,
-              scope: ctx.body.scope,
-              iat,
-              exp: iat + lifetimeSeconds,
-            },
-          });
-
-          return ctx.json({ token });
-        },
-      ),
-    },
-  }) satisfies BetterAuthPlugin;
 
 const json = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status });
@@ -145,12 +107,21 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
             ? HttpServerResponse.redirect(withReturn("/forward-auth/continue", returnTo))
             : json(401, "unauthenticated");
 
+        // The profile the provider uses for its own access tokens.
+        const iat = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+
         const { token } = yield* provider(() =>
-          service.auth.api.signForwardToken({
+          service.auth.api.signDocument({
             body: {
-              subject: current.user.id,
-              audience: resource.identifier,
-              scope: resource.scopes.join(" "),
+              typ: "at+jwt",
+              payload: {
+                sub: current.user.id,
+                aud: resource.identifier,
+                client_id: forwardClientId,
+                scope: resource.scopes.join(" "),
+                iat,
+                exp: iat + accessTokenLifetime,
+              },
             },
           }),
         );
