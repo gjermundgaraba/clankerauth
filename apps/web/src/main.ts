@@ -404,7 +404,7 @@ const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
   <div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`;
 
 const keyForm = (resources: readonly ResourceView[]) =>
-  `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Blank means valid until revoked. The key is shown once.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
+  `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Blank means valid until revoked. The key is shown once and works within about a minute.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
 
 const when = (value: DateTime.Utc) =>
   escape(DateTime.formatLocal(value, { dateStyle: "medium", timeStyle: "short" }));
@@ -512,7 +512,7 @@ async function dashboard() {
     ${columns(
       "API keys",
       keyData.keys.length,
-      "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: disabling, deleting, re-scoping or expiring a key takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours.",
+      "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: any change to a key, creating it included, takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours.",
       keyData.keys.map((key) => keyCard(key, keyResources)).join("") ||
         empty("No API keys", "Create a key for a CLI or automation that needs direct access."),
       keyForm(keyResources),
