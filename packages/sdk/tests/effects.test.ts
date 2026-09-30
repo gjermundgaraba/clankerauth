@@ -21,6 +21,19 @@ import { Resource } from "../src/effect-actions.ts";
 import * as KeyList from "../src/key-list.ts";
 import { signList } from "./support.ts";
 
+/** What a key list test signs with and publishes, for one resource. */
+const listIssuer = async () => {
+  const { exportJWK, generateKeyPair } = await import("jose");
+  const pair = await generateKeyPair("EdDSA");
+
+  return {
+    pair,
+    jwk: { ...(await exportJWK(pair.publicKey)), kid: "fixture", alg: "EdDSA" },
+    issuer: "https://issuer.example/api/auth",
+    audience: "https://notes.example/",
+  };
+};
+
 test("verification deadlines interrupt the supplied HTTP transport", () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -156,11 +169,7 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
 });
 
 test("a key list refreshes every minute and outlasts an outage for its lifetime", async () => {
-  const { exportJWK, generateKeyPair } = await import("jose");
-  const pair = await generateKeyPair("EdDSA");
-  const jwk = { ...(await exportJWK(pair.publicKey)), kid: "fixture", alg: "EdDSA" };
-  const issuer = "https://issuer.example/api/auth";
-  const audience = "https://notes.example/";
+  const { pair, jwk, issuer, audience } = await listIssuer();
   const key = `clankerauth_${"k".repeat(64)}`;
   const reader = `clankerauth_${"r".repeat(64)}`;
 
@@ -276,12 +285,83 @@ test("a key list refreshes every minute and outlasts an outage for its lifetime"
   );
 });
 
+test("a key the held list does not name has the list read again, five seconds apart at most", async () => {
+  const { pair, jwk, issuer, audience } = await listIssuer();
+  const known = `clankerauth_${"k".repeat(64)}`;
+  const created = `clankerauth_${"c".repeat(64)}`;
+  const unknown = `clankerauth_${"u".repeat(64)}`;
+  const grant = { keyId: "key", ownerId: "owner", scopes: ["read"], expiresAt: null };
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      let lists = 0;
+      let unavailable = false;
+      const granted = new Map([[known, grant]]);
+
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/jwks"))
+            return HttpClientResponse.fromWeb(request, Response.json({ keys: [jwk] }));
+          lists++;
+
+          if (unavailable)
+            return HttpClientResponse.fromWeb(request, new Response("{}", { status: 503 }));
+          const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+
+          const list = yield* Effect.promise(() =>
+            signList(pair.privateKey, issuer, audience, new Map(granted), seconds),
+          );
+
+          return HttpClientResponse.fromWeb(request, Response.json({ list }));
+        }),
+      );
+
+      const resource = yield* Resource.make({
+        issuer,
+        publicUrl: new URL(audience),
+        scopes: { read: "read" },
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const verify = resource.verifier.verifyToken;
+      const refused = (key: string) => Effect.flip(verify(key));
+      yield* verify(known);
+
+      // A list just read decides a key it does not name, created since or not.
+      granted.set(created, grant);
+      assert((yield* refused(created)) instanceof Unauthorized);
+      assert.equal(lists, 1);
+
+      // Five seconds on it is read again, so a new key waits seconds, not the minute.
+      yield* TestClock.adjust("5 seconds");
+      yield* verify(created);
+      assert.equal(lists, 2);
+
+      // Unknown keys reach the issuer once per five seconds, however many arrive.
+      assert((yield* refused(unknown)) instanceof Unauthorized);
+      yield* TestClock.adjust("5 seconds");
+      assert((yield* refused(unknown)) instanceof Unauthorized);
+      assert((yield* refused(unknown)) instanceof Unauthorized);
+      assert.equal(lists, 3);
+
+      // A key the list names never does, inside the list's minute.
+      yield* TestClock.adjust("59 seconds");
+      yield* verify(known);
+      yield* verify(created);
+      assert.equal(lists, 3);
+
+      // A read that fails refuses the unknown key from the held list, holds off the next
+      // read like any other, and leaves that list answering the keys it names.
+      unavailable = true;
+      assert((yield* refused(unknown)) instanceof Unauthorized);
+      assert((yield* refused(unknown)) instanceof Unauthorized);
+      assert.equal(lists, 4);
+      yield* verify(known);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+});
+
 test("a list read shortly before it expires decides only until then", async () => {
-  const { exportJWK, generateKeyPair } = await import("jose");
-  const pair = await generateKeyPair("EdDSA");
-  const jwk = { ...(await exportJWK(pair.publicKey)), kid: "fixture", alg: "EdDSA" };
-  const issuer = "https://issuer.example/api/auth";
-  const audience = "https://notes.example/";
+  const { pair, jwk, issuer, audience } = await listIssuer();
   const key = `clankerauth_${"k".repeat(64)}`;
   const grant = { keyId: "key", ownerId: "owner", scopes: ["read"], expiresAt: null };
 
@@ -314,11 +394,12 @@ test("a list read shortly before it expires decides only until then", async () =
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       yield* resource.verifier.verifyToken(key);
-      // Still the cached read, but past the window it was signed with.
+      // Past the window it was signed with, it is read again; the same list, replayed, no
+      // longer verifies.
       yield* TestClock.adjust("5 seconds");
       const failure = yield* Effect.flip(resource.verifier.verifyToken(key));
       assert(failure instanceof ProviderUnavailable);
-      assert.equal(failure.operation, "key-list.expired");
+      assert.equal(failure.operation, "key-list.verify");
     }).pipe(Effect.provide(TestClock.layer())),
   );
 });

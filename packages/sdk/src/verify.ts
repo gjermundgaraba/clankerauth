@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Exit, Ref, Result, Schema } from "effect";
+import { Cause, Clock, Duration, Effect, Exit, Ref, Result, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import {
@@ -71,6 +71,8 @@ const KeyListClaims = KeyList.Claims.pipe(Schema.fieldsAssign({ exp: Schema.Fini
 
 /** One verified key list: the entries it holds and how long they may decide. */
 interface Keys {
+  /** Epoch milliseconds, by this host's clock: when the list was read. */
+  readonly readAt: number;
   /** Epoch milliseconds: the end of the issuer's outage window for this list. */
   readonly expiresAt: number;
   readonly entries: ReadonlyMap<string, string>;
@@ -82,8 +84,11 @@ const unauthorized = (cause?: unknown) =>
 /** How long a JWKS document answers verification before it is read again. */
 const documentLifetime = "1 minute";
 
-/** How long a failed read holds off the next one. */
-const failureCooldown = "5 seconds";
+/**
+ * How long a read holds off the next one: a failed read of either document, and any read
+ * of the key list, so a key the held list does not name reaches the issuer at most this often.
+ */
+const cooldown = Duration.seconds(5);
 
 /**
  * How long a key list read may take. Under `Resource`'s five-second deadline, so a stalled
@@ -131,7 +136,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   // One read serves every key identifier until it expires, whatever its outcome, so an
   // unknown `kid` in an unauthenticated request never becomes traffic at the issuer.
   const read = yield* Effect.cachedWithTTL(document(), (exit) =>
-    Exit.isSuccess(exit) ? documentLifetime : failureCooldown,
+    Exit.isSuccess(exit) ? documentLifetime : cooldown,
   );
 
   // Replaying a read must not hand a later request the interruption of an earlier
@@ -237,6 +242,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     );
 
     return {
+      readAt: yield* Clock.currentTimeMillis,
       expiresAt: claims.exp * 1000,
       entries: new Map(claims.keys.map((entry) => [entry.id, entry.sealed])),
     } satisfies Keys;
@@ -268,21 +274,21 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
         ),
       ),
     ),
-    (exit) => (Exit.isSuccess(exit) ? keyListRefresh : failureCooldown),
+    cooldown,
   );
 
   // The list is verified once, when it is read. Holding its entries, not the document,
   // is what lets keys verify through an outage that has already taken JWKS with it.
   const held = yield* Ref.make<Keys | undefined>(undefined);
 
-  /** The last verified list, while it is inside its window. */
-  const keyList = Effect.gen(function* () {
+  /** The list read now, or within the cooldown, or else the held one, while inside its window. */
+  const latest = Effect.gen(function* () {
     const fetched = yield* Effect.result(replayed(readList, "key-list.refresh"));
 
     if (Result.isSuccess(fetched)) yield* Ref.set(held, fetched.success);
     const list = yield* Ref.get(held);
 
-    // A read is cached past its own check, so the window is checked on every use.
+    // A list is held past its own check, so the window is checked on every use.
     if (list !== undefined && list.expiresAt > (yield* Clock.currentTimeMillis)) return list;
 
     return yield* Result.isFailure(fetched)
@@ -291,12 +297,30 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   });
 
   const verifyKey = Effect.fn("Verifier.apiKey")(function* (key: string) {
-    const list = yield* keyList;
+    const open = (list: Keys) =>
+      Effect.tryPromise({
+        try: () => KeyList.open(key, options.resource, list.entries),
+        catch: unauthorized,
+      });
 
-    const grant = yield* Effect.tryPromise({
-      try: () => KeyList.open(key, options.resource, list.entries),
-      catch: unauthorized,
-    });
+    const now = yield* Clock.currentTimeMillis;
+    const current = yield* Ref.get(held);
+
+    // One read decides the keys it names for a minute, without the issuer.
+    const list =
+      current !== undefined &&
+      now - current.readAt < Duration.toMillis(keyListRefresh) &&
+      current.expiresAt > now
+        ? current
+        : yield* latest;
+
+    // A key it does not name may have been created since, so the list is read again,
+    // unless a read answered within the cooldown and there is nothing new to look in.
+    const grant =
+      (yield* open(list)) ??
+      (yield* Effect.flatMap(latest, (next) =>
+        next === list ? Effect.succeed(undefined) : open(next),
+      ));
 
     // No entry is the same case as a token for another audience: not this resource's.
     if (grant === undefined) return yield* unauthorized();

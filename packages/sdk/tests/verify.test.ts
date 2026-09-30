@@ -44,12 +44,13 @@ test("API keys verify offline against one key list, with their actor, scopes and
     assert.deepEqual((await Effect.runPromise(verifier.verifyToken(issuer.readOnlyKey))).scopes, [
       "notes:read",
     ]);
-    // An unknown key has no entry to find: refused from the list already read.
+    assert.equal(issuer.keyLists(), 1);
+
+    // An unknown key has no entry to find.
     assert(
       (await failure(verifier.verifyToken(`clankerauth_${"x".repeat(43)}`))) instanceof
         Unauthorized,
     );
-    assert.equal(issuer.keyLists(), 1);
 
     // Revocation reaches a verifier with its next list; a new one reads it now.
     issuer.revoke(issuer.key);
