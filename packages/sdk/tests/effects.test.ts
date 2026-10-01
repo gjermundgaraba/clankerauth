@@ -226,6 +226,10 @@ test("a key list refreshes every minute and outlasts an outage for its lifetime"
         .watch(`Bearer ${key}`, "write")
         .pipe(Effect.flip, Effect.forkChild);
 
+      // Its first check opens the key with real crypto; the clock must not move under it, or
+      // its own deadline passes first.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+
       // Within a minute the list already read decides, revoked or not.
       granted.set(key, grant(["read"]));
       yield* verify(key);
