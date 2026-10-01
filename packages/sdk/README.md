@@ -8,16 +8,16 @@ Effect-native [clankerauth](https://github.com/gjermundgaraba/clankerauth) verif
 vp add @gjermundgaraba/clankerauth-sdk
 ```
 
-Effect is a peer: the application installs Effect 4, still a release candidate, and the SDK shares that copy.
+Effect is a peer: the application installs Effect 4, and the SDK shares that copy.
 
 ```sh
-vp add effect@rc
+vp add effect
 ```
 
 The `/session` and `/effect-actions` entry points also need effect-actions, an optional peer. Install this range: the SDK's declarations are built against it, and under `skipLibCheck` they silently degrade to `any` with another.
 
 ```sh
-vp add @gjermundgaraba/effect-actions@^0.8.0
+vp add @gjermundgaraba/effect-actions@^0.9.0
 ```
 
 ## Entry points

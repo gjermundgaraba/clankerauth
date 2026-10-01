@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-sdk",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "description": "Effect-native clankerauth access-token and offline API-key verification, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
@@ -58,8 +58,8 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "^0.8.0",
-    "effect": "^4.0.0-rc.118"
+    "@gjermundgaraba/effect-actions": "^0.9.0",
+    "effect": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "@gjermundgaraba/effect-actions": {
