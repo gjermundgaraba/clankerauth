@@ -46,7 +46,3 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
-  # Effect 4.0.0 is newer than the one-day release age; drop these once it is not.
-  - effect@4.0.0
-  - "@effect/platform-node@4.0.0"
-  - "@effect/platform-node-shared@4.0.0"
