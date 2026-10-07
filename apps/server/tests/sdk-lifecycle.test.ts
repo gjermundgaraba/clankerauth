@@ -97,12 +97,12 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
   const resource = `${app.origin}/api`;
 
   try {
-    assert.equal((await issuer.call("/api/issuer/setupOwner", owner)).status, 201);
+    assert.equal((await issuer.call("/api/setupOwner", owner)).status, 201);
     assert.equal((await issuer.call("/api/auth/sign-in/email", owner)).status, 200);
 
     assert.equal(
       (
-        await issuer.call("/api/administration/createResource", {
+        await issuer.call("/api/createResource", {
           identifier: resource,
           name: "Notes",
           scopes: ["notes:read", "notes:write"],
@@ -128,7 +128,8 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
     const forwarded = await issuer.forward(resource, app);
     assert.equal(forwarded.status, 204, await forwarded.text());
     const authorization = forwarded.headers.get("authorization") ?? "";
-    const principal = await Effect.runPromise(verifier.verify(authorization));
+    const token = authorization.slice("Bearer ".length);
+    const principal = await Effect.runPromise(verifier.verifyToken(token));
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.deepEqual(principal.actor, { kind: "client", clientId: forwardClientId });
 
@@ -138,7 +139,6 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       ),
     );
 
-    const token = authorization.slice("Bearer ".length);
     await assert.rejects(
       Effect.runPromise(other.verifyToken(token)),
       (error) => error instanceof Unauthorized,
@@ -146,7 +146,7 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
 
     // API keys verify offline, from the resource's key list, with their granted scopes and
     // the key as actor.
-    const created = await issuer.call("/api/administration/createApiKey", {
+    const created = await issuer.call("/api/createApiKey", {
       name: "Backup script",
       permissions: { [resource]: ["notes:read"] },
       expiresAt: null,
@@ -154,7 +154,7 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
 
     assert.equal(created.status, 201, await created.clone().text());
     const { key, keyId } = Schema.decodeUnknownSync(ApiKeyCreated)(await created.json());
-    const machine = await Effect.runPromise(verifier.verify(`Bearer ${key}`));
+    const machine = await Effect.runPromise(verifier.verifyToken(key));
     assert.equal(machine.subject, principal.subject);
     assert.deepEqual(machine.scopes, ["notes:read"]);
     assert.deepEqual(machine.actor, { kind: "key", keyId });
@@ -163,10 +163,7 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
       Effect.runPromise(other.verifyToken(key)),
       (error) => error instanceof Unauthorized,
     );
-    assert.equal(
-      (await issuer.call("/api/administration/updateApiKey", { keyId, enabled: false })).status,
-      200,
-    );
+    assert.equal((await issuer.call("/api/updateApiKey", { keyId, enabled: false })).status, 200);
     // A disabled key is gone from the next list: a verifier holding this minute's list
     // still accepts it, and one that reads the list now does not.
     await Effect.runPromise(verifier.verifyToken(key));

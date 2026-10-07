@@ -31,7 +31,7 @@ const options = {
  * and its tests and the server's do. Here, what matters is which keys are listed.
  */
 const listed = async (issuer, asked) => {
-  const response = await fetch(new URL("/api/issuer/keyList", issuer), {
+  const response = await fetch(new URL("/api/keyList", issuer), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ resource: asked }),
@@ -80,7 +80,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.equal(
       (
         await (
-          await fetch(`${issuer.url}/api/issuer/setupStatus`, {
+          await fetch(`${issuer.url}/api/setupStatus`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: "{}",
@@ -91,7 +91,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     );
     assert.equal(
       (
-        await fetch(`${issuer.url}/api/administration/listClients`, {
+        await fetch(`${issuer.url}/api/listClients`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: "{}",
@@ -110,7 +110,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     await session.body.cancel();
 
     const state = await (
-      await fetch(`${issuer.url}/api/administration/listClients`, {
+      await fetch(`${issuer.url}/api/listClients`, {
         method: "POST",
         headers: { cookie, origin: issuer.url, "content-type": "application/json" },
         body: "{}",
@@ -131,7 +131,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.ok(issuer.clientSecret);
     // Oversized bodies are disconnected by the body limit rather than answered.
     await assert.rejects(
-      fetch(`${issuer.url}/api/issuer/setupOwner`, {
+      fetch(`${issuer.url}/api/setupOwner`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: issuer.url },
         body: "x".repeat(65537),
@@ -309,7 +309,7 @@ await test("bundled provider lists key metadata without plaintext and keys for o
     const created = [];
 
     for (let index = 0; index < 3; index++) {
-      const response = await fetch(`${issuer.url}/api/administration/createApiKey`, {
+      const response = await fetch(`${issuer.url}/api/createApiKey`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -324,7 +324,7 @@ await test("bundled provider lists key metadata without plaintext and keys for o
     }
 
     const listing = await (
-      await fetch(`${issuer.url}/api/administration/listApiKeys`, {
+      await fetch(`${issuer.url}/api/listApiKeys`, {
         method: "POST",
         headers,
         body: "{}",
@@ -341,7 +341,7 @@ await test("bundled provider lists key metadata without plaintext and keys for o
     const entries = () => listed(`${issuer.url}/api/auth`, resource.identifier);
     assert.equal((await entries()).length, created.length);
 
-    const disabled = await fetch(`${issuer.url}/api/administration/updateApiKey`, {
+    const disabled = await fetch(`${issuer.url}/api/updateApiKey`, {
       method: "POST",
       headers,
       body: JSON.stringify({ keyId: created[0].keyId, enabled: false }),
@@ -513,7 +513,7 @@ await test("a data directory keeps the owner, the secret and the client across r
         .join("; ");
 
       const state = await (
-        await fetch(`${second.url}/api/administration/listClients`, {
+        await fetch(`${second.url}/api/listClients`, {
           method: "POST",
           headers: { cookie, origin: second.url, "content-type": "application/json" },
           body: "{}",

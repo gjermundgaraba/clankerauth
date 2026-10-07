@@ -9,7 +9,7 @@ import { administration } from "../../../apps/server/src/administration.ts";
 import { nodeHandler } from "../../../apps/server/src/app.ts";
 import { Auth, createOwner } from "../../../apps/server/src/auth.ts";
 import { validateSettings } from "../../../apps/server/src/config.ts";
-import { CurrentOwner } from "../../../apps/server/src/current-owner.ts";
+import { CurrentOwner } from "@clankerauth/admin-api";
 import { machineKeys } from "../../../apps/server/src/machine-keys.ts";
 import { providerSession } from "../../../apps/server/src/provider-session.ts";
 import { createNodeServer } from "../../../apps/server/src/node-http.ts";

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import type { Kysely } from "kysely";
-import type { ApiError } from "./api-errors.ts";
+import type { OwnerError } from "@clankerauth/admin-api";
 import { persisted, transaction, type DatabaseSchema, type Sql } from "./database.ts";
 import { clearGrants } from "./grants.ts";
 
@@ -11,7 +11,7 @@ const decodeVersion = persisted(Schema.Tuple([Schema.Struct({ user_version: Sche
  * one transaction that ends by setting `user_version` to its position (PRAGMA takes no
  * parameters), so a restored backup runs them again.
  */
-const steps: ReadonlyArray<(query: Sql) => Effect.Effect<unknown, ApiError>> = [
+const steps: ReadonlyArray<(query: Sql) => Effect.Effect<unknown, OwnerError>> = [
   // 0.10.0: earlier versions kept grants when access was removed, and only a link check at
   // refresh held them back; nothing checks links at refresh now. Automatic clients have no
   // links any more, so theirs go too.

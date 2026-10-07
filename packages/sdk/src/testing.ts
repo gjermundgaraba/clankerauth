@@ -86,7 +86,7 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
     if (request.url === "/api/auth/jwks")
       return send(failure ?? 200, JSON.stringify({ keys: [jwk] }));
 
-    if (request.url !== "/api/issuer/keyList" || request.method !== "POST") return send(404, "{}");
+    if (request.url !== "/api/keyList" || request.method !== "POST") return send(404, "{}");
     lists++;
 
     if (failure !== undefined) return send(failure, "{}");

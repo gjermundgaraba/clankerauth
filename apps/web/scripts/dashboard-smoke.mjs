@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { ServiceUnavailable } from "@clankerauth/admin-api";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { chromium } from "playwright";
 import { preview } from "vite";
 
@@ -84,7 +85,7 @@ try {
 
     if (url.origin === origin) {
       switch (key) {
-        case "POST /api/issuer/setupStatus":
+        case "POST /api/setupStatus":
           response = ok({ required: false });
           break;
         case "GET /api/auth/get-session":
@@ -102,10 +103,10 @@ try {
             },
           });
           break;
-        case "POST /api/administration/listApiKeys":
+        case "POST /api/listApiKeys":
           response = ok({ keys: machineKeys });
           break;
-        case "POST /api/administration/createApiKey": {
+        case "POST /api/createApiKey": {
           const payload = request.postDataJSON();
           assert.deepEqual(payload.permissions, { [resource.identifier]: ["fixture:read"] });
           assert.equal(payload.expiresAt, null);
@@ -122,7 +123,7 @@ try {
           break;
         }
 
-        case "POST /api/administration/updateApiKey": {
+        case "POST /api/updateApiKey": {
           const payload = request.postDataJSON();
           keyUpdates.push(payload);
           machineKeys = machineKeys.map((key) =>
@@ -132,14 +133,14 @@ try {
           break;
         }
 
-        case "POST /api/administration/deleteApiKey":
+        case "POST /api/deleteApiKey":
           machineKeys = [];
           response = ok({ deleted: true });
           break;
-        case "POST /api/administration/listClients":
+        case "POST /api/listClients":
           response = await listResponse();
           break;
-        case "POST /api/administration/updateResource": {
+        case "POST /api/updateResource": {
           const payload = request.postDataJSON();
 
           const previous = data.resources.find(
@@ -155,14 +156,14 @@ try {
           break;
         }
 
-        case "POST /api/administration/createResource":
+        case "POST /api/createResource":
           response = resourceResponse();
           break;
-        case "POST /api/administration/createClient":
+        case "POST /api/createClient":
           registrations.push(request.postDataJSON());
           response = ok({ ...created, client_secret: "fixture-first-secret" }, 201);
           break;
-        case "POST /api/administration/rotateClientSecret":
+        case "POST /api/rotateClientSecret":
           response = ok({ ...created, client_secret: "fixture-rotated-secret" });
           break;
         case "GET /api/auth/oauth2/public-client":
@@ -171,12 +172,12 @@ try {
             client_name: "<em>Client name</em>",
           });
           break;
-        case "POST /api/administration/revokeClient":
+        case "POST /api/revokeClient":
           assert.equal(request.postDataJSON().client_id, data.clients[0].client_id);
           revocations.push(request.postDataJSON());
           response = ok({ revoked: true });
           break;
-        case "POST /api/administration/blockClient": {
+        case "POST /api/blockClient": {
           const payload = request.postDataJSON();
           assert.equal(payload.client_id, data.clients[0].client_id);
           data = {
@@ -187,7 +188,7 @@ try {
           break;
         }
 
-        case "POST /api/administration/deleteClient":
+        case "POST /api/deleteClient":
           response = ok({ deleted: true });
           break;
       }
@@ -249,7 +250,7 @@ try {
   await emptyRegister.getByRole("button").click();
   await page.locator("#credentials").filter({ hasText: "fixture-first-secret" }).waitFor();
   await waitForIdle();
-  assert.equal(count("POST /api/administration/createClient"), 1);
+  assert.equal(count("POST /api/createClient"), 1);
   assert.deepEqual(registrations[0].resources, []);
   await page.locator("#credentials button").click();
 
@@ -266,8 +267,7 @@ try {
 
   const listStarted = page.waitForRequest(
     (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === "/api/administration/listClients",
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
 
   await resourceForm.getByRole("button").click();
@@ -277,7 +277,7 @@ try {
   await resourceForm.dispatchEvent("submit");
   releaseList.resolve();
   await waitForSaved();
-  assert.equal(count("POST /api/administration/createResource"), 1);
+  assert.equal(count("POST /api/createResource"), 1);
 
   for (const name of ["name", "identifier", "scopes"]) {
     assert.equal(await resourceForm.locator(`[name="${name}"]`).inputValue(), "");
@@ -287,10 +287,7 @@ try {
   const beforeRetry = calls.length;
   await retry.click();
   await waitForSaved();
-  assert.deepEqual(calls.slice(beforeRetry), [
-    "POST /api/administration/listClients",
-    "POST /api/administration/listApiKeys",
-  ]);
+  assert.deepEqual(calls.slice(beforeRetry), ["POST /api/listClients", "POST /api/listApiKeys"]);
 
   data = {
     ...data,
@@ -336,11 +333,11 @@ try {
   assert.equal(await resourceForm.getByRole("button").isEnabled(), true);
   assert.equal(await resourceForm.locator('[name="name"]').isEnabled(), true);
   assert.equal(await page.locator("#register button").isEnabled(), true);
-  assert.equal(count("POST /api/administration/createResource"), 1);
+  assert.equal(count("POST /api/createResource"), 1);
 
   // A rejected write preserves user input and never offers a saved-write retry.
   resourceResponse = () => failed;
-  const listsBeforeFailure = count("POST /api/administration/listClients");
+  const listsBeforeFailure = count("POST /api/listClients");
   await fillResource("Keep my draft");
   await resourceForm.getByRole("button").click();
   await page.locator("#message").filter({ hasText: "Fixture request failed" }).waitFor();
@@ -349,8 +346,24 @@ try {
   assert.equal(await resourceForm.locator('[name="identifier"]').inputValue(), resource.identifier);
   assert.equal(await resourceForm.locator('[name="scopes"]').inputValue(), "fixture:read");
   assert.equal(await retry.count(), 0);
-  assert.equal(count("POST /api/administration/listClients"), listsBeforeFailure);
+  assert.equal(count("POST /api/listClients"), listsBeforeFailure);
   assert.equal((await page.locator("#message").textContent()).includes("Saved"), false);
+
+  // Input the issuer will not serve is shown in the issuer's own words, the draft kept.
+  const unservable =
+    "Resource identifiers must be absolute URIs in canonical form, without a fragment";
+
+  resourceResponse = () => ({
+    status: 400,
+    json: new Action.InvalidInput({
+      message: unservable,
+      issues: [{ path: ["identifier"], message: unservable }],
+    }),
+  });
+  await resourceForm.getByRole("button").click();
+  await page.locator("#message").filter({ hasText: unservable }).waitFor();
+  await waitForIdle();
+  assert.equal(await resourceForm.locator('[name="name"]').inputValue(), "Keep my draft");
 
   // One-time credentials are visible while the follow-up list is still pending.
   const releaseClientList = Promise.withResolvers();
@@ -368,8 +381,7 @@ try {
 
   const clientListStarted = page.waitForRequest(
     (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === "/api/administration/listClients",
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
   );
 
   await register.getByRole("button").click();
@@ -385,7 +397,7 @@ try {
   await register.dispatchEvent("submit");
   releaseClientList.resolve();
   await waitForSaved();
-  assert.equal(count("POST /api/administration/createClient"), 2);
+  assert.equal(count("POST /api/createClient"), 2);
   assert.deepEqual(registrations[1].resources, [resource.identifier]);
   assert.deepEqual(registrations[1].redirect_uris, created.redirect_uris);
   assert.equal(registrations[1].token_endpoint_auth_method, "client_secret_basic");
@@ -405,22 +417,22 @@ try {
   );
   assert.equal(await register.getByRole("button").isEnabled(), true);
   assert.equal(await page.locator("[data-resource-delete]").isEnabled(), true);
-  assert.equal(count("POST /api/administration/createClient"), 2);
+  assert.equal(count("POST /api/createClient"), 2);
 
-  const listsBeforeRotation = count("POST /api/administration/listClients");
+  const listsBeforeRotation = count("POST /api/listClients");
   await page.locator('[data-rotate="created-client"]').click();
   await page.locator("#credentials").filter({ hasText: "fixture-rotated-secret" }).waitFor();
   await waitForIdle();
   assert.doesNotMatch(await page.locator("#credentials").textContent(), /fixture-first-secret/);
-  assert.equal(count("POST /api/administration/listClients"), listsBeforeRotation);
-  assert.equal(count("POST /api/administration/rotateClientSecret"), 1);
+  assert.equal(count("POST /api/listClients"), listsBeforeRotation);
+  assert.equal(count("POST /api/rotateClientSecret"), 1);
 
   listResponse = async () => failed;
   await page.locator('[data-delete="created-client"]').click();
   await waitForSaved();
   assert.equal(await page.locator("#credentials").isVisible(), false);
   assert.equal(await page.locator("#credentials").textContent(), "");
-  assert.equal(count("POST /api/administration/deleteClient"), 1);
+  assert.equal(count("POST /api/deleteClient"), 1);
 
   // Automatic clients expose authorization lifecycle controls without managed-only mutations.
   const automatic = {
@@ -473,16 +485,32 @@ try {
   await page.getByRole("button", { name: "Unblock client", exact: true }).click();
   await page.getByRole("button", { name: "Block client", exact: true }).waitFor();
   await waitForIdle();
-  assert.equal(count("POST /api/administration/blockClient"), 2);
+  assert.equal(count("POST /api/blockClient"), 2);
   data = { ...data, clients: [{ ...automatic, onboarding: "dcr" }] };
   await page.reload();
   await page.locator(`[data-revoke="${automatic.client_id}"]`).waitFor();
   assert.match(await page.locator(".client").textContent(), /Dynamic registration/);
   assert.equal(await page.locator("[data-client-edit], [data-rotate]").count(), 0);
 
-  // API keys preserve explicit scope selection and show plaintext only until acknowledged.
+  // Input the contract refuses never leaves the browser: the dashboard's own client refuses it
+  // with the rule's sentence, and the draft is kept.
   const keyForm = page.locator("#key-create");
   await keyForm.locator('[name="name"]').fill("Automation key");
+  const callsBeforeRefusal = calls.length;
+  await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
+  await page
+    .locator("#message")
+    .filter({ hasText: "Select at least one Resource and scope" })
+    .waitFor();
+  await waitForIdle();
+  assert.equal(
+    await page.locator("#message").textContent(),
+    "Select at least one Resource and scope",
+  );
+  assert.equal(calls.length, callsBeforeRefusal);
+  assert.equal(await keyForm.locator('[name="name"]').inputValue(), "Automation key");
+
+  // API keys preserve explicit scope selection and show plaintext only until acknowledged.
   await keyForm.locator('[name="key-scope"]').check();
   await keyForm.getByRole("button", { name: "Create API key", exact: true }).click();
   await page.locator("#credentials").filter({ hasText: "clankerauth_fixture-once-only" }).waitFor();
@@ -555,9 +583,9 @@ try {
   assert.equal(await page.getByText("clankerauth_fixture-once-only", { exact: false }).count(), 0);
   await page.getByRole("button", { name: "Delete key", exact: true }).click();
   await page.getByRole("heading", { name: "No API keys", exact: true }).waitFor();
-  assert.equal(count("POST /api/administration/createApiKey"), 2);
-  assert.equal(count("POST /api/administration/updateApiKey"), 4);
-  assert.equal(count("POST /api/administration/deleteApiKey"), 2);
+  assert.equal(count("POST /api/createApiKey"), 2);
+  assert.equal(count("POST /api/updateApiKey"), 4);
+  assert.equal(count("POST /api/deleteApiKey"), 2);
 
   // Consent renders the actual identifier/callback and escapes client-supplied display names.
   const callback = "http://127.0.0.1:43129/callback";

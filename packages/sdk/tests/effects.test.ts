@@ -11,15 +11,12 @@ import {
   HttpServer,
   HttpServerResponse,
 } from "effect/http";
-import {
-  authenticationErrors,
-  InsufficientScope,
-  ProviderUnavailable,
-  Unauthorized,
-} from "../src/errors.ts";
-import { Resource } from "../src/effect-actions.ts";
+import { ProviderUnavailable, Unauthorized } from "../src/errors.ts";
 import * as KeyList from "../src/key-list.ts";
-import { signList } from "./support.ts";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
+import { CurrentPrincipal } from "../src/session.ts";
+import { Login, Notes, resourceOf, sent, signList } from "./support.ts";
 
 /** What a key list test signs with and publishes, for one resource. */
 const listIssuer = async () => {
@@ -48,10 +45,11 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
         }),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer: "https://issuer.example/api/auth",
         publicUrl: new URL("https://notes.example"),
-        scopes: { read: "notes:read" },
+        scopes: ["notes:read"],
+        required: "notes:read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       // A token that names its key, so verification must read JWKS.
@@ -115,10 +113,11 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
         }),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer,
         publicUrl: new URL(audience),
-        scopes: { read: "read" },
+        scopes: ["read"],
+        required: "read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const verify = resource.verifier.verifyToken;
@@ -211,10 +210,11 @@ test("a key list refreshes every minute and outlasts an outage for its lifetime"
         }),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer,
         publicUrl: new URL(audience),
-        scopes: { read: "read", write: "write" },
+        scopes: ["read", "write"],
+        required: "read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const verify = resource.verifier.verifyToken;
@@ -238,7 +238,10 @@ test("a key list refreshes every minute and outlasts an outage for its lifetime"
       // The next list reaches every verification, and every watched connection.
       yield* TestClock.adjust("1 minute");
       yield* verify(key);
-      assert.deepEqual(yield* Fiber.join(socket), new InsufficientScope({ scope: "write" }));
+      // Refused as `admit` would refuse it now: a key cannot step up, so it names no scope.
+      const ended = yield* Fiber.join(socket);
+      assert(ended instanceof Action.Forbidden);
+      assert.deepEqual(sent(ended), sent(new Action.Forbidden({ message: "Requires write." })));
       granted.delete(key);
       yield* TestClock.adjust("1 minute");
       assert((yield* Effect.flip(verify(key))) instanceof Unauthorized);
@@ -270,9 +273,7 @@ test("a key list refreshes every minute and outlasts an outage for its lifetime"
 
       // An issuer that stops answering fails the read, not the request: it gives up
       // before the request's deadline, and the held list decides, for sockets too.
-      const watched = yield* resource
-        .watch(`Bearer ${reader}`, "read")
-        .pipe(Effect.flip, Effect.forkChild);
+      const watched = yield* resource.watch(`Bearer ${reader}`).pipe(Effect.flip, Effect.forkChild);
 
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       stalled = true;
@@ -320,10 +321,11 @@ test("a key the held list does not name has the list read again, five seconds ap
         }),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer,
         publicUrl: new URL(audience),
-        scopes: { read: "read" },
+        scopes: ["read"],
+        required: "read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const verify = resource.verifier.verifyToken;
@@ -391,10 +393,11 @@ test("a list read shortly before it expires decides only until then", async () =
         ),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer,
         publicUrl: new URL(audience),
-        scopes: { read: "read" },
+        scopes: ["read"],
+        required: "read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       yield* resource.verifier.verifyToken(key);
@@ -415,10 +418,11 @@ test("a key list that does not verify is an outage, not a refusal", () =>
         Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ list: "not.a.list" }))),
       );
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer: "https://issuer.example/api/auth",
         publicUrl: new URL("https://notes.example"),
-        scopes: { read: "notes:read" },
+        scopes: ["notes:read"],
+        required: "notes:read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const failure = yield* Effect.flip(resource.verifier.verifyToken("clankerauth_test"));
@@ -458,15 +462,14 @@ test("a watched access token holds its connection until it expires, through an o
         );
       });
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer,
         publicUrl: new URL(audience),
-        scopes: { read: "read" },
+        scopes: ["read"],
+        required: "read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      const socket = yield* resource
-        .watch(`Bearer ${token}`, "read")
-        .pipe(Effect.flip, Effect.forkChild);
+      const socket = yield* resource.watch(`Bearer ${token}`).pipe(Effect.flip, Effect.forkChild);
 
       // Admission runs on real promises; let it finish before time moves.
       yield* TestClock.withLive(Effect.sleep("100 millis"));
@@ -475,7 +478,7 @@ test("a watched access token holds its connection until it expires, through an o
       assert.equal(socket.pollUnsafe(), undefined);
       yield* TestClock.adjust("1 minute");
       // It ends as expired, not as an outage: an expired token is refused without the issuer.
-      assert((yield* Fiber.join(socket)) instanceof Unauthorized);
+      assert((yield* Fiber.join(socket)) instanceof Action.Unauthenticated);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 });
@@ -492,10 +495,11 @@ test("diagnostic causes survive adapters but never enter public error schemas or
 
       const client = HttpClient.make(() => Effect.fail(transportCause));
 
-      const resource = yield* Resource.make({
+      const resource = yield* resourceOf({
         issuer: "https://issuer.example",
         publicUrl: new URL("https://notes.example"),
-        scopes: { read: "notes:read" },
+        scopes: ["notes:read"],
+        required: "notes:read",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
       const failure = yield* Effect.flip(resource.verifier.verifyToken("clankerauth_test"));
@@ -503,14 +507,36 @@ test("diagnostic causes survive adapters but never enter public error schemas or
       assert.equal(failure.cause, transportCause);
 
       const error = new Unauthorized({ message: "Sign in required", cause: { secret } });
-      const encoded = Schema.encodeSync(Schema.Union(authenticationErrors))(error);
-      assert(!("cause" in encoded));
-      assert(!JSON.stringify(encoded).includes(secret));
+      assert(!Object.keys(error).includes("cause"));
       assert(!JSON.stringify(error).includes(secret));
 
+      const Private = Action.make("private", {
+        description: "Fixture action",
+        readOnly: true,
+        caller: CurrentPrincipal,
+      });
+
+      const PrivateHttp = ActionHttp.make([Private], { authentication: Login });
+
+      // An action route and a host route of its own answer the outage alike.
       const web = HttpRouter.toWebHandler(
-        HttpRouter.add("GET", "/private", Effect.succeed(HttpServerResponse.empty())).pipe(
-          Layer.provide(Resource.middleware(resource).layer),
+        Layer.mergeAll(
+          ActionHttp.layer(
+            PrivateHttp,
+            Action.implement(Private, () => Effect.void, { authorize: Action.allowAll }),
+          ),
+          HttpRouter.add("GET", "/frame", HttpServerResponse.empty()).pipe(
+            Layer.provide(Notes.admitted().layer),
+          ),
+        ).pipe(
+          Layer.provide(Notes.provider),
+          Layer.provide(
+            Notes.layer({
+              issuer: "https://issuer.example",
+              publicUrl: new URL("https://notes.example"),
+            }),
+          ),
+          Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
           Layer.provide(HttpServer.layerServices),
         ),
       );
@@ -518,18 +544,30 @@ test("diagnostic causes survive adapters but never enter public error schemas or
       yield* Effect.promise(async () => {
         try {
           const response = await web.handler(
-            new Request("https://notes.example/private", {
+            new Request("https://notes.example/api/private", {
+              method: "POST",
+              headers: {
+                authorization: "Bearer clankerauth_test",
+                "content-type": "application/json",
+              },
+              body: "{}",
+            }),
+          );
+
+          const frame = await web.handler(
+            new Request("https://notes.example/frame", {
               headers: { authorization: "Bearer clankerauth_test" },
             }),
           );
 
-          assert.equal(response.status, 503);
-          assert.deepEqual(
-            await response.json(),
-            Schema.encodeSync(ProviderUnavailable)(
-              new ProviderUnavailable({ operation: "http.request" }),
-            ),
+          const unavailable = Schema.encodeSync(ProviderUnavailable)(
+            new ProviderUnavailable({ operation: "http.request" }),
           );
+
+          for (const answered of [response, frame]) {
+            assert.equal(answered.status, 503);
+            assert.deepEqual(await answered.json(), unavailable);
+          }
         } finally {
           await web.dispose();
         }

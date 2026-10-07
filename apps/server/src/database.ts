@@ -2,7 +2,8 @@ import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-diale
 import { Effect, Exit, Schema } from "effect";
 import { Kysely, sql as query } from "kysely";
 import { DatabaseSync } from "node:sqlite";
-import { internalError, type ApiError } from "./api-errors.ts";
+import type { OwnerError } from "@clankerauth/admin-api";
+import { internalError } from "./api-errors.ts";
 
 /** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
@@ -22,7 +23,7 @@ export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
   const decode = Schema.decodeUnknownEffect(schema);
 
   // eslint-disable-next-line anti-slop/no-unknown-parameters -- Persisted-row boundary: this is where the schema runs.
-  return (value: unknown): Effect.Effect<T, ApiError, RD> =>
+  return (value: unknown): Effect.Effect<T, OwnerError, RD> =>
     Effect.mapError(decode(value), internalError);
 };
 
@@ -31,7 +32,7 @@ export function makeSql(database: Kysely<DatabaseSchema>) {
   return <Row = SqliteRow>(
     strings: TemplateStringsArray,
     ...parameters: readonly unknown[]
-  ): Effect.Effect<readonly Row[], ApiError> =>
+  ): Effect.Effect<readonly Row[], OwnerError> =>
     Effect.tryPromise({
       try: async () => (await query<Row>(strings, ...parameters).execute(database)).rows,
       catch: internalError,

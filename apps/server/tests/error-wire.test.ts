@@ -1,26 +1,12 @@
 import { expect, test } from "vite-plus/test";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { BadRequest, InternalServerError } from "@clankerauth/admin-api";
-import { internalError } from "../src/api-errors.ts";
+import { APIError } from "better-auth/api";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { HttpServerResponse } from "effect/http";
+import { internalError, respond } from "../src/api-errors.ts";
 import { openIssuer } from "./issuer.ts";
 import { webApplication } from "./web-application.ts";
-
-test("encoded error expectations preserve exact wire assertions", async () => {
-  const expected = Schema.encodeSync(InternalServerError)(
-    new InternalServerError({ error: "Request could not be completed" }),
-  );
-
-  expect(Object.keys(expected).sort()).toEqual(["_tag", "error"]);
-
-  const response = Response.json({ ...expected, secret: "must not escape" });
-  const actual = await response.json();
-
-  // Decoding the actual response would erase the leak and weaken this assertion.
-  expect(actual).not.toEqual(expected);
-  expect(
-    Schema.encodeSync(InternalServerError)(Schema.decodeUnknownSync(InternalServerError)(actual)),
-  ).toEqual(expected);
-});
 
 test("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
   const cause = new Error("SQLITE_CORRUPT: database disk image is malformed");
@@ -32,13 +18,6 @@ test("an internal failure keeps its cause for diagnostics and never puts it on t
       new InternalServerError({ error: "Request could not be completed" }),
     ),
   );
-});
-
-test("BadRequest wire expectations contain only the public error contract", () => {
-  const expected = Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" }));
-
-  expect(Object.keys(expected).sort()).toEqual(["_tag", "error"]);
-  expect(expected.error).toBe("Invalid request");
 });
 
 /** Node requires `duplex` for a streaming request body; the DOM lib does not declare it. */
@@ -79,5 +58,34 @@ test("the provider bridge answers an unreadable body as a 400", async () => {
   } finally {
     await handle.dispose();
     await issuer.close();
+  }
+});
+
+test("a route's own failures keep their bodies, and a provider refusal is the built-in 403", async () => {
+  // What `/forward-auth*` and `/healthz` answer a failure with: `respond`.
+  const answered = async (cause: unknown) => {
+    const response = HttpServerResponse.toWeb(await Effect.runPromise(respond(cause)));
+
+    return { status: response.status, body: await response.json() };
+  };
+
+  // The issuer's own vocabulary is unchanged: `error`, under its tag.
+  expect(await answered(new Error("SQLITE_BUSY"))).toEqual({
+    status: 500,
+    body: Schema.encodeSync(InternalServerError)(
+      new InternalServerError({ error: "Request could not be completed" }),
+    ),
+  });
+  expect(await answered(new APIError("BAD_REQUEST", { message: "Bad target" }))).toEqual({
+    status: 400,
+    body: Schema.encodeSync(BadRequest)(new BadRequest({ error: "Bad target" })),
+  });
+
+  // A provider 401 or 403 is effect-actions' `Forbidden`, which carries `message`.
+  for (const status of ["UNAUTHORIZED", "FORBIDDEN"] as const) {
+    expect(await answered(new APIError(status, { message: "Not the owner" }))).toEqual({
+      status: 403,
+      body: Schema.encodeSync(Action.Forbidden)(new Action.Forbidden({ message: "Not the owner" })),
+    });
   }
 });

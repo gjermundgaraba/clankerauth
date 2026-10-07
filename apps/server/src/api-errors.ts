@@ -1,25 +1,26 @@
 import { Effect, Option, Predicate, Schema, SchemaAST } from "effect";
-import { type Headers as HttpHeaders, HttpServerError, HttpServerResponse } from "effect/http";
+import { HttpServerError, HttpServerResponse } from "effect/http";
 import { type APIError, isAPIError } from "better-auth/api";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
-  errors,
+  ownerErrors,
   BadRequest,
   Conflict,
-  Forbidden,
   InternalServerError,
   NotFound,
   ServiceUnavailable,
   TooManyRequests,
 } from "@clankerauth/admin-api";
+import type { OwnerError } from "@clankerauth/admin-api";
 
-/**
- * Every refusal this issuer can answer with. Domain code fails with these directly;
- * only foreign failures — the provider SDK, SQLite, a persisted row — are translated.
- */
-export type ApiError = (typeof errors)[number]["Type"];
+const statuses = new Map<unknown, number>(
+  ownerErrors.map(
+    (schema) => [schema, SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500] as const,
+  ),
+);
 
-const isApiError = (cause: unknown): cause is ApiError =>
-  errors.some((schema) => Schema.is(schema)(cause));
+const isOwnerError = (cause: unknown): cause is OwnerError =>
+  ownerErrors.some((schema) => Schema.is(schema)(cause));
 
 /** This issuer's own fault: a failed query, an unreadable row, an unexpected rejection. */
 export const internalError = (cause: unknown) => {
@@ -46,9 +47,13 @@ const providerBody = (cause: APIError) => ({
   ),
 });
 
-/** Idempotent: already-public errors pass through unchanged. */
-export function apiError(cause: unknown): ApiError {
-  if (isApiError(cause)) return cause;
+/**
+ * Every refusal this issuer answers with is administration's own, an `OwnerError`. Domain code
+ * fails with these directly; only foreign failures — the provider SDK, SQLite, a persisted row —
+ * are translated, here. Idempotent: already-public errors pass through unchanged.
+ */
+export function apiError(cause: unknown): OwnerError {
+  if (isOwnerError(cause)) return cause;
 
   if (isAPIError(cause)) {
     const body = providerBody(cause);
@@ -60,7 +65,7 @@ export function apiError(cause: unknown): ApiError {
       // Owner routes are already authenticated: a provider 401 refuses an operation.
       case 401:
       case 403:
-        return new Forbidden(body);
+        return new Action.Forbidden({ message: body.error });
       case 404:
         return new NotFound(body);
       case 409:
@@ -82,22 +87,26 @@ export function apiError(cause: unknown): ApiError {
 
 const isRequestParseError = Predicate.isTagged("RequestParseError");
 
+/**
+ * Input that decodes but cannot be served: effect-actions' built-in 400, which every endpoint
+ * and tool declares, naming the field at fault.
+ */
+export const invalidInput = (path: Action.Issue["path"], message: string) =>
+  new Action.InvalidInput({ message, issues: [{ path, message }] });
+
 /** Provider SDK calls fail with public API errors. */
 export const provider = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({ try: operation, catch: apiError });
 
-const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(errors));
+const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(ownerErrors));
 
-/** Encode only public error fields; callers own request-specific challenge headers. */
-export const apiErrorResponse = (error: ApiError, headers: HttpHeaders.Input = {}) => {
-  const schema = errors.find((schema) => Schema.is(schema)(error));
+/** Encode only public error fields, with the error's own status. */
+export const apiErrorResponse = (error: OwnerError) => {
+  const schema = ownerErrors.find((schema) => Schema.is(schema)(error));
 
   if (schema === undefined) return Effect.die(new Error("Undeclared API error"));
 
-  return encodeResponse(error, {
-    status: SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500,
-    headers,
-  }).pipe(Effect.orDie);
+  return encodeResponse(error, { status: statuses.get(schema) ?? 500 }).pipe(Effect.orDie);
 };
 
 /** Translate whatever a route failed with, once, into its public response. */
