@@ -1,19 +1,19 @@
 import { Effect, Schema } from "effect";
 import { provider } from "./api-errors.ts";
-import type {
-  ClientInput,
-  ClientUpdateInput,
-  ClientBlockInput,
-  ClientId,
-  ClientRevokeInput,
-  ClientAccessInput,
-  Resource,
-  ResourceId,
-  SetupInput,
+import {
+  CurrentOwner,
+  type ClientInput,
+  type ClientUpdateInput,
+  type ClientBlockInput,
+  type ClientId,
+  type ClientRevokeInput,
+  type ClientAccessInput,
+  type Resource,
+  type ResourceId,
+  type SetupInput,
 } from "@clankerauth/admin-api";
 import { persisted } from "./database.ts";
 import { mcpResource } from "./resources.ts";
-import { CurrentOwner } from "./current-owner.ts";
 import { ResponseCookies } from "./response-cookies.ts";
 import { Auth, createOwner } from "./auth.ts";
 

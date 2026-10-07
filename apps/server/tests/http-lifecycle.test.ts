@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { Effect, Exit, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
-import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
+import { webMcpRequest } from "./mcp.ts";
 import { nodeHandler } from "../src/app.ts";
 import { openIssuer, type Issuer } from "./issuer.ts";
 import { createNodeServer } from "../src/node-http.ts";
@@ -95,7 +95,7 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
   });
   const controller = new AbortController();
 
-  const response = fetch(`${url}/api/issuer/setupOwner`, {
+  const response = fetch(`${url}/api/setupOwner`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: "https://issuer.example" },
     body: JSON.stringify({ email: "owner@example.com", password: "test-password-long-enough" }),
@@ -161,7 +161,7 @@ test("an in-process JWKS read is awaited by its request, so shutdown waits for i
   let answered = false;
 
   const response = fetch(
-    mcpRequest({
+    webMcpRequest({
       method: "tools/list",
       url: `${url}/mcp`,
       headers: { authorization: `Bearer ${token}` },

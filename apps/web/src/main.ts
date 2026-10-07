@@ -1,10 +1,10 @@
 import { createAuthClient } from "better-auth/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
-import * as ActionHttpClient from "@gjermundgaraba/effect-actions/ActionHttpClient";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import {
   ApplicationType,
   ClientAuthMethod,
-  Conflict,
   Http,
   errors,
   type Client,
@@ -13,7 +13,7 @@ import {
   type MachineKey,
   type ResourceSummary,
 } from "@clankerauth/admin-api";
-import { DateTime, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import "./style.css";
 
 type ClientView = typeof Client.Type;
@@ -24,21 +24,38 @@ type KeyView = typeof MachineKey.Type;
 
 type ConnectionView = typeof Connection.Type;
 
-const api = ActionHttpClient.promise(Http);
+// Built once: each call is an Effect, which `request` runs as a promise at the display
+// boundary.
+const api = ActionHttp.fetchClient(Http);
 
-const isRefusal = Schema.is(Schema.Union(errors));
+/** The issuer's own errors, which every action declares: their sentence is `error`. */
+const isIssuerError = Schema.is(Schema.Union(errors));
+
+/** effect-actions' own errors, which every endpoint declares: their sentence is `message`. */
+const isBuiltIn = Schema.is(Action.BuiltIn);
 
 /**
- * The contract's own refusals carry the sentence written for the owner. Anything else
- * reached the browser instead of the issuer's answer, and reads the same either way.
+ * The contract's own refusals, and input the issuer cannot serve, carry the sentence written
+ * for the owner. Anything else reached the browser instead of the issuer's answer, and reads
+ * the same either way.
  */
-const displayed = <E>(error: E) =>
-  new Error(isRefusal(error) ? error.error : "Request could not be completed. Please try again.");
+const displayed = <E>(error: E) => {
+  if (isIssuerError(error)) return new Error(error.error);
+
+  // Input that does not decode carries the schema's report as its message, and each rule's
+  // sentence as an issue.
+  if (error instanceof Action.InvalidInput && error.issues.length)
+    return new Error([...new Set(error.issues.map((issue) => issue.message))].join(" "));
+
+  if (isBuiltIn(error)) return new Error(error.message);
+
+  return new Error("Request could not be completed. Please try again.");
+};
 
 /** Typed refusals survive the whole call; only the display boundary flattens them. */
-async function request<A>(call: Promise<A>): Promise<A> {
+async function request<A>(call: Effect.Effect<A, unknown>): Promise<A> {
   try {
-    return await call;
+    return await Effect.runPromise(call);
   } catch (error) {
     throw displayed(error);
   }
@@ -116,19 +133,21 @@ function setup() {
 
       if (password !== confirmation) throw new Error("Passwords do not match.");
 
-      try {
-        await api.issuer.setupOwner({
-          email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-          password,
-        });
-      } catch (error) {
-        if (error instanceof Conflict) return location.replace("/login");
+      // Setup signs the owner in, so the dashboard opens directly; an owner who already
+      // exists signs in instead.
+      const next = await request(
+        api
+          .setupOwner({
+            email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
+            password,
+          })
+          .pipe(
+            Effect.as("/"),
+            Effect.catchTag("Conflict", () => Effect.succeed("/login")),
+          ),
+      );
 
-        throw displayed(error);
-      }
-
-      // Setup signs the owner in; the dashboard opens directly.
-      location.replace("/");
+      location.replace(next);
     });
   });
 }
@@ -466,7 +485,9 @@ const registerForm = (resources: readonly ResourceView[]) =>
 
 async function dashboard() {
   const [data, keyData] = await request(
-    Promise.all([api.administration.listClients(), api.administration.listApiKeys()]),
+    Effect.all([api.listClients(), api.listApiKeys()], {
+      concurrency: "unbounded",
+    }),
   );
 
   const { resources } = data;
@@ -558,7 +579,7 @@ async function dashboard() {
     const fields = new FormData(target);
 
     const result = await request(
-      api.administration.createClient({
+      api.createClient({
         client_name: textField(fields, "name"),
         redirect_uris: redirectUris(fields),
         resources: selectedResources(target),
@@ -577,7 +598,7 @@ async function dashboard() {
     const expiry = textField(fields, "expiry");
 
     const result = await request(
-      api.administration.createApiKey({
+      api.createApiKey({
         name: textField(fields, "name"),
         permissions: keyGrants(target),
         // A `datetime-local` value has no zone, so the browser's own zone applies.
@@ -593,7 +614,7 @@ async function dashboard() {
   onSubmit(form("#resource-create"), async (target) => {
     const fields = new FormData(target);
     await request(
-      api.administration.createResource({
+      api.createResource({
         identifier: textField(fields, "identifier"),
         ...resourceFields(fields),
       }),
@@ -605,7 +626,7 @@ async function dashboard() {
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-rename]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.administration.updateApiKey({
+        api.updateApiKey({
           keyId: target.dataset.keyRename!,
           name: textField(new FormData(target), "name"),
         }),
@@ -616,7 +637,7 @@ async function dashboard() {
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-grants]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.administration.updateApiKey({
+        api.updateApiKey({
           keyId: target.dataset.keyGrants!,
           permissions: keyGrants(target),
         }),
@@ -627,7 +648,7 @@ async function dashboard() {
   for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]"))
     onSubmit(edit, async (target) => {
       await request(
-        api.administration.updateResource({
+        api.updateResource({
           identifier: target.dataset.resourceEdit!,
           ...resourceFields(new FormData(target)),
         }),
@@ -639,7 +660,7 @@ async function dashboard() {
     onSubmit(edit, async (target) => {
       const fields = new FormData(target);
       await request(
-        api.administration.updateClient({
+        api.updateClient({
           client_id: target.dataset.clientEdit!,
           client_name: textField(fields, "name"),
           redirect_uris: redirectUris(fields),
@@ -657,7 +678,7 @@ async function dashboard() {
       const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
 
       const save = async () => {
-        await request(api.administration.setClientAccess({ client_id, resources: selected }));
+        await request(api.setClientAccess({ client_id, resources: selected }));
         await refreshDashboard();
       };
 
@@ -671,7 +692,7 @@ async function dashboard() {
   onClick("[data-key-toggle]", (button) => {
     void submit(async () => {
       await request(
-        api.administration.updateApiKey({
+        api.updateApiKey({
           keyId: button.dataset.keyToggle!,
           enabled: button.dataset.enabled !== "true",
         }),
@@ -682,7 +703,7 @@ async function dashboard() {
   onClick("[data-key-delete]", (button) => {
     const keyId = button.dataset.keyDelete!;
     confirmed("Delete this API key?", async () => {
-      await request(api.administration.deleteApiKey({ keyId }));
+      await request(api.deleteApiKey({ keyId }));
       pendingKeys.delete(keyId);
       renderCredentials();
       await refreshDashboard();
@@ -693,7 +714,7 @@ async function dashboard() {
     confirmed(
       "Revoke all of this Client’s authorization? It must authorize again, and an automatic Client asks for consent.",
       async () => {
-        await request(api.administration.revokeClient({ client_id }));
+        await request(api.revokeClient({ client_id }));
         await refreshDashboard();
       },
     );
@@ -704,7 +725,7 @@ async function dashboard() {
     confirmed(
       `Revoke this Client’s authorization for ${resource}? It must authorize again, and an automatic Client asks for consent.`,
       async () => {
-        await request(api.administration.revokeClient({ client_id, resource }));
+        await request(api.revokeClient({ client_id, resource }));
         await refreshDashboard();
       },
     );
@@ -715,7 +736,7 @@ async function dashboard() {
     confirmed(
       blocked ? "Block this Client and revoke its authorization?" : "Unblock this Client?",
       async () => {
-        await request(api.administration.blockClient({ client_id, blocked }));
+        await request(api.blockClient({ client_id, blocked }));
         await refreshDashboard();
       },
     );
@@ -723,7 +744,7 @@ async function dashboard() {
   onClick("[data-rotate]", (button) => {
     const client_id = button.dataset.rotate!;
     confirmed("Rotate the secret? The old one stops working immediately.", async () => {
-      const result = await request(api.administration.rotateClientSecret({ client_id }));
+      const result = await request(api.rotateClientSecret({ client_id }));
 
       pendingCredentials.set(result.client_id, result);
       showCredentials();
@@ -738,7 +759,7 @@ async function dashboard() {
         : "Forget this Client and its authorization? It can register again; block it to keep it out.";
 
     confirmed(prompt, async () => {
-      await request(api.administration.deleteClient({ client_id }));
+      await request(api.deleteClient({ client_id }));
       pendingCredentials.delete(client_id);
       renderCredentials();
       await refreshDashboard();
@@ -749,7 +770,7 @@ async function dashboard() {
     confirmed(
       `Delete Resource ${identifier}? Every Client\u2019s authorization for it is revoked; API-key grants are kept.`,
       async () => {
-        await request(api.administration.deleteResource({ identifier }));
+        await request(api.deleteResource({ identifier }));
         await refreshDashboard();
       },
     );
@@ -757,7 +778,7 @@ async function dashboard() {
 }
 
 try {
-  const state = await request(api.issuer.setupStatus());
+  const state = await request(api.setupStatus());
 
   if (state.required) {
     if (location.pathname !== "/setup") location.replace("/setup");

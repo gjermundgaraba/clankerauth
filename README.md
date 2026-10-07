@@ -92,7 +92,7 @@ MCP servers additionally publish RFC 9728 protected-resource metadata that lists
 For CLIs and automation, the owner creates **API keys** with explicit per-resource scopes. A resource server verifies them offline, against its **key list**:
 
 ```http
-POST /api/issuer/keyList
+POST /api/keyList
 Content-Type: application/json
 
 { "resource": "https://notes.internal/" }
@@ -102,7 +102,7 @@ Content-Type: application/json
 
 A list is valid for 24 hours from `iat`, and the SDK reads the next one after a minute. A key's expiry is checked on every request. A key disabled, deleted or re-scoped keeps the access it had until that next read, within about a minute. A key created, enabled or granted on the resource works within seconds: a key the held list does not name has the list read again first, at most once every five seconds. A resource server that cannot reach the issuer keeps deciding from the last list it read, until that list expires. That day is also the longest a revoked key stays usable during an outage. Lists are re-signed on every read, so rotating the signing key needs nothing but publishing the new key. A key is a bearer secret: any resource it is granted on can replay it to the others, so give a resource you trust less its own key. Every timestamp this issuer reads or writes is an ISO-8601 instant in UTC; a value without an offset is read as UTC, never as the host's local time. The dashboard lists the first 100 keys.
 
-[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and offline API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration supplies authentication and discovery middleware plus a ready scope-enforcement hook, so an application names its public URL and its scopes and writes no authorization code. Two entry points, `/errors` and `/session`, are browser-safe: a page imports the error schemas, the `whoami` contract and the sign-out URL without pulling verification into its bundle. Its API is Effect-only, and its `/testing` entry is a signing fake issuer for tests that only need JWKS and key lists. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, and ships the development forward-auth edge so no application writes one again.
+[`@gjermundgaraba/clankerauth-sdk`](packages/sdk/README.md) provides Effect-native access-token and offline API-key verification, a host/origin request policy for apps behind forward auth, and one admission function a socket can use outside an Effect router. Its optional `/effect-actions` integration declares an application's resource from its scopes and supplies the provider that authenticates every protected route and tool call and publishes discovery. Which scope an action needs stays the application's rule, written as its authorizer with the resource's `requires(scope)`, such as `action.readOnly ? Effect.void : Notes.requires("notes:write")`. Two entry points, `/errors` and `/session`, are browser-safe: a page imports `ProviderUnavailable`, the error a descriptor declares, the `whoami` contract and the sign-out URL without pulling verification into its bundle. Its API is Effect-only, and its `/testing` entry is a signing fake issuer for tests that only need JWKS and key lists. To develop or test against a real issuer locally, [`@gjermundgaraba/clankerauth-dev`](packages/dev/README.md) starts one with your resources and a client already provisioned, optionally persistent, and ships the development forward-auth edge so no application writes one again.
 
 ## Develop
 
@@ -126,7 +126,7 @@ Both packages are public on npm. A `v*` tag matching their shared version publis
 
 Custom API operations use
 [`@gjermundgaraba/effect-actions`](https://github.com/gjermundgaraba/effect-actions)
-and are exposed at `POST /api/<groupName>/<actionName>`. No-input actions take
+and are exposed at `POST /api/<action>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
@@ -138,10 +138,14 @@ operational `GET /healthz` endpoint are separate.
 | Administration actions | Owner session cookie (SameSite)                                                                                              | HTTP      |
 | Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:read` to list, or `clankerauth:write` for everything | MCP       |
 
-Issuer actions use the `issuer` group; owner operations use `administration`. The
-dashboard uses the direct typed action client. HTTP schema-error handling returns
-sanitized `BadRequest` JSON (400) for malformed input and `InternalServerError`
-JSON (500) for invalid handler output. MCP uses native tool errors: declared domain
+Issuer actions and owner operations share one binding, `POST /api/<action>`. The
+dashboard uses the direct typed action client. Input that does not decode, or that
+decodes but the issuer's own checks refuse, answers effect-actions' built-in
+`InvalidInput` (400), naming the field at fault. Input the provider rejects, such as a
+short password, an invalid email or a redirect URI, a request body the issuer cannot
+read, and a request its state refuses answer `BadRequest` (400) with an `error` message
+and no field. Data the issuer cannot read answers sanitized `InternalServerError` JSON
+(500). MCP uses native tool errors: declared domain
 failures are JSON text with `isError: true`, while schema failures use native
 validation/internal-error messages. Successful tool results return the action's output
 as `structuredContent`.
@@ -178,7 +182,7 @@ that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` fails with `Forbidden`. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
+Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
 session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
@@ -188,12 +192,12 @@ SSE remains unsupported. Request bodies are limited to 64 KiB; larger uploads ar
 `GET /openapi.json` is public.
 
 ```sh
-curl "$CLANKERAUTH_BASE_URL/api/administration/listClients" \
+curl "$CLANKERAUTH_BASE_URL/api/listClients" \
   -H "Cookie: $OWNER_COOKIE" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See the breaking [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

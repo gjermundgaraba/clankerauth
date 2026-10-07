@@ -11,7 +11,7 @@ import {
 import type { Auth } from "better-auth";
 import type { oauthProvider } from "@better-auth/oauth-provider";
 import { BadRequest, ClientAccess, NotFound, Resource } from "@clankerauth/admin-api";
-import { provider } from "./api-errors.ts";
+import { invalidInput, provider } from "./api-errors.ts";
 import { clearGrants } from "./grants.ts";
 
 /** The administration resource's fixed scopes: `read` allows listing, and `write` allows
@@ -126,11 +126,11 @@ export const resourceStore = Effect.fnUntraced(function* (
     catalog: readonly ResourceValue[],
     identifiers: readonly string[],
   ) {
-    if (new Set(identifiers).size !== identifiers.length)
-      return yield* Effect.fail(new BadRequest({ error: "Choose unique Resources" }));
+    const unknown = identifiers.findIndex(
+      (id) => !catalog.some((resource) => resource.identifier === id),
+    );
 
-    if (!identifiers.every((id) => catalog.some((resource) => resource.identifier === id)))
-      return yield* Effect.fail(new BadRequest({ error: "Unknown Resource" }));
+    if (unknown !== -1) return yield* invalidInput(["resources", unknown], "Unknown Resource");
   });
 
   const scopesFor = Effect.fn("Resources.scopesFor")(function* (identifiers: readonly string[]) {
@@ -144,34 +144,33 @@ export const resourceStore = Effect.fnUntraced(function* (
   // `new URL(metadata.resource).href`, and the access token's audience is that string,
   // so `https://notes.example` (no slash) would be rewritten and stop matching what is
   // registered here. Refuse it rather than let a resource server fail at verification.
+  // RFC 8707 forbids a fragment; in canonical form a `#` can only begin one.
   const canonical = (identifier: string) => {
     try {
-      return new URL(identifier).href === identifier;
+      return new URL(identifier).href === identifier && !identifier.includes("#");
     } catch {
       return false;
     }
   };
 
-  // The provider validates identifiers (RFC 8707) and rejects duplicates.
+  // The provider validates identifiers (RFC 8707) and rejects duplicates. The contract's
+  // schema checks the name and each scope's form.
   const validateInput = Effect.fn("Resources.validateInput")(function* (input: ResourceValue) {
     const identifier = input.identifier.trim();
     const name = input.name.trim();
     const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
 
     if (!canonical(identifier))
-      return yield* Effect.fail(
-        new BadRequest({ error: "Resource identifiers must be absolute URIs in canonical form" }),
+      return yield* invalidInput(
+        ["identifier"],
+        "Resource identifiers must be absolute URIs in canonical form, without a fragment",
       );
 
-    if (
-      !name ||
-      scopes.some(
-        (scope) => !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope) || protocolScopes.includes(scope),
-      )
-    )
-      return yield* Effect.fail(
-        new BadRequest({ error: "Resources require a name and well-formed custom scopes" }),
-      );
+    // A protocol scope is the provider's, which no resource may declare: name it as sent.
+    const reserved = input.scopes.findIndex((scope) => protocolScopes.includes(scope.trim()));
+
+    if (reserved !== -1)
+      return yield* invalidInput(["scopes", reserved], "offline_access is reserved");
 
     return { identifier, name, scopes } satisfies ResourceValue;
   });
@@ -217,9 +216,10 @@ export const resourceStore = Effect.fnUntraced(function* (
       yield* syncClient(sql, catalog, client.clientId);
   });
 
+  // The caller named it: input this issuer decodes but will not serve.
   const reserved = (identifier: string) =>
     identifier === reservedIdentifier
-      ? Effect.fail(new BadRequest({ error: "The administration Resource is fixed" }))
+      ? Effect.fail(invalidInput(["identifier"], "The administration Resource is fixed"))
       : Effect.void;
 
   return {

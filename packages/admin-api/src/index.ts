@@ -1,8 +1,8 @@
-import { Schema } from "effect";
+import { Context, type Effect, Schema, type Scope } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { HttpApiSchema } from "effect/http-api";
+import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()(
   "BadRequest",
@@ -10,22 +10,6 @@ export class BadRequest extends Schema.TaggedError<BadRequest>()(
     error: Schema.String,
   },
   { httpApiStatus: 400 },
-) {}
-
-export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
-  "Unauthorized",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 401 },
-) {}
-
-export class Forbidden extends Schema.TaggedError<Forbidden>()(
-  "Forbidden",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 403 },
 ) {}
 
 export class NotFound extends Schema.TaggedError<NotFound>()(
@@ -71,16 +55,75 @@ export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()
   { httpApiStatus: 503 },
 ) {}
 
+/**
+ * What every action may fail with, beside effect-actions' built-in `InvalidInput`,
+ * `Unauthenticated` and `Forbidden`, which every endpoint and tool declares.
+ */
 export const errors = [
   BadRequest,
-  Unauthorized,
-  Forbidden,
   NotFound,
   Conflict,
   TooManyRequests,
   InternalServerError,
   ServiceUnavailable,
-];
+] as const;
+
+/**
+ * What administration refuses with, and the issuer answers its own routes with: the
+ * contract's errors and the built-in `Forbidden`.
+ */
+export const ownerErrors = [...errors, Action.Forbidden] as const;
+
+export type OwnerError = (typeof ownerErrors)[number]["Type"];
+
+/**
+ * The owner administering the issuer, as its authentication verified the request: what every
+ * administration action states, `caller: CurrentOwner`. Never supplied by action arguments or
+ * at startup.
+ */
+export class CurrentOwner extends Context.Service<CurrentOwner, Owner>()(
+  "clankerauth/CurrentOwner",
+) {}
+
+export interface Owner {
+  readonly userId: string;
+  readonly email: string;
+  /** Whether the caller may change anything; the dashboard session always may. */
+  readonly writable: boolean;
+  readonly providerHeaders: Effect.Effect<Headers, OwnerError, Scope.Scope>;
+}
+
+/**
+ * The dashboard's owner session: the issuer's session cookie, named `cookie`, which the browser
+ * sends. The provider names that cookie by the deployment, `__Secure-` prefixed over HTTPS, so
+ * the server builds this descriptor where it starts, from the name its sessions use, and builds
+ * both its binding and its `Authentication.layer` from it: that layer serves only a binding
+ * built from that very descriptor, not another naming the same cookie. A browser's binding,
+ * from `OwnerSession`, only calls. Its verifier reads the session through the provider, so it
+ * may fail as an action does, with any of `errors`, such as `ServiceUnavailable`, answered with
+ * its own status.
+ */
+export const ownerSession = (cookie: string) =>
+  Authentication.make("clankerauth.OwnerSession", CurrentOwner, {
+    security: HttpApiSecurity.apiKey({ in: "cookie", key: cookie }),
+    error: errors,
+  });
+
+/**
+ * The browser's owner session. A page never needs the cookie's name, as the browser sends its
+ * cookies itself: this one names the provider's cookie over plain HTTP, which only the server
+ * would read.
+ */
+export const OwnerSession = ownerSession("better-auth.session_token");
+
+/**
+ * An administration MCP client's OAuth access token for `<baseURL>/mcp`. Its verifier reads
+ * the token's owner and client from the database, so it may fail as an action does, with any
+ * of `errors`: `ServiceUnavailable` when the token cannot be decided, or `InternalServerError`.
+ */
+export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentOwner, {
+  error: errors,
+});
 
 export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
 
@@ -92,11 +135,16 @@ export const ClientAuthMethod = Schema.Literals([
 
 export const ApplicationType = Schema.Literals(["web", "native"]);
 
+/** The resources a managed client may obtain, each named once. */
+const ResourceSelection = Schema.Array(Schema.String).check(
+  Schema.isUnique({ message: "Choose unique Resources" }),
+);
+
 /** Provider vocabulary: the server passes these fields through unchanged. */
 export const ClientInput = Schema.Struct({
   client_name: Schema.String,
   redirect_uris: Schema.Array(Schema.String),
-  resources: Schema.Array(Schema.String),
+  resources: ResourceSelection,
   token_endpoint_auth_method: ClientAuthMethod,
   application_type: ApplicationType,
 });
@@ -149,6 +197,23 @@ export const Resource = Schema.Struct({
 
 export const ResourceSummary = Resource.pipe(Schema.fieldsAssign({ builtIn: Schema.Boolean }));
 
+/**
+ * A resource as the owner writes it. The issuer trims each field before storing it, so the
+ * rules allow surrounding whitespace: a name that is not blank, and scopes that are OAuth
+ * scope tokens (RFC 6749 §3.3). Stored resources are `Resource`, which carries no rule.
+ */
+export const ResourceInput = Schema.Struct({
+  identifier: Schema.String,
+  name: Schema.String.check(Schema.isPattern(/\S/u, { message: "Resources require a name" })),
+  scopes: Schema.Array(
+    Schema.String.check(
+      Schema.isPattern(/^\s*[\x21\x23-\x5B\x5D-\x7E]+\s*$/u, {
+        message: "Resources require well-formed custom scopes",
+      }),
+    ),
+  ),
+});
+
 export const ResourceId = Schema.Struct({ identifier: Schema.String });
 
 export const ClientAccess = Schema.Struct({
@@ -158,12 +223,33 @@ export const ClientAccess = Schema.Struct({
 
 export const ClientAccessInput = Schema.Struct({
   client_id: Schema.String,
-  resources: Schema.Array(Schema.String),
+  resources: ResourceSelection,
 });
 
 export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(ClientAccess) });
 
 export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
+
+/**
+ * Permissions as the owner grants them: at least one resource, each with scopes named once.
+ * A stored key's are `KeyPermissions`, which a key whose permissions no longer decode is
+ * listed with, empty.
+ */
+const KeyGrants = Schema.Record(
+  Schema.String,
+  Schema.Array(Schema.String).check(
+    Schema.isMinLength(1, {
+      message: "Select explicitly granted, currently available Resource scopes",
+    }),
+    Schema.isUnique({ message: "Select explicitly granted, currently available Resource scopes" }),
+  ),
+).check(Schema.isMinProperties(1, { message: "Select at least one Resource and scope" }));
+
+/** A key's name as the owner writes it; the issuer stores it trimmed. */
+const KeyName = Schema.String.check(
+  Schema.isMaxLength(100, { message: "Key names require 1–100 characters" }),
+  Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" }),
+);
 
 /**
  * Timestamps stay ISO strings on the wire and arrive as `DateTime.Utc` values. An input
@@ -187,8 +273,8 @@ export const Connection = Schema.Struct({
 });
 
 export const ApiKeyInput = Schema.Struct({
-  name: Schema.String,
-  permissions: KeyPermissions,
+  name: KeyName,
+  permissions: KeyGrants,
   expiresAt: Schema.NullOr(Timestamp),
 });
 
@@ -196,8 +282,8 @@ export const ApiKeyId = Schema.Struct({ keyId: Schema.String });
 
 export const ApiKeyUpdate = Schema.Struct({
   keyId: Schema.String,
-  name: Schema.optional(Schema.String),
-  permissions: Schema.optional(KeyPermissions),
+  name: Schema.optional(KeyName),
+  permissions: Schema.optional(KeyGrants),
   enabled: Schema.optional(Schema.Boolean),
 });
 
@@ -210,42 +296,37 @@ export const MachineKey = Schema.Struct({
   createdAt: Timestamp,
 });
 
-// Every action can fail with shared API errors. HTTP maps native schema failures
-// through the group policy; MCP retains its native validation and error responses.
-const schemaError = {
-  invalid: { schema: BadRequest, make: () => new BadRequest({ error: "Invalid request" }) },
-  internal: {
-    schema: InternalServerError,
-    make: () => new InternalServerError({ error: "Request could not be completed" }),
-  },
-};
+/** What every issuer action shares: any caller, and the contract's errors. */
+const anyone = { caller: Action.Anyone, error: errors } as const;
+
+/** What every administration action shares: the owner as its caller, and the contract's errors. */
+const owned = { caller: CurrentOwner, error: errors } as const;
 
 // These actions have their own access rules, not an owner-session requirement.
 // They are HTTP-only: bootstrap and key lists are not MCP administration tools.
-export const IssuerActions = ActionGroup.make(
-  { name: "issuer", errors, schemaError },
+export const IssuerActions = [
   Action.make("setupStatus", {
     description: "Check whether the issuer needs its first owner account.",
-    access: "read",
+    readOnly: true,
+    ...anyone,
     success: Schema.Struct({ required: Schema.Boolean }),
-    mcp: false,
   }),
   Action.make("setupOwner", {
     description: "Create the first owner account.",
-    access: "write",
+    readOnly: false,
+    ...anyone,
     input: SetupInput,
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
-    mcp: false,
   }),
   Action.make("keyList", {
     description:
       "The signed list a resource server verifies API keys against: one sealed entry per key granted on the resource, readable only with that key.",
-    access: "read",
+    readOnly: true,
+    ...anyone,
     input: Schema.Struct({ resource: Schema.String }),
     success: Schema.Struct({ list: Schema.String }),
-    mcp: false,
   }),
-);
+] as const;
 
 export const ClientListResult = Schema.Struct({
   clients: Schema.Array(Client),
@@ -256,86 +337,98 @@ export const ClientListResult = Schema.Struct({
   issuer: Schema.String,
 });
 
-export const Administration = ActionGroup.make(
-  { name: "administration", errors, schemaError },
+export const Administration = [
   Action.make("listClients", {
     description:
       "List clients, resources, managed clients' resource access (what they may obtain), and every client's connections (what it holds).",
-    access: "read",
+    readOnly: true,
+    ...owned,
     success: ClientListResult,
   }),
   Action.make("createClient", {
     description: "Register a first-party OAuth client. Returns its secret once when confidential.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientInput,
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
   }),
   Action.make("updateClient", {
     description: "Rename a first-party client or change its redirect URIs and application type.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientUpdateInput,
     success: Client,
   }),
   Action.make("deleteClient", {
     description:
       "Delete a client and its stored authorization. An automatic client can register again; block it to keep it out.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
   Action.make("revokeClient", {
     description:
       "Revoke a client’s stored authorization, for one resource or all. It must authorize again; an automatic client asks for consent.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientRevokeInput,
     success: Schema.Struct({ revoked: Schema.Boolean }),
   }),
   Action.make("blockClient", {
     description: "Block or unblock OAuth authorization for a client.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientBlockInput,
     success: Schema.Struct({ blocked: Schema.Boolean }),
   }),
   Action.make("rotateClientSecret", {
     description: "Rotate a confidential client secret. Returns the new secret once.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientId,
     success: ClientCredentials,
   }),
   Action.make("setClientAccess", {
     description:
       "Set the resources a managed client may obtain. Removing one revokes its authorization for it. Automatic clients may ask for any resource with consent.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ClientAccessInput,
     success: ClientAccessResult,
   }),
   Action.make("createResource", {
     description: "Create an OAuth resource and its scopes.",
-    access: "write",
-    input: Resource,
+    readOnly: false,
+    ...owned,
+    input: ResourceInput,
     success: Resource.pipe(HttpApiSchema.status(201)),
   }),
   Action.make("updateResource", {
     description: "Update an OAuth resource and its scopes.",
-    access: "write",
-    input: Resource,
+    readOnly: false,
+    ...owned,
+    input: ResourceInput,
     success: Resource,
   }),
   Action.make("deleteResource", {
     description:
       "Delete a resource, its client access and every client’s authorization for it. API-key permissions are retained; recreating the resource restores them.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ResourceId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
   Action.make("listApiKeys", {
     description: "List API key metadata without secret values.",
-    access: "read",
+    readOnly: true,
+    ...owned,
     success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
   }),
   Action.make("createApiKey", {
     description: "Create a scoped API key. Returns its secret once.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ApiKeyInput,
     success: MachineKey.pipe(
       Schema.fieldsAssign({ key: Schema.String }),
@@ -344,18 +437,27 @@ export const Administration = ActionGroup.make(
   }),
   Action.make("updateApiKey", {
     description: "Update an API key’s name, permissions or enabled state.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ApiKeyUpdate,
     success: MachineKey,
   }),
   Action.make("deleteApiKey", {
     description: "Delete an API key.",
-    access: "write",
+    readOnly: false,
+    ...owned,
     input: ApiKeyId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
-);
+] as const;
 
-export const Http = ActionHttp.make({ apiPath: "/api" }, Administration, IssuerActions);
+/**
+ * Every action over HTTP, at `/api/<action>`, owner administration authenticated by
+ * `authentication`: the server's, from its deployment's cookie, or the browser's
+ * `OwnerSession`. Resource servers read `/api/keyList`, so that path is part of the protocol.
+ */
+export const binding = (authentication: typeof OwnerSession) =>
+  ActionHttp.make([...Administration, ...IssuerActions], { authentication });
 
-export const Api = Http.api;
+/** The browser's binding, and a typed client's: the cookie name is the server's concern. */
+export const Http = binding(OwnerSession);

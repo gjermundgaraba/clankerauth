@@ -1,7 +1,7 @@
 import { Clock, DateTime, Effect, Schema } from "effect";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
-  BadRequest,
+  CurrentOwner,
   KeyPermissions,
   type ApiKeyId,
   type ApiKeyInput,
@@ -9,8 +9,7 @@ import {
 } from "@clankerauth/admin-api";
 import { Auth } from "./auth.ts";
 import { mcpResource } from "./resources.ts";
-import { CurrentOwner } from "./current-owner.ts";
-import { provider } from "./api-errors.ts";
+import { invalidInput, provider } from "./api-errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
 
@@ -57,37 +56,25 @@ const summary = Effect.fnUntraced(function* (key: {
 });
 
 export const machineKeys = Effect.map(Auth, (service) => {
+  // The contract's schemas check the name and that each grant names scopes, once each; what
+  // remains depends on the stored resources.
   const validate = Effect.fn("MachineKeys.validate")(function* (
-    name: string | undefined,
     grants: typeof KeyPermissions.Type | undefined,
   ) {
-    if (name !== undefined && (!name.trim() || name.length > 100))
-      return yield* Effect.fail(new BadRequest({ error: "Key names require 1–100 characters" }));
-
     if (grants === undefined) return;
-
-    if (!Object.keys(grants).length)
-      return yield* Effect.fail(
-        new BadRequest({ error: "Select at least one Resource and scope" }),
-      );
 
     for (const [identifier, scopes] of Object.entries(grants)) {
       if (identifier === mcpResource(service.settings.baseURL))
-        return yield* Effect.fail(
-          new BadRequest({ error: "Administration requires OAuth access tokens, not API keys" }),
+        return yield* invalidInput(
+          ["permissions", identifier],
+          "Administration requires OAuth access tokens, not API keys",
         );
       const resource = yield* service.resources.get(identifier);
 
-      if (
-        !resource ||
-        !scopes.length ||
-        new Set(scopes).size !== scopes.length ||
-        scopes.some((scope) => !resource.scopes.includes(scope))
-      )
-        return yield* Effect.fail(
-          new BadRequest({
-            error: "Select explicitly granted, currently available Resource scopes",
-          }),
+      if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
+        return yield* invalidInput(
+          ["permissions", identifier],
+          "Select explicitly granted, currently available Resource scopes",
         );
     }
   });
@@ -109,7 +96,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
     }),
     create: Effect.fn("MachineKeys.create")(function* (input: typeof ApiKeyInput.Type) {
       const owner = yield* CurrentOwner;
-      yield* validate(input.name, input.permissions);
+      yield* validate(input.permissions);
 
       const expiresIn =
         input.expiresAt === null
@@ -117,7 +104,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
           : (DateTime.toEpochMillis(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
 
       if (expiresIn !== null && expiresIn < 1)
-        return yield* Effect.fail(new BadRequest({ error: "Expiry must be in the future" }));
+        return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
 
       const key = yield* provider(() =>
         service.auth.api.createApiKey({
@@ -136,7 +123,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
     }),
     update: Effect.fn("MachineKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
       const owner = yield* CurrentOwner;
-      yield* validate(input.name, input.permissions);
+      yield* validate(input.permissions);
 
       return yield* summary(
         yield* provider(() =>

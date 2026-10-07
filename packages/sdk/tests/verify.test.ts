@@ -36,7 +36,7 @@ const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.
 
 test("API keys verify offline against one key list, with their actor, scopes and expiry", () =>
   withIssuer(async (verifier, issuer) => {
-    const principal = await Effect.runPromise(verifier.verify(`Bearer ${issuer.key}`));
+    const principal = await Effect.runPromise(verifier.verifyToken(issuer.key));
     assert.equal(principal.subject, "owner");
     assert.deepEqual(principal.actor, { kind: "key", keyId: "key-1" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
@@ -85,7 +85,7 @@ test("API keys verify offline against one key list, with their actor, scopes and
 test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", () =>
   withIssuer(async (verifier, issuer) => {
     const token = await issuer.sign();
-    const principal = await Effect.runPromise(verifier.verify(`Bearer ${token}`));
+    const principal = await Effect.runPromise(verifier.verifyToken(token));
     assert.deepEqual(principal.actor, { kind: "client", clientId: "fixture" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(issuer.keyLists(), 0);
@@ -117,24 +117,28 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
     await Effect.runPromise(
       verifier.verifyToken(await issuer.sign({ aud: [resource, "https://reports.internal/api"] })),
     );
-    // A missing required scope is the one 403: it names only the scope that is missing.
+    // A missing required scope is the one 403: it names only the scope that is missing, and
+    // the credential's actor, which decides whether the caller can step up to it.
     assert.deepEqual(
       await failure(verifier.verifyToken(await issuer.sign({ scope: "notes:write" }))),
-      new InsufficientScope({ scope: "notes:read" }),
+      new InsufficientScope({
+        scope: "notes:read",
+        actor: { kind: "client", clientId: "fixture" },
+      }),
     );
   }));
 
 test("malformed credentials and outages remain distinct typed outcomes", () =>
   withIssuer(async (verifier, issuer) => {
-    for (const header of [
-      null,
-      "Bearer invalid, Bearer another",
-      "Bearer not.a.jwt",
-      "Bearer eyJhbGciOiJIUzI1NiJ9.e30.AA",
+    for (const token of [
+      "",
+      "invalid,",
+      "not.a.jwt",
+      "eyJhbGciOiJIUzI1NiJ9.e30.AA",
       // A token that does not name its key is refused before any key lookup.
-      `Bearer ${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
+      `${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
     ])
-      assert((await failure(verifier.verify(header))) instanceof Unauthorized);
+      assert((await failure(verifier.verifyToken(token))) instanceof Unauthorized);
     assert.equal(issuer.keyLists(), 0);
     // Before any list is read, an unreachable issuer leaves a key undecided.
     issuer.fail(503);
@@ -157,7 +161,7 @@ test("the fake issuer rejects malformed key list requests", async () => {
 
   try {
     for (const body of ["invalid", "{}", "[]", "null", '{"resource":42}']) {
-      const response = await fetch(new URL("/api/issuer/keyList", issuer.issuer), {
+      const response = await fetch(new URL("/api/keyList", issuer.issuer), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body,

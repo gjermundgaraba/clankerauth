@@ -85,7 +85,7 @@ beforeEach(async () => {
     .join("; ");
   expect(
     (
-      await call("/api/administration/createResource", {
+      await call("/api/createResource", {
         identifier: resource,
         name: "Notes",
         scopes: ["notes:read", "notes:write"],

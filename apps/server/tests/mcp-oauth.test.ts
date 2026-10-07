@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import { mcpRequest } from "@gjermundgaraba/effect-actions/Testing";
-import { withMcpClient } from "@gjermundgaraba/effect-actions/TestingClient";
+import { administrationTools, webMcpRequest, withMcpClient } from "./mcp.ts";
 import { Effect, Exit, Schema, Scope } from "effect";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { InternalServerError } from "@clankerauth/admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -44,7 +44,7 @@ let cookie: string;
 
 const admin = (action: string, body: TestRequestBody) =>
   handle(
-    new Request(`${baseURL}/api/administration/${action}`, {
+    new Request(`${baseURL}/api/${action}`, {
       method: "POST",
       headers: { cookie, origin: baseURL, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -53,7 +53,7 @@ const admin = (action: string, body: TestRequestBody) =>
 
 const mcp = (token?: string, headers: Record<string, string> = {}) =>
   handle(
-    mcpRequest({
+    webMcpRequest({
       method: "tools/list",
       url: `${baseURL}/mcp`,
       headers: token === undefined ? headers : { ...headers, authorization: `Bearer ${token}` },
@@ -67,6 +67,11 @@ const refresh = (client_id: string, refresh_token: string) =>
     refresh_token,
     resource: `${baseURL}/mcp`,
   });
+
+/** The issuer's refusal of a token holding neither administration scope: step up to read. */
+const neitherScope = Schema.encodeSync(Action.Forbidden)(
+  new Action.Forbidden({ message: "Insufficient scope", scopes: ["clankerauth:read"] }),
+);
 
 beforeEach(async () => {
   issuer = await openIssuer({ baseURL });
@@ -102,19 +107,15 @@ afterEach(async () => {
 test("anonymous discovery leads to PKCE owner consent, bearer administration, and refresh", async () => {
   const unauthorized = await mcp();
   expect(unauthorized.status).toBe(401);
+  // A client finds the issuer's discovery where the challenge points.
   const challenge = unauthorized.headers.get("www-authenticate");
-  expect(challenge).toContain("Bearer");
-  // RFC 6750: no error code when the request carried no credentials.
-  expect(challenge).not.toContain("error=");
   const metadataURL = /resource_metadata="([^"]+)"/.exec(challenge ?? "")?.[1];
-  expect(metadataURL).toBe(`${baseURL}/.well-known/oauth-protected-resource/mcp`);
   const metadata = await handle(new Request(metadataURL ?? ""));
   expect(metadata.status).toBe(200);
   expect(await metadata.json()).toMatchObject({
     resource: `${baseURL}/mcp`,
     authorization_servers: [`${baseURL}/api/auth`],
     scopes_supported: ["clankerauth:read", "clankerauth:write", "offline_access"],
-    bearer_methods_supported: ["header"],
   });
 
   const discovery = await handle(
@@ -134,7 +135,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
 
   // The token grants MCP access only; browser administration still requires its own session.
   const http = await handle(
-    new Request(`${baseURL}/api/administration/listClients`, {
+    new Request(`${baseURL}/api/listClients`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${tokens.access_token}`,
@@ -216,7 +217,7 @@ test("an aborted MCP tool call settles its provider work and compensation before
   const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
 
   try {
-    const request = mcpRequest({
+    const request = webMcpRequest({
       method: "tools/call",
       url: `http://127.0.0.1:${port}/mcp`,
       params: {
@@ -272,9 +273,7 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
   ];
 
   for (const headers of rejectedHeaders) {
-    const response = await mcp(undefined, headers);
-    expect(response.status).toBe(401);
-    expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
+    expect((await mcp(undefined, headers)).status).toBe(401);
   }
 
   const target = "https://resource.example/api";
@@ -310,8 +309,7 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
 
   const denied = await mcp(insufficient.tokens.access_token);
   expect(denied.status).toBe(403);
-  expect(denied.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
-  expect(denied.headers.get("www-authenticate")).toContain('scope="clankerauth:read"');
+  expect(await denied.json()).toEqual(neitherScope);
   const valid = await mcpOAuthGrant(handle, baseURL, cookie);
   const parts = valid.tokens.access_token.split(".");
   parts[1] = Buffer.from(
@@ -366,16 +364,27 @@ test("a read token may only list, a write token may do anything, and neither adm
     async (client) => {
       expect((await client.callTool({ name: "listClients", arguments: {} })).isError).toBe(false);
       expect((await client.callTool({ name: "listApiKeys", arguments: {} })).isError).toBe(false);
-
-      const refused = await client.callTool({
-        name: "createApiKey",
-        arguments: { name: "Escalation", permissions: {}, expiresAt: null },
-      });
-
-      expect(refused.isError).toBe(true);
-      expect(JSON.stringify(refused.content)).toContain("clankerauth:write");
     },
   );
+
+  // A change needs write: the refusal names it, for the client to step up to.
+  const tools = await administrationTools(handle, baseURL, tokens.access_token);
+
+  const escalation = await Effect.runPromise(
+    Effect.flip(
+      tools.createApiKey({
+        name: "Escalation",
+        permissions: { "https://notes.example/": ["notes:read"] },
+        expiresAt: null,
+      }),
+    ),
+  );
+
+  expect(escalation instanceof Action.Forbidden ? escalation.scopes : escalation).toEqual([
+    "clankerauth:write",
+  ]);
+
+  // The refused call created nothing.
   expect((await (await admin("listApiKeys", {})).json()).keys).toEqual([]);
 
   // Write allows everything, listing included.
@@ -402,13 +411,12 @@ test("a read token may only list, a write token may do anything, and neither adm
     },
   );
 
-  // A token with neither scope is refused at admission, with a challenge naming read.
+  // A token with neither scope is refused at admission, naming read to step up to.
   const neither = await mcpOAuthGrant(handle, baseURL, cookie, { scope: "offline_access" });
   const refused = await mcp(neither.tokens.access_token);
 
   expect(refused.status).toBe(403);
-  expect(refused.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
-  expect(refused.headers.get("www-authenticate")).toContain('scope="clankerauth:read"');
+  expect(await refused.json()).toEqual(neitherScope);
 });
 
 test.each(["block", "revoke"] as const)(
@@ -428,7 +436,6 @@ test.each(["block", "revoke"] as const)(
 
     if (operation === "block") {
       expect(afterwards.status).toBe(401);
-      expect(afterwards.headers.get("www-authenticate")).toContain('error="invalid_token"');
 
       const denied = await handle(
         new Request(

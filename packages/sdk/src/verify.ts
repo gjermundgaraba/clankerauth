@@ -12,6 +12,11 @@ import * as KeyList from "./key-list.ts";
 import { keyListRefresh } from "./refresh.ts";
 import { execute } from "./transport.ts";
 
+/**
+ * What a verified credential proves: an OAuth client's access token or an API key. A request's
+ * caller, `CurrentPrincipal`, is this or, on a trusted local surface, the process itself, which
+ * no verifier produces: `Caller` of the `/session` entry.
+ */
 export interface Principal {
   readonly subject: string;
   readonly scopes: readonly string[];
@@ -36,9 +41,6 @@ export interface Options {
 }
 
 export interface Verifier {
-  readonly verify: (
-    authorization: string | null | undefined,
-  ) => Effect.Effect<Principal, AuthenticationError>;
   readonly verifyToken: (token: string) => Effect.Effect<Principal, AuthenticationError>;
 }
 
@@ -78,8 +80,7 @@ interface Keys {
   readonly entries: ReadonlyMap<string, string>;
 }
 
-const unauthorized = (cause?: unknown) =>
-  new Unauthorized({ message: "Authentication required", cause });
+const unauthorized = (cause?: unknown) => new Unauthorized({ cause });
 
 /** How long a JWKS document answers verification before it is read again. */
 const documentLifetime = "1 minute";
@@ -108,7 +109,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const endpoints = yield* Effect.try({
     try: () => ({
       jwks: new URL(`${options.issuer}/jwks`).href,
-      keyList: new URL("/api/issuer/keyList", options.issuer).href,
+      keyList: new URL("/api/keyList", options.issuer).href,
     }),
     catch: () => new ConfigurationError({ message: "Invalid issuer URL" }),
   });
@@ -345,19 +346,11 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
     const missing = options.requiredScopes?.find((scope) => !principal.scopes.includes(scope));
 
-    if (missing !== undefined) return yield* new InsufficientScope({ scope: missing });
+    if (missing !== undefined)
+      return yield* new InsufficientScope({ scope: missing, actor: principal.actor });
 
     return principal;
   });
 
-  return {
-    verifyToken,
-    verify: Effect.fn("Verifier.verify")(function* (authorization: string | null | undefined) {
-      const token = /^Bearer ([^\s,]+)$/iu.exec(authorization ?? "")?.[1];
-
-      if (!token) return yield* unauthorized();
-
-      return yield* verifyToken(token);
-    }),
-  } satisfies Verifier;
+  return { verifyToken } satisfies Verifier;
 });
