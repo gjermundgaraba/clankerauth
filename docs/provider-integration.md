@@ -1,6 +1,6 @@
 # Provider integration
 
-The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.5, unpatched. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration.
+The integration targets Better Auth and `@better-auth/oauth-provider` 1.7.7, unpatched. Upstream documentation may describe newer releases; behavior claims below describe this repository's pinned integration.
 
 Better Auth documents Node's built-in SQLite and its Kysely adapter. This service uses the exported `NodeSqliteDialect` with `DatabaseSync`, then shares the Kysely instance with Better Auth and a small Effect tagged-query helper. WAL, foreign keys and a five-second busy timeout are enabled. Kysely owns connection reservation, transactions and cleanup. See [SQLite integration](https://better-auth.com/docs/adapters/sqlite) and [database concepts](https://better-auth.com/docs/concepts/database).
 
