@@ -119,9 +119,9 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     apiKeys: options.apiKeys,
   });
 
-  // A request must not wait on an issuer that does not answer: the transport is
-  // interrupted and the credential refused as unavailable. A key list read gives up
-  // sooner, so a held list still decides a key.
+  // A request must not wait on an issuer that does not answer: the credential is refused
+  // as unavailable, and a read no other request waits on is interrupted. A key list read
+  // gives up sooner, so a held list still decides a key.
   const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.timeoutOrElse(effect, {
       duration: "5 seconds",

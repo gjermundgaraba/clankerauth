@@ -4,12 +4,12 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.0
+  "@effect/platform-node": 4.0.2
   "@better-auth/oauth-provider": 1.7.5
   "@better-auth/api-key": 1.7.5
   better-auth: 1.7.5
   better-call: 1.4.0
-  effect: 4.0.0
+  effect: 4.0.2
   "@types/node": 26.6.2
   jose: 6.2.12
   typescript: 7.0.2
@@ -22,7 +22,7 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.5
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.82.0
-  "@gjermundgaraba/effect-actions": 0.10.0
+  "@gjermundgaraba/effect-actions": 0.11.0
 
 overrides:
   vite@*: "catalog:"
@@ -46,3 +46,7 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  # Effect 4.0.2 is newer than the one-day release age; drop these once it is not.
+  - effect@4.0.2
+  - "@effect/platform-node@4.0.2"
+  - "@effect/platform-node-shared@4.0.2"

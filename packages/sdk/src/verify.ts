@@ -1,4 +1,4 @@
-import { Cause, Clock, Duration, Effect, Exit, Ref, Result, Schema } from "effect";
+import { Clock, Duration, Effect, Exit, Ref, Result, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import {
@@ -134,22 +134,12 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     });
   }, Effect.scoped);
 
-  // One read serves every key identifier until it expires, whatever its outcome, so an
-  // unknown `kid` in an unauthenticated request never becomes traffic at the issuer.
-  const read = yield* Effect.cachedWithTTL(document(), (exit) =>
+  // One read serves every key identifier until it expires, or for the cooldown if it
+  // failed, so an unknown `kid` in an unauthenticated request never becomes traffic at
+  // the issuer. A read every caller gave up on is dropped, and the next caller reads again.
+  const keys = yield* Effect.cachedWithTTL(document(), (exit) =>
     Exit.isSuccess(exit) ? documentLifetime : cooldown,
   );
-
-  // Replaying a read must not hand a later request the interruption of an earlier
-  // one's deadline; within the window the issuer simply was not reached.
-  const replayed = <A>(cached: Effect.Effect<A, ProviderUnavailable>, operation: string) =>
-    Effect.catchCause(cached, (cause) =>
-      Cause.hasInterrupts(cause)
-        ? Effect.fail(new ProviderUnavailable({ operation }))
-        : Effect.failCause(cause),
-    );
-
-  const keys = replayed(read, "jwks.refresh");
 
   const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string) {
     const resolve = yield* keys;
@@ -284,7 +274,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
   /** The list read now, or within the cooldown, or else the held one, while inside its window. */
   const latest = Effect.gen(function* () {
-    const fetched = yield* Effect.result(replayed(readList, "key-list.refresh"));
+    const fetched = yield* Effect.result(readList);
 
     if (Result.isSuccess(fetched)) yield* Ref.set(held, fetched.success);
     const list = yield* Ref.get(held);

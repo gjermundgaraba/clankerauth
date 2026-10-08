@@ -180,11 +180,11 @@ catalogs:
       specifier: 1.7.5
       version: 1.7.5
     '@effect/platform-node':
-      specifier: 4.0.0
-      version: 4.0.0
+      specifier: 4.0.2
+      version: 4.0.2
     '@gjermundgaraba/effect-actions':
-      specifier: 0.10.0
-      version: 0.10.0
+      specifier: 0.11.0
+      version: 0.11.0
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -198,8 +198,8 @@ catalogs:
       specifier: 1.4.0
       version: 1.4.0
     effect:
-      specifier: 4.0.0
-      version: 4.0.0
+      specifier: 4.0.2
+      version: 4.0.2
     jose:
       specifier: 6.2.12
       version: 6.2.12
@@ -262,13 +262,13 @@ importers:
         version: link:../web
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.1))
+        version: 4.0.2(effect@4.0.2)(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@gjermundgaraba/clankerauth-sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.10.0(effect@4.0.0)
+        version: 0.11.0(effect@4.0.2)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.5(@opentelemetry/api@1.9.1)(vitest@5.0.3)
@@ -277,7 +277,7 @@ importers:
         version: 1.4.0(zod@4.6.4)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.2
       jose:
         specifier: 'catalog:'
         version: 6.2.12
@@ -314,13 +314,13 @@ importers:
         version: link:../../packages/admin-api
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.10.0(effect@4.0.0)
+        version: 0.11.0(effect@4.0.2)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.5(@opentelemetry/api@1.9.1)(vitest@5.0.3)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.2
       playwright:
         specifier: 'catalog:'
         version: 1.63.0
@@ -338,10 +338,10 @@ importers:
     dependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.10.0(effect@4.0.0)
+        version: 0.11.0(effect@4.0.2)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.2
     devDependencies:
       typescript:
         specifier: 'catalog:'
@@ -360,13 +360,13 @@ importers:
         version: link:../../apps/web
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.1))
+        version: 4.0.2(effect@4.0.2)(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.2
       jose:
         specifier: 'catalog:'
         version: 6.2.12
@@ -385,7 +385,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.10.0(effect@4.0.0)
+        version: 0.11.0(effect@4.0.2)
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -394,7 +394,7 @@ importers:
         version: 26.6.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.2
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -529,24 +529,24 @@ packages:
   '@blazediff/core@1.10.0':
     resolution: {integrity: sha512-AOQff0zgR7cGsZL+4E7hVkmujoPUpm0J9xzWGWZj5wCjd3gmxESXAPfKyuzs93VdpQNFhHlBhfOjrcZ+XTERtQ==}
 
-  '@effect/platform-node-shared@4.0.0':
-    resolution: {integrity: sha512-VBXHJU9UXVZPdQGGDRjGXpo+TpOzRwZuMrdKAtIxi1qwcRftmacZ1zTgIrzBa0Z2RA2KVkoOecQUsTlt/nJZhw==}
+  '@effect/platform-node-shared@4.0.2':
+    resolution: {integrity: sha512-xn8aDw9p/QUPt1Yi0C3HUMcycT+MjHfAe19FDUDrUuzcwq0xxskkamVSqbdykF/Dsuus4aZTsCBZA/vkhHIfbQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.0.2
 
-  '@effect/platform-node@4.0.0':
-    resolution: {integrity: sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ==}
+  '@effect/platform-node@4.0.2':
+    resolution: {integrity: sha512-RWesXBQStnFHdD465gR5thFKgXO7FSyCKRZ56nWXB7PedNVzr8vV0nb/3MULLdri493sMz/b/pmGBTb6K8cBjQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.0.2
       redis: '>=5.0.0 <7.0.0'
 
-  '@gjermundgaraba/effect-actions@0.10.0':
-    resolution: {integrity: sha512-T3jIxiKf7I9/xTLMKdIHsDFQLEq5TYfl1ZU5jxskfxDjlWCr5uDmBb7Ts3IWsoSXKZ/sKRqsS3MlWJI8Sps91A==}
+  '@gjermundgaraba/effect-actions@0.11.0':
+    resolution: {integrity: sha512-ycGib6YHaZSEOG4ofclB9bKvjKL2CmC6B+BO9B99waGweYbDydQRbUOA96PzASSv0C2eVWFREjAhCD0klZ0/cA==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     peerDependencies:
-      effect: ~4.0.0
+      effect: ~4.0.2
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -934,8 +934,8 @@ packages:
   '@types/node@26.6.2':
     resolution: {integrity: sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -1486,8 +1486,8 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
-  effect@4.0.0:
-    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
+  effect@4.0.2:
+    resolution: {integrity: sha512-YeYnLqSFrL4+tCOXRrfNP03w8FILoF/wDl+ukraJAGzXrjcS383W7LAAvGBbLatEyktmLxRq+9xJinx7QzXW5A==}
 
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
@@ -1965,28 +1965,28 @@ snapshots:
 
   '@blazediff/core@1.10.0': {}
 
-  '@effect/platform-node-shared@4.0.0(effect@4.0.0)':
+  '@effect/platform-node-shared@4.0.2(effect@4.0.2)':
     dependencies:
-      '@types/ws': 8.18.1
-      effect: 4.0.0
+      '@types/ws': 8.18.2
+      effect: 4.0.2
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.1))':
+  '@effect/platform-node@4.0.2(effect@4.0.2)(redis@6.2.1(@opentelemetry/api@1.9.1))':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0(effect@4.0.0)
-      effect: 4.0.0
+      '@effect/platform-node-shared': 4.0.2(effect@4.0.2)
+      effect: 4.0.2
       redis: 6.2.1(@opentelemetry/api@1.9.1)
       undici: 8.11.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@gjermundgaraba/effect-actions@0.10.0(effect@4.0.0)':
+  '@gjermundgaraba/effect-actions@0.11.0(effect@4.0.2)':
     dependencies:
-      effect: 4.0.0
+      effect: 4.0.2
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -2213,7 +2213,7 @@ snapshots:
     dependencies:
       undici-types: 8.9.0
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 26.6.2
 
@@ -2527,7 +2527,7 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  effect@4.0.0: {}
+  effect@4.0.2: {}
 
   es-module-lexer@2.3.2: {}
 

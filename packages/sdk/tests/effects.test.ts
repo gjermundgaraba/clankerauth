@@ -67,7 +67,7 @@ test("verification deadlines interrupt the supplied HTTP transport", () =>
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("one JWKS read serves every key until it expires, and failed or abandoned reads cool down", async () => {
+test("one JWKS read serves every key until it expires, a failed one cools down, and an abandoned one is dropped", async () => {
   const { exportJWK, generateKeyPair, SignJWT } = await import("jose");
   const first = await generateKeyPair("EdDSA");
   const second = await generateKeyPair("EdDSA");
@@ -95,7 +95,6 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
       let key = firstKey;
       let paused = false;
       const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
 
       const client = HttpClient.make((request) =>
         Effect.gen(function* () {
@@ -103,7 +102,8 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
 
           if (paused) {
             yield* Deferred.succeed(started, undefined);
-            yield* Deferred.await(release);
+
+            return yield* Effect.never;
           }
 
           return HttpClientResponse.fromWeb(
@@ -146,8 +146,8 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
       assert((yield* Effect.flip(verify(firstToken))) instanceof Unauthorized);
       assert.equal(reads, 3);
 
-      // An abandoned read cools down as a failed one does: the next caller is told the
-      // issuer is unavailable rather than inheriting a deadline that was not its own.
+      // A read its only caller gave up on is dropped, not held: the next caller reads
+      // again, with a deadline of its own, and that read is held as any other.
       yield* TestClock.adjust("1 minute");
       paused = true;
       const abandoned = yield* verify(secondToken).pipe(Effect.forkChild);
@@ -157,9 +157,8 @@ test("one JWKS read serves every key until it expires, and failed or abandoned r
       assert(timeout instanceof ProviderUnavailable);
       assert.equal(timeout.operation, "verify.timeout");
       paused = false;
-      yield* Deferred.succeed(release, undefined);
-      assert((yield* Effect.flip(verify(secondToken))) instanceof ProviderUnavailable);
-      assert.equal(reads, 4);
+      yield* verify(secondToken);
+      assert.equal(reads, 5);
       yield* TestClock.adjust("5 seconds");
       yield* verify(secondToken);
       assert.equal(reads, 5);
