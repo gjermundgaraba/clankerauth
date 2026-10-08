@@ -50,7 +50,7 @@
   },
   "devDependencies": {
     "@gjermundgaraba/effect-actions": "catalog:",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
