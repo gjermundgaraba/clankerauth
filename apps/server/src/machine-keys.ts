@@ -8,7 +8,7 @@ import {
   type ApiKeyUpdate,
 } from "@clankerauth/admin-api";
 import { Auth } from "./auth.ts";
-import { mcpResource } from "./resources.ts";
+import { administrationIdentifier } from "./resources.ts";
 import { invalidInput, provider } from "./api-errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
@@ -64,7 +64,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
     if (grants === undefined) return;
 
     for (const [identifier, scopes] of Object.entries(grants)) {
-      if (identifier === mcpResource(service.settings.baseURL))
+      if (identifier === administrationIdentifier(service.settings.baseURL))
         return yield* invalidInput(
           ["permissions", identifier],
           "Administration requires OAuth access tokens, not API keys",
@@ -160,7 +160,7 @@ export const machineKeys = Effect.map(Auth, (service) => {
       const resource = yield* service.resources.get(identifier);
 
       const available =
-        resource === undefined || identifier === mcpResource(service.settings.baseURL)
+        resource === undefined || identifier === administrationIdentifier(service.settings.baseURL)
           ? []
           : resource.scopes;
 

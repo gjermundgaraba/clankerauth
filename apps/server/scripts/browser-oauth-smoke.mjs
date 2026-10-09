@@ -129,6 +129,7 @@ try {
   assert.equal(discovery.status, 401);
   // The issuer's CORS policy exposes the challenge to a browser client.
   assert.ok(discovery.challenge);
+  assert.equal(discovery.resource.resource, new URL("/", issuer).href);
   assert.deepEqual(discovery.resource.scopes_supported, [
     "clankerauth:read",
     "clankerauth:write",

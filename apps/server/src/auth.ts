@@ -22,7 +22,12 @@ import {
 import { provider } from "./api-errors.ts";
 import { getMigrations } from "better-auth/db/migration";
 import type { Settings } from "./config.ts";
-import { administrationScopes, mcpResource, protocolScopes, resourceStore } from "./resources.ts";
+import {
+  administrationScopes,
+  administrationIdentifier,
+  protocolScopes,
+  resourceStore,
+} from "./resources.ts";
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
@@ -73,7 +78,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     // The administration resource is fixed: every start re-applies its name and scopes.
     resources: [
       {
-        identifier: mcpResource(settings.baseURL),
+        identifier: administrationIdentifier(settings.baseURL),
         name: "clankerauth administration",
         allowedScopes: [...protocolScopes, administrationScopes.read, administrationScopes.write],
       },
@@ -137,7 +142,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     (scopes) => {
       oauthPlugin.options.scopes = scopes;
     },
-    mcpResource(settings.baseURL),
+    administrationIdentifier(settings.baseURL),
   );
 
   const options = {
@@ -238,7 +243,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     if (plan.schemaProblems.length)
       return yield* Effect.fail(new Error("Database schema requires manual repair"));
     yield* Effect.tryPromise(() => plan.runMigrations());
-    yield* upgrade(database.kysely, sql);
+    yield* upgrade(database.kysely, sql, settings.baseURL);
     const auth = betterAuth(options);
     // Provider initialization seeds the administration resource; publish the catalog after it.
     const context = yield* Effect.tryPromise(() => auth.$context);

@@ -303,7 +303,7 @@ describe("API integration", () => {
         deleted: true,
       });
       expect((yield* api.listClients()).resources.map((entry) => entry.identifier)).toEqual([
-        `${settings.baseURL}/mcp`,
+        `${settings.baseURL}/`,
       ]);
 
       // Onboarding is derived from provider columns: metadata discovery marks CIMD clients

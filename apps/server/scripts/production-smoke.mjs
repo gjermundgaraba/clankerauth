@@ -121,7 +121,7 @@ try {
   const empty = await (await post("/api/listClients", {}, { cookie, origin: baseURL })).json();
 
   const builtin = {
-    identifier: `${baseURL}/mcp`,
+    identifier: `${baseURL}/`,
     name: "clankerauth administration",
     scopes: ["clankerauth:read", "clankerauth:write"],
     builtIn: true,
@@ -162,7 +162,7 @@ try {
   assert.equal(denied.status, 401);
 
   const protectedResource = await (
-    await fetch(`${baseURL}/.well-known/oauth-protected-resource/mcp`)
+    await fetch(`${baseURL}/.well-known/oauth-protected-resource`)
   ).json();
 
   assert.equal(protectedResource.resource, builtin.identifier);

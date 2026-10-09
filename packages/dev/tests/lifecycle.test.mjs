@@ -123,7 +123,7 @@ await test("real HTTP issuer provisions resources and a confidential native clie
       state.resources.find((item) => item.identifier === resource.identifier),
       { ...resource, builtIn: false },
     );
-    assert.ok(state.resources.some((item) => item.identifier === `${issuer.url}/mcp`));
+    assert.ok(state.resources.some((item) => item.identifier === `${issuer.url}/`));
     assert.equal(state.clients.length, 1);
     assert.equal(state.clients[0].client_id, issuer.clientId);
     assert.equal(state.clients[0].token_endpoint_auth_method, "client_secret_basic");

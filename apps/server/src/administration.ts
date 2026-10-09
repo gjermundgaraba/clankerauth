@@ -13,7 +13,7 @@ import {
   type SetupInput,
 } from "@clankerauth/admin-api";
 import { persisted } from "./database.ts";
-import { mcpResource } from "./resources.ts";
+import { administrationIdentifier } from "./resources.ts";
 import { ResponseCookies } from "./response-cookies.ts";
 import { Auth, createOwner } from "./auth.ts";
 
@@ -80,7 +80,7 @@ export const administration = Effect.map(Auth, (service) => {
         clients,
         resources: catalog.resources.map((resource) => ({
           ...resource,
-          builtIn: resource.identifier === mcpResource(settings.baseURL),
+          builtIn: resource.identifier === administrationIdentifier(settings.baseURL),
         })),
         clientAccess: catalog.clientAccess,
         connections: catalog.connections,

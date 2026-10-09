@@ -1066,7 +1066,7 @@ describe("dashboard resources and client access", () => {
     expect((await request("/api/createResource", resource)).status).toBe(201);
 
     const reserved = await request("/api/deleteResource", {
-      identifier: `${settings.baseURL}/mcp`,
+      identifier: `${settings.baseURL}/`,
     });
 
     // The caller named it, so the refusal names the field.

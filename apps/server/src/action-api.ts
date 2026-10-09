@@ -10,6 +10,7 @@ import {
   IssuerActions,
   InternalServerError,
   ownerSession,
+  OwnerHttp,
   OwnerToken,
 } from "@clankerauth/admin-api";
 import manifest from "../package.json" with { type: "json" };
@@ -82,17 +83,22 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         ActionHttp.layer(Http, issuer).pipe(Layer.provide(responseCookies.layer)),
       );
 
-      // Tools are listed to every caller; a read-only token is refused per call.
-      const mcpRoutes = ActionMcp.layerHttp(owner, {
-        name: "clankerauth-admin",
-        version: manifest.version,
-        // Native MCP admission needs this allowlist even after owner authentication.
-        allowedOrigins: mcpAllowedOrigins,
-        instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
-        authentication: OwnerToken,
-      }).pipe(Layer.provide(bearerOwner(adminResource)));
+      // A token client's administration, over MCP or HTTP, under one provider, which also
+      // publishes the resource's discovery. Tools are listed to every caller; a read-only
+      // token is refused per call, as it is per request over HTTP.
+      const tokenRoutes = Layer.mergeAll(
+        ActionMcp.layerHttp(owner, {
+          name: "clankerauth-admin",
+          version: manifest.version,
+          // Native MCP admission needs this allowlist even after owner authentication.
+          allowedOrigins: mcpAllowedOrigins,
+          instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
+          authentication: OwnerToken,
+        }),
+        ActionHttp.layer(OwnerHttp, owner),
+      ).pipe(Layer.provide(bearerOwner(adminResource)));
 
-      return Layer.mergeAll(httpRoutes, mcpRoutes);
+      return Layer.mergeAll(httpRoutes, tokenRoutes);
     }),
   );
 }

@@ -1,23 +1,23 @@
 /**
- * The issuer's own OAuth resource: its administration MCP endpoint, `<baseURL>/mcp`.
+ * The issuer's own OAuth resource, administration, at its origin root as an application's
+ * is: `/mcp` and `/api/owner/<action>` take its tokens. The dashboard at `/` is not part of
+ * it and takes the owner's session cookie alone.
  *
- * An application behind this issuer registers one resource at its public origin root, and
- * the SDK's `Resource` derives exactly that. The issuer is not such an application: `/` is
- * the dashboard, authenticated by the owner's session cookie and never an OAuth audience.
- * So this builds admission from the SDK's verifier directly, and effect-actions'
- * authentication publishes its discovery and challenges.
+ * The issuer verifies its own tokens in-process, so this builds admission from the SDK's
+ * verifier directly rather than through `Resource`, and effect-actions' authentication
+ * publishes its discovery and challenges.
  */
 import { Effect, Layer } from "effect";
 import type * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
-import { administrationScopes, mcpResource } from "./resources.ts";
+import { administrationScopes, administrationIdentifier } from "./resources.ts";
 import { Auth } from "./auth.ts";
 
 export const administrationResource = Effect.fn("AdministrationResource.make")(function* () {
   const service = yield* Auth;
   const issuer = `${service.settings.baseURL}/api/auth`;
-  const resource = mcpResource(service.settings.baseURL);
+  const resource = administrationIdentifier(service.settings.baseURL);
 
   // Published, and named in every challenge, by the authentication around the endpoint.
   // Clients ask for what a 401 names. Naming both scopes lets the owner decide at consent

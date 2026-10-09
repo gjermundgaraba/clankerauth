@@ -46,7 +46,7 @@ let transport;
 window.mcpTest = {
   async inspectDiscovery() {
     const response = await fetch(serverUrl, { method: "POST" });
-    const resource = await fetch(new URL("/.well-known/oauth-protected-resource/mcp", issuer));
+    const resource = await fetch(new URL("/.well-known/oauth-protected-resource", issuer));
 
     return {
       status: response.status,
@@ -93,7 +93,7 @@ window.mcpTest = {
       arguments: {
         client_name: "Created by browser MCP",
         redirect_uris: ["https://managed.example.internal/callback"],
-        resources: [serverUrl.href],
+        resources: [new URL("/", issuer).href],
         token_endpoint_auth_method: "none",
         application_type: "web",
       },

@@ -105,8 +105,8 @@ async function register() {
   return response.json();
 }
 
-async function grant(id: string) {
-  const response = await request(authorization(id), undefined, true);
+async function grant(id: string, identifier = resource, scope?: string) {
+  const response = await request(authorization(id, identifier, 4184, scope), undefined, true);
   expect(response.status, await response.clone().text()).toBe(302);
   const location = new URL(response.headers.get("location")!, baseURL);
   expect(location.pathname).toBe("/consent");
@@ -126,7 +126,7 @@ async function grant(id: string) {
     code,
     code_verifier: verifier,
     redirect_uri: callback,
-    resource,
+    resource: identifier,
   });
 
   expect(tokens.status, await tokens.clone().text()).toBe(200);
@@ -134,12 +134,12 @@ async function grant(id: string) {
   return tokens.json();
 }
 
-const refresh = (id: string, token: string) =>
+const refresh = (id: string, token: string, identifier = resource) =>
   request("/oauth2/token", {
     grant_type: "refresh_token",
     client_id: id,
     refresh_token: token,
-    resource,
+    resource: identifier,
   });
 
 const blocked = (id: string) =>
@@ -461,8 +461,72 @@ test("the 0.10.0 upgrade runs once, clearing stored authorization and automatic 
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
   expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
   expect(await Effect.runPromise(issuer.service.sql`PRAGMA user_version`)).toEqual([
-    { user_version: 1 },
+    { user_version: 2 },
   ]);
+});
+
+/**
+ * Turns this database back into one 0.15.0 last opened: administration at `<baseURL>/mcp`,
+ * with every grant and link naming it there.
+ */
+const asBefore016 = async () => {
+  const [current, legacy] = [`${baseURL}/`, `${baseURL}/mcp`];
+  const [currentReference, legacyReference] = [`resource:${current}`, `resource:${legacy}`];
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const sql = issuer.service.sql;
+      yield* sql`PRAGMA foreign_keys = OFF`;
+      yield* sql`UPDATE oauthResource SET identifier = ${legacy} WHERE identifier = ${current}`;
+      yield* sql`UPDATE oauthClientResource SET resourceId = ${legacy} WHERE resourceId = ${current}`;
+      yield* sql`UPDATE oauthConsent SET referenceId = ${legacyReference} WHERE referenceId = ${currentReference}`;
+      yield* sql`UPDATE oauthAccessToken SET referenceId = ${legacyReference} WHERE referenceId = ${currentReference}`;
+      yield* sql`UPDATE oauthRefreshToken SET referenceId = ${legacyReference} WHERE referenceId = ${currentReference}`;
+      yield* sql`PRAGMA foreign_keys = ON`;
+      yield* sql`PRAGMA user_version = 1`;
+    }),
+  );
+};
+
+test("the 0.16.0 upgrade names administration by the origin root and clears its old authorization", async () => {
+  const administration = `${baseURL}/`;
+  const client = await register();
+  const tokens = await grant(client.client_id, administration, "offline_access clankerauth:read");
+  const first = await managed();
+  await Effect.runPromise(
+    issuer.service
+      .sql`INSERT INTO oauthClientResource (id, clientId, resourceId, createdAt) VALUES ('administration', ${first}, ${administration}, ${new Date().toISOString()})`,
+  );
+  await asBefore016();
+  issuer = await issuer.reopen();
+
+  const identifiers = (await Effect.runPromise(issuer.service.resources.list())).map(
+    (entry) => entry.identifier,
+  );
+
+  expect(identifiers).toContain(administration);
+  expect(identifiers).not.toContain(`${baseURL}/mcp`);
+  // A managed client keeps its access under the new name.
+  expect(await Effect.runPromise(issuer.service.resources.access())).toEqual([
+    { client_id: first, resource: administration },
+    { client_id: first, resource },
+  ]);
+  // A token for the old name is gone, so its client authorizes again.
+  expect((await refresh(client.client_id, tokens.refresh_token, administration)).status).toBe(400);
+  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  expect(await Effect.runPromise(issuer.service.sql`PRAGMA user_version`)).toEqual([
+    { user_version: 2 },
+  ]);
+});
+
+test("the 0.16.0 upgrade refuses to start when another resource holds the origin root", async () => {
+  await asBefore016();
+  await Effect.runPromise(
+    issuer.service
+      .sql`INSERT INTO oauthResource (id, identifier, name, allowedScopes) VALUES ('squatter', ${`${baseURL}/`}, 'Squatter', '[]')`,
+  );
+
+  await expect(issuer.reopen()).rejects.toThrow("which administration now takes");
 });
 
 test("a managed client, which skips consent, shows a connection while it holds a refresh token", async () => {

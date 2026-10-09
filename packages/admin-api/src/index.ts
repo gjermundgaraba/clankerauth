@@ -117,9 +117,10 @@ export const ownerSession = (cookie: string) =>
 export const OwnerSession = ownerSession("better-auth.session_token");
 
 /**
- * An administration MCP client's OAuth access token for `<baseURL>/mcp`. Its verifier reads
- * the token's owner and client from the database, so it may fail as an action does, with any
- * of `errors`: `ServiceUnavailable` when the token cannot be decided, or `InternalServerError`.
+ * An administration client's OAuth access token for the issuer's origin root, `<baseURL>/`,
+ * over MCP or `OwnerHttp`. Its verifier reads the token's owner and client from the database,
+ * so it may fail as an action does, with any of `errors`: `ServiceUnavailable` when the token
+ * cannot be decided, or `InternalServerError`.
  */
 export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentOwner, {
   error: errors,
@@ -461,3 +462,12 @@ export const binding = (authentication: typeof OwnerSession) =>
 
 /** The browser's binding, and a typed client's: the cookie name is the server's concern. */
 export const Http = binding(OwnerSession);
+
+/**
+ * Owner administration over HTTP for a client holding an access token, such as the CLI, at
+ * `/api/owner/<action>`: the actions `/mcp` serves, authenticated as it is, by `OwnerToken`.
+ */
+export const OwnerHttp = ActionHttp.make(Administration, {
+  prefix: "/api/owner",
+  authentication: OwnerToken,
+});

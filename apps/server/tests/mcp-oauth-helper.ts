@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { expect } from "vite-plus/test";
 
 export const administrationResource = (baseURL: string) => ({
-  identifier: `${baseURL}/mcp`,
+  identifier: `${baseURL}/`,
   name: "clankerauth administration",
   scopes: ["clankerauth:read", "clankerauth:write"],
   builtIn: true,
@@ -23,7 +23,7 @@ export async function mcpOAuthCode(
   cookie: string,
   options: GrantOptions = {},
 ) {
-  const resource = options.resource ?? `${baseURL}/mcp`;
+  const resource = options.resource ?? `${baseURL}/`;
   const callback = "http://127.0.0.1:9876/callback";
   let client_id = options.clientId;
 

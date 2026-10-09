@@ -407,7 +407,7 @@ const resourceCard = (resource: ResourceView, connected: readonly ClientView[]) 
   }</article>`;
 
 const resourceForm = () =>
-  `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/mcp"></label><p class="help">The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application\u2019s origin root with its trailing slash.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
+  `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/"></label><p class="help">The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application\u2019s origin root with its trailing slash.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
 
 const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
   `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(DateTime.formatLocal(key.expiresAt, { dateStyle: "medium", timeStyle: "short" }))}` : "Valid until revoked"}</p>${Object.entries(

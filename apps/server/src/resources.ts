@@ -18,7 +18,15 @@ import { clearGrants } from "./grants.ts";
  * everything. */
 export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
 
-export const mcpResource = (baseURL: string) => `${baseURL}/mcp`;
+/**
+ * The issuer's own resource: its origin root, as every application's is. It names the
+ * token audience of administration, over `/mcp` and `/api/owner/<action>` alike; the
+ * dashboard at `/` takes the owner's session cookie, never a token.
+ */
+export const administrationIdentifier = (baseURL: string) => new URL("/", baseURL).href;
+
+/** What the administration resource was named before 0.16.0. */
+export const legacyAdministrationIdentifier = (baseURL: string) => `${baseURL}/mcp`;
 
 /** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
 export const protocolScopes = ["offline_access"];

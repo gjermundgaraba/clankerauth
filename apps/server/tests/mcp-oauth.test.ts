@@ -65,7 +65,7 @@ const refresh = (client_id: string, refresh_token: string) =>
     grant_type: "refresh_token",
     client_id,
     refresh_token,
-    resource: `${baseURL}/mcp`,
+    resource: `${baseURL}/`,
   });
 
 /** The issuer's refusal of a token holding neither administration scope: step up to read. */
@@ -113,7 +113,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
   const metadata = await handle(new Request(metadataURL ?? ""));
   expect(metadata.status).toBe(200);
   expect(await metadata.json()).toMatchObject({
-    resource: `${baseURL}/mcp`,
+    resource: `${baseURL}/`,
     authorization_servers: [`${baseURL}/api/auth`],
     scopes_supported: ["clankerauth:read", "clankerauth:write", "offline_access"],
   });
@@ -315,7 +315,7 @@ test("MCP rejects cookies, API keys, malformed, expired, wrong-audience, and ins
   parts[1] = Buffer.from(
     JSON.stringify({
       sub: "not-owner",
-      aud: `${baseURL}/mcp`,
+      aud: `${baseURL}/`,
       scope: "clankerauth:read clankerauth:write",
     }),
   ).toString("base64url");
@@ -443,7 +443,7 @@ test.each(["block", "revoke"] as const)(
             client_id,
             redirect_uri: "http://127.0.0.1:9876/callback",
             response_type: "code",
-            resource: `${baseURL}/mcp`,
+            resource: `${baseURL}/`,
             scope: "clankerauth:read clankerauth:write",
             code_challenge: "x".repeat(43),
             code_challenge_method: "S256",
@@ -698,7 +698,7 @@ test.each(["bAsIc", "private_key_jwt"])(
     const revoked = await exchange({
       grant_type: "refresh_token",
       refresh_token: first.tokens.refresh_token,
-      resource: `${baseURL}/mcp`,
+      resource: `${baseURL}/`,
     });
 
     expect(revoked.status).toBe(400);
@@ -708,10 +708,68 @@ test.each(["bAsIc", "private_key_jwt"])(
     const refreshed = await exchange({
       grant_type: "refresh_token",
       refresh_token: renewed.tokens.refresh_token,
-      resource: `${baseURL}/mcp`,
+      resource: `${baseURL}/`,
     });
 
     expect(refreshed.status, await refreshed.clone().text()).toBe(200);
     expect((await mcp((await refreshed.json()).access_token)).status).toBe(200);
   },
 );
+
+test("an access token administers over HTTP at /api/owner, as it does over MCP", async () => {
+  const owner = (action: string, body: TestRequestBody, headers: Record<string, string> = {}) =>
+    handle(
+      new Request(`${baseURL}/api/owner/${action}`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  // Without a token, the challenge points at the resource's discovery, as `/mcp`'s does.
+  const anonymous = await owner("listApiKeys", {});
+  expect(anonymous.status).toBe(401);
+  expect(anonymous.headers.get("www-authenticate")).toContain(
+    `resource_metadata="${baseURL}/.well-known/oauth-protected-resource"`,
+  );
+  // The dashboard's cookie is not a credential here.
+  expect((await owner("listApiKeys", {}, { cookie, origin: baseURL })).status).toBe(401);
+
+  const resource = { identifier: "https://notes.internal/", name: "Notes", scopes: ["notes:read"] };
+  expect((await admin("createResource", resource)).status).toBe(201);
+
+  const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+
+  const created = await owner(
+    "createApiKey",
+    { name: "cli", permissions: { [resource.identifier]: ["notes:read"] }, expiresAt: null },
+    bearer(tokens.access_token),
+  );
+
+  expect(created.status, await created.clone().text()).toBe(201);
+  const key = await created.json();
+  expect(key.key).toBeTypeOf("string");
+
+  const listed = await owner("listApiKeys", {}, bearer(tokens.access_token));
+  expect(listed.status).toBe(200);
+  expect((await listed.json()).keys.map((entry: { keyId: string }) => entry.keyId)).toEqual([
+    key.keyId,
+  ]);
+
+  // A read-only token lists, and is refused a change.
+  const reader = await mcpOAuthGrant(handle, baseURL, cookie, {
+    scope: "offline_access clankerauth:read",
+  });
+
+  expect((await owner("listApiKeys", {}, bearer(reader.tokens.access_token))).status).toBe(200);
+  expect(
+    (await owner("deleteApiKey", { keyId: key.keyId }, bearer(reader.tokens.access_token))).status,
+  ).toBe(403);
+
+  // The issuer's public actions stay at `/api` alone.
+  expect(
+    (await owner("keyList", { resource: resource.identifier }, bearer(tokens.access_token))).status,
+  ).toBe(404);
+});

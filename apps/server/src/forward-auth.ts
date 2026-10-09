@@ -13,7 +13,7 @@ import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effe
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { allowedScheme, withinDomain } from "./config.ts";
 import { provider, respond } from "./api-errors.ts";
-import { mcpResource } from "./resources.ts";
+import { administrationIdentifier } from "./resources.ts";
 import { accessTokenLifetime, Auth } from "./auth.ts";
 
 /** The `client_id` claim of forward-auth tokens. Not a registered client: administration
@@ -45,7 +45,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       };
 
       const secret = Redacted.value(settings.secret);
-      const reserved = mcpResource(settings.baseURL);
+      const reserved = administrationIdentifier(settings.baseURL);
       const loginPage = new URL("/login", settings.baseURL);
 
       const cookieOptions = {

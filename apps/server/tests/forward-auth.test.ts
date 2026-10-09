@@ -176,7 +176,7 @@ test("proxy misconfiguration is refused: missing headers, foreign hosts, unknown
     expect((await response.json()).error).toBe("invalid_forwarded_request");
   }
 
-  for (const target of ["https://unknown.home.example/api", `${origin}/mcp`]) {
+  for (const target of ["https://unknown.home.example/api", `${origin}/`]) {
     const response = await forward(session, target);
     expect(response.status, target).toBe(403);
     expect((await response.json()).error).toBe("unknown_resource");

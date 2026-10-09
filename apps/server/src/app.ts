@@ -27,7 +27,7 @@ const publicPaths = new Set([
 ]);
 
 const corsPaths = new Set([
-  "/.well-known/oauth-protected-resource/mcp",
+  "/.well-known/oauth-protected-resource",
   "/jwks",
   "/oauth2/register",
   "/oauth2/token",
@@ -40,7 +40,7 @@ const corsPaths = new Set([
 /** Public, unauthenticated documents resource servers and clients may cache briefly. */
 const cacheablePaths = new Set([
   "/jwks",
-  "/.well-known/oauth-protected-resource/mcp",
+  "/.well-known/oauth-protected-resource",
   "/.well-known/oauth-authorization-server",
   "/.well-known/oauth-authorization-server/api/auth",
 ]);

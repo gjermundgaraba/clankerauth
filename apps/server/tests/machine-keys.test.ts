@@ -170,16 +170,16 @@ test("a key list is signed for its resource, never cached, and reveals nothing w
   // Unknown resources and administration have no entries, and say nothing more.
   await Effect.runPromise(
     issuer.service
-      .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: ["example:read"], [`${origin}/mcp`]: ["clankerauth:write"] })} WHERE id = ${key.keyId}`,
+      .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: ["example:read"], [`${origin}/`]: ["clankerauth:write"] })} WHERE id = ${key.keyId}`,
   );
 
-  for (const target of ["https://unknown.internal/api", `${origin}/mcp`]) {
+  for (const target of ["https://unknown.internal/api", `${origin}/`]) {
     const empty = await keyList(target);
     expect(empty.status).toBe(200);
     expect(decodeJwt((await empty.json()).list)).toMatchObject({ aud: target, keys: [] });
   }
 
-  expect(await verify(key.key, `${origin}/mcp`)).toBe("Unauthorized");
+  expect(await verify(key.key, `${origin}/`)).toBe("Unauthorized");
 });
 
 test("keys cannot authenticate administration, create sessions or reach plugin routes", async () => {
@@ -574,7 +574,7 @@ test("official 2026-07-28 MCP client uses OAuth bearer authentication through na
 });
 
 test("API keys reject administration grants on creation and update without changing stored permissions", async () => {
-  const permissions = { [`${origin}/mcp`]: ["clankerauth:write"] };
+  const permissions = { [`${origin}/`]: ["clankerauth:write"] };
 
   const created = await call("/api/createApiKey", {
     name: "Invalid administration key",
@@ -585,7 +585,7 @@ test("API keys reject administration grants on creation and update without chang
   expect(created.status).toBe(400);
   expect((await created.json()).issues).toEqual([
     {
-      path: ["permissions", `${origin}/mcp`],
+      path: ["permissions", `${origin}/`],
       message: "Administration requires OAuth access tokens, not API keys",
     },
   ]);

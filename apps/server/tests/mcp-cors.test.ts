@@ -174,7 +174,7 @@ test("an allowed external browser uses bearer MCP while the dashboard API expose
 test("discovery middleware cannot bypass public CORS or security headers", async () => {
   for (const method of ["GET", "HEAD", "OPTIONS"]) {
     const response = await handle(
-      new Request(`${baseURL}/.well-known/oauth-protected-resource/mcp`, {
+      new Request(`${baseURL}/.well-known/oauth-protected-resource`, {
         method,
         headers: { origin: clientOrigin },
       }),

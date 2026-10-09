@@ -151,7 +151,7 @@ test("an in-process JWKS read is awaited by its request, so shutdown waits for i
   })
     .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "unknown" })
     .setIssuer("https://issuer.example/api/auth")
-    .setAudience("https://issuer.example/mcp")
+    .setAudience("https://issuer.example/")
     .setSubject("owner")
     .setIssuedAt()
     .setExpirationTime("5m")
@@ -233,11 +233,11 @@ test.each([
   ["unknown resource", "?resource=https://unknown.example", 400, false],
   [
     "several resources",
-    "?resource=https://issuer.example/mcp&resource=https://issuer.example/mcp",
+    "?resource=https://issuer.example/&resource=https://issuer.example/",
     400,
     false,
   ],
-  ["known resource", "?resource=https://issuer.example/mcp", 200, true],
+  ["known resource", "?resource=https://issuer.example/", 200, true],
 ])("authorization resource admission: %s", async (_name, query, status, admitted) => {
   const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
   const response = await fetch(`${url}/api/auth/oauth2/authorize${query}`);

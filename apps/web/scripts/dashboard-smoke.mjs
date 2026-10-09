@@ -294,7 +294,7 @@ try {
     resources: [
       resource,
       {
-        identifier: `${origin}/mcp`,
+        identifier: `${origin}/`,
         name: "clankerauth administration",
         scopes: ["clankerauth:read", "clankerauth:write"],
         builtIn: true,
@@ -310,7 +310,7 @@ try {
   assert.equal(await retry.count(), 0);
   assert.equal(await page.locator("#message").textContent(), "");
   // The built-in administration resource is fixed and cannot carry API-key grants.
-  assert.equal(await page.locator(`[data-resource-edit="${origin}/mcp"]`).count(), 0);
+  assert.equal(await page.locator(`[data-resource-edit="${origin}/"]`).count(), 0);
   assert.equal(
     await page
       .locator("#key-create")
