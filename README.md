@@ -119,8 +119,9 @@ vp run test:lint # lint-policy regression fixtures
 - `apps/web`: the dashboard, plain TypeScript built by Vite.
 - `packages/sdk`: the `@gjermundgaraba/clankerauth-sdk` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
 - `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it.
+- `apps/cli`: the `@gjermundgaraba/clankerauth` npm package, the `clankerauth` command. Its tests run the packed binary against a development issuer.
 
-Both packages are public on npm. A `v*` tag matching their shared version publishes them from `.github/workflows/npm.yml` through npm trusted publishing: each package names this repository and that workflow file as its trusted publisher, so no registry token is stored. npm can only register a trusted publisher on a package that already exists, so the first release of a new package name is published by hand with `pnpm publish` from its directory after `npm login`.
+The three packages are public on npm. A `v*` tag matching their shared version publishes them from `.github/workflows/npm.yml` through npm trusted publishing: each package names this repository and that workflow file as its trusted publisher, so no registry token is stored. npm can only register a trusted publisher on a package that already exists, so the first release of a new package name is published by hand with `pnpm publish` from its directory after `npm login`.
 
 ### effect-actions integration
 
@@ -130,15 +131,19 @@ and are exposed at `POST /api/<action>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
-| Action                 | Access                                                                                                                       | Transport |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `setupStatus`          | Public                                                                                                                       | HTTP      |
-| `setupOwner`           | Public; succeeds only before an owner exists                                                                                 | HTTP      |
-| `keyList`              | Public; entries are sealed to the keys they describe                                                                         | HTTP      |
-| Administration actions | Owner session cookie (SameSite)                                                                                              | HTTP      |
-| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/mcp`, scope `clankerauth:read` to list, or `clankerauth:write` for everything | MCP       |
+| Action                 | Access                                                                          | Transport |
+| ---------------------- | ------------------------------------------------------------------------------- | --------- |
+| `setupStatus`          | Public                                                                          | HTTP      |
+| `setupOwner`           | Public; succeeds only before an owner exists                                    | HTTP      |
+| `keyList`              | Public; entries are sealed to the keys they describe                            | HTTP      |
+| Administration actions | Owner session cookie (SameSite), at `POST /api/<action>`                        | HTTP      |
+| Administration actions | OAuth access token for `<CLANKERAUTH_BASE_URL>/`, at `POST /api/owner/<action>` | HTTP      |
+| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/`, at `/mcp`                     | MCP       |
 
-Issuer actions and owner operations share one binding, `POST /api/<action>`. The
+A token needs `clankerauth:read` to list and `clankerauth:write` for everything else, over
+HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding,
+`POST /api/<action>`; `/api/owner/<action>` serves the same owner operations to an access
+token, as the `clankerauth` command calls them, and nothing else. The
 dashboard uses the direct typed action client. Input that does not decode, or that
 decodes but the issuer's own checks refuse, answers effect-actions' built-in
 `InvalidInput` (400), naming the field at fault. Input the provider rejects, such as a
@@ -172,9 +177,13 @@ Actual MCP requests require OAuth bearer tokens; browser clients should omit
 cookies. Native and server clients that send no Origin need no allowlist entry.
 This setting does not grant OAuth access or relax the dashboard's cookie policy.
 
-The built-in **clankerauth administration** resource is created at startup.
+The built-in **clankerauth administration** resource is created at startup, identified by
+the issuer's origin root with its trailing slash, `<CLANKERAUTH_BASE_URL>/`, as an
+application's resource is. Its tokens are taken at `/mcp` and `/api/owner/<action>`; the
+dashboard at `/` takes the owner's session cookie alone. Before 0.16.0 it was
+`<CLANKERAUTH_BASE_URL>/mcp`.
 It is fixed: every start restores its name and scopes, and it cannot be edited or deleted. Protected-resource metadata
-is public at `/.well-known/oauth-protected-resource/mcp` and advertises `clankerauth:read`,
+is public at `/.well-known/oauth-protected-resource` and advertises `clankerauth:read`,
 `clankerauth:write` and `offline_access`. Clients must send the resource parameter during authorization
 and token exchange. The authentication challenge requests both administration scopes, so
 the owner decides at consent. Clients
@@ -182,7 +191,7 @@ that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
+Every MCP and `/api/owner` request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
 session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
@@ -197,7 +206,35 @@ curl "$CLANKERAUTH_BASE_URL/api/listClients" \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-See the breaking [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+### Administer from the command line
+
+`@gjermundgaraba/clankerauth` is the `clankerauth` command, every administration action
+over `/api/owner`:
+
+```sh
+npm install --global @gjermundgaraba/clankerauth
+clankerauth login https://clankerauth.home.example   # approve in the browser
+clankerauth list-clients
+clankerauth create-api-key --name "notes sync" \
+  --permissions '{"https://notes.home.example/":["notes:read"]}' --expires-at null
+clankerauth logout
+```
+
+`login` registers the command as a native client the first time, prints the approval URL
+on stderr and opens it, unless `--no-browser`, and listens for the redirect on a loopback
+port. `--read-only` asks for `clankerauth:read` alone. The sign-in is kept in
+`$XDG_CONFIG_HOME/clankerauth/credentials.json`, by default under `~/.config`, readable by
+its owner alone; a command refreshes the access token when it has expired and saves the
+rotated refresh token, so a sign-in lasts while it is used at least every 30 days.
+`logout` revokes it and deletes the file.
+
+Each action is a command named after it in kebab case, with a flag per input field, as
+`clankerauth <command> --help` shows. A command prints the action's result as JSON on
+stdout and a refusal on stderr, exiting 1. A created API key or client secret is in that
+JSON once, so redirect it where it belongs rather than to a terminal:
+`clankerauth create-api-key … | jq -r .key > key`.
+
+See the breaking [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code.
 

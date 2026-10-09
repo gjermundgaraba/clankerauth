@@ -16,18 +16,34 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: 26.8.2
-      - name: Check that the tag matches both package versions
+      - name: Check that the tag matches every package version
         run: |
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/sdk/package.json').version")"
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/dev/package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./apps/cli/package.json').version")"
       - run: npm install -g "$(node -p "require('./package.json').packageManager")"
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
       - run: pnpm ready
       # pnpm resolves the workspace catalog protocol in the published manifest; npm would not.
-      # Both packages list this repository and workflow as their npm trusted publisher, so
+      # Each package lists this repository and workflow as its npm trusted publisher, so
       # publishing authenticates with the job's OIDC token and attaches provenance.
       - run: pnpm publish --no-git-checks
         working-directory: packages/sdk
       - run: pnpm publish --no-git-checks
         working-directory: packages/dev
+      # A package's first release is published by hand, since npm registers a trusted
+      # publisher only on a package that exists. Until then, and for a version published by
+      # hand, there is nothing to publish here.
+      - name: Publish the CLI
+        working-directory: apps/cli
+        run: |
+          name=@gjermundgaraba/clankerauth
+          version=${GITHUB_REF_NAME#v}
+          if [ -z "$(npm view "$name" name 2>/dev/null)" ]; then
+            echo "$name is not on npm yet: publish its first release by hand"
+          elif [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
+            echo "$name@$version is already published"
+          else
+            pnpm publish --no-git-checks
+          fi
