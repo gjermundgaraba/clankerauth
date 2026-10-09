@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -231,7 +232,7 @@ test("login signs in through the owner's approval and keeps the sign-in to its o
   expect((await stat(cli.file)).mode & 0o777).toBe(0o600);
 });
 
-test("login refuses an address the issuer does not name as its own", async () => {
+test("login refuses an address the issuer does not name as its own, and says which it names", async () => {
   const owner = await startOwner();
   const cli = await home();
   const other = new URL(owner.issuer.url);
@@ -240,8 +241,26 @@ test("login refuses an address the issuer does not name as its own", async () =>
   const result = await cli.run(["login", other.origin]);
 
   expect(result.code).toBe(1);
-  expect(result.stderr).toContain("Sign in at the issuer's own origin");
+  expect(result.stderr).toContain(
+    `Discovery at ${other.origin}: the issuer is at ${owner.issuer.url}, its CLANKERAUTH_BASE_URL: sign in there`,
+  );
   await expect(stat(cli.file)).rejects.toThrow();
+});
+
+test("login at an address nothing answers says why, and blames no address", async () => {
+  const listener = createServer();
+  await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  // SAFETY: a TCP listener's address is an AddressInfo once it listens.
+  const { port } = listener.address() as AddressInfo;
+  await new Promise((resolve) => listener.close(resolve));
+
+  const result = await (await home()).run(["login", `http://127.0.0.1:${port}`]);
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain(
+    `Discovery at http://127.0.0.1:${port}: fetch failed (connect ECONNREFUSED 127.0.0.1:${port})`,
+  );
+  expect(result.stderr).not.toContain("CLANKERAUTH_BASE_URL");
 });
 
 test("every administration action is a command, called as the owner over HTTP", async () => {

@@ -1,5 +1,5 @@
 import * as oauth from "oauth4webapi";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { Credentials } from "./credentials.ts";
 
 /** Something the issuer answered that a sign-in, a refresh or a revocation cannot go on from. */
@@ -26,17 +26,32 @@ const transport = (url: string) => ({
   [oauth.allowInsecureRequests]: new URL(url).protocol === "http:",
 });
 
+/** The RFC 9728 check's failure: the metadata names another resource than the one asked for. */
+const NamedElsewhere = Schema.Struct({
+  attribute: Schema.Literal("resource"),
+  body: Schema.Struct({ resource: Schema.String }),
+});
+
 /**
- * What went wrong, as the issuer said it when it sent an OAuth error, and with the status
- * of an answer the library refused.
+ * What went wrong: what the issuer said when it sent an OAuth error, where it is when it
+ * names another address than the one asked, the status of an answer the library refused,
+ * or why a request failed.
  */
 const reason = (error: Error) => {
   if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError)
     return [error.error, error.error_description].filter(Boolean).join(": ");
 
-  return error instanceof oauth.OperationProcessingError && error.cause instanceof Response
-    ? `${error.message} (HTTP ${error.cause.status})`
-    : error.message;
+  if (error instanceof oauth.OperationProcessingError) {
+    const named = Schema.decodeUnknownOption(NamedElsewhere)(error.cause);
+
+    if (Option.isSome(named))
+      return `the issuer is at ${new URL(named.value.body.resource).origin}, its CLANKERAUTH_BASE_URL: sign in there`;
+
+    if (error.cause instanceof Response) return `${error.message} (HTTP ${error.cause.status})`;
+  }
+
+  // `fetch` says only "fetch failed"; its cause says why, such as ECONNREFUSED.
+  return error.cause instanceof Error ? `${error.message} (${error.cause.message})` : error.message;
 };
 
 /** Run one step of the protocol, failing with what the issuer, or the library, said. */
@@ -61,13 +76,6 @@ export const discover = Effect.fn("OAuth.discover")(function* (url: string) {
     oauth.processResourceDiscoveryResponse(
       administration,
       await oauth.resourceDiscoveryRequest(administration, transport(url)),
-    ),
-  ).pipe(
-    Effect.mapError(
-      ({ message }) =>
-        new OAuthError({
-          message: `${message}. Sign in at the issuer's own origin, its CLANKERAUTH_BASE_URL.`,
-        }),
     ),
   );
 
