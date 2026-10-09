@@ -1,0 +1,41 @@
+{
+  "name": "@gjermundgaraba/clankerauth",
+  "version": "0.16.0",
+  "description": "The clankerauth command line: sign in to an issuer as its owner and administer it over HTTP.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerauth.git",
+    "directory": "apps/cli"
+  },
+  "bin": {
+    "clankerauth": "./dist/main.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/effect-actions": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@clankerauth/admin-api": "workspace:*",
+    "@gjermundgaraba/clankerauth-dev": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}
