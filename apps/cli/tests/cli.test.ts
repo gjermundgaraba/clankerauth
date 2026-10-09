@@ -126,18 +126,42 @@ const login = async (...flags: ReadonlyArray<string>) => {
 
 const credentialsFile = () => join(config, "clankerauth", "credentials.json");
 
-const Stored = Schema.Struct({
-  url: Schema.String,
-  clientId: Schema.String,
+const StoredSignIn = Schema.Struct({
+  resource: Schema.String,
+  scope: Schema.String,
   accessToken: Schema.String,
   refreshToken: Schema.String,
   expiresAt: Schema.String,
+});
+
+const Stored = Schema.Struct({
+  url: Schema.String,
+  tokenEndpoint: Schema.String,
+  revocationEndpoint: Schema.NullOr(Schema.String),
+  clientId: Schema.String,
+  signIns: Schema.Array(StoredSignIn),
 });
 
 const stored = async () =>
   Schema.decodeUnknownSync(Schema.fromJsonString(Stored))(
     await readFile(credentialsFile(), "utf8"),
   );
+
+/** The kept sign-in to `resource`, administration by default. */
+const storedSignIn = async (resource = `${issuer.url}/`) => {
+  const signIn = (await stored()).signIns.find((held) => held.resource === resource);
+
+  expect(signIn, `a sign-in to ${resource}`).toBeDefined();
+
+  // SAFETY: the expectation above fails the test when there is none.
+  return signIn as typeof StoredSignIn.Type;
+};
+
+/** The audience a printed access token was issued for. */
+const audience = (jwt: string) =>
+  Schema.decodeUnknownSync(
+    Schema.Struct({ aud: Schema.Union([Schema.String, Schema.Array(Schema.String)]) }),
+  )(JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString())).aud;
 
 const Created = Schema.Struct({ keyId: Schema.String, key: Schema.String });
 
@@ -157,13 +181,14 @@ test("login signs in through the owner's approval and keeps the sign-in to its o
   expect(result.code, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({
     url: issuer.url,
+    resource: `${issuer.url}/`,
     scope: "clankerauth:read clankerauth:write offline_access",
   });
 
-  const credentials = await stored();
-  expect(credentials.url).toBe(issuer.url);
+  expect((await stored()).url).toBe(issuer.url);
+  const signIn = await storedSignIn();
   // Tokens stay in the file: neither stream shows them.
-  expect(result.stdout + result.stderr).not.toContain(credentials.refreshToken);
+  expect(result.stdout + result.stderr).not.toContain(signIn.refreshToken);
   expect((await stat(credentialsFile())).mode & 0o777).toBe(0o600);
 });
 
@@ -194,12 +219,107 @@ test("every administration action is a command, called as the owner over HTTP", 
   expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
 });
 
-test("an expired access token is refreshed, and the rotated refresh token is kept", async () => {
-  const before = await stored();
-  const raw = JSON.parse(await readFile(credentialsFile(), "utf8"));
+/** Mark every kept access token expired, so the next command refreshes it. */
+const expireAll = async () => {
+  const credentials = await stored();
+
   await writeFile(
     credentialsFile(),
-    JSON.stringify({ ...raw, expiresAt: new Date(0).toISOString() }),
+    JSON.stringify({
+      ...credentials,
+      signIns: credentials.signIns.map((signIn) => ({
+        ...signIn,
+        expiresAt: new Date(0).toISOString(),
+      })),
+    }),
+    { mode: 0o600 },
+  );
+};
+
+test("an expired access token is refreshed, and the rotated refresh token is kept", async () => {
+  const before = await storedSignIn();
+  await expireAll();
+
+  const listed = await run(["list-api-keys"]);
+  expect(listed.code, listed.stderr).toBe(0);
+
+  const after = await storedSignIn();
+  expect(after.refreshToken).not.toBe(before.refreshToken);
+  expect(after.accessToken).not.toBe(before.accessToken);
+  expect(Date.parse(after.expiresAt)).toBeGreaterThan(Date.now());
+});
+
+test("a sign-in to another resource is kept beside administration's, and `token` prints either", async () => {
+  const refused = await run(["login", issuer.url, "--resource", notes.identifier]);
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain(`Name the scopes to ask ${notes.identifier} for with --scope.`);
+
+  const result = await login("--resource", notes.identifier, "--scope", "notes:read");
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    url: issuer.url,
+    resource: notes.identifier,
+    scope: "notes:read offline_access",
+  });
+
+  const notesToken = await run(["token", "--resource", notes.identifier]);
+  expect(notesToken.code, notesToken.stderr).toBe(0);
+  // The token alone, so `$(clankerauth token …)` is the bearer.
+  expect(notesToken.stdout).toBe(`${(await storedSignIn(notes.identifier)).accessToken}\n`);
+  expect(audience(notesToken.stdout.trim())).toContain(notes.identifier);
+
+  const administration = await run(["token"]);
+  expect(administration.code, administration.stderr).toBe(0);
+  expect(audience(administration.stdout.trim())).toContain(`${issuer.url}/`);
+
+  // Administration still works through its own sign-in.
+  expect((await run(["list-api-keys"])).code).toBe(0);
+});
+
+test("`token` refreshes each sign-in on its own", async () => {
+  const before = await stored();
+  await expireAll();
+
+  const printed = await run(["token", "--resource", notes.identifier]);
+  expect(printed.code, printed.stderr).toBe(0);
+
+  const after = await stored();
+
+  const of = (credentials: typeof Stored.Type, resource: string) =>
+    credentials.signIns.find((signIn) => signIn.resource === resource)?.refreshToken;
+
+  expect(of(after, notes.identifier)).not.toBe(of(before, notes.identifier));
+  // Administration's was not asked for, so its refresh token is the one it had.
+  expect(of(after, `${issuer.url}/`)).toBe(of(before, `${issuer.url}/`));
+});
+
+test("`token` for a resource not signed in to says how to sign in", async () => {
+  const result = await run(["token", "--resource", "http://other.invalid/"]);
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain(
+    `Not signed in to http://other.invalid/: run \`clankerauth login ${issuer.url} --resource http://other.invalid/`,
+  );
+  expect(result.stdout).toBe("");
+});
+
+test("logout --resource forgets that sign-in alone", async () => {
+  const result = await run(["logout", "--resource", notes.identifier]);
+
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ signedOut: true });
+  expect((await stored()).signIns.map((signIn) => signIn.resource)).toEqual([`${issuer.url}/`]);
+  expect((await run(["token", "--resource", notes.identifier])).code).toBe(1);
+});
+
+test("a sign-in kept by 0.16.0 still works, and is kept in this version's form", async () => {
+  const { signIns, ...credentials } = await stored();
+  const [signIn] = signIns;
+
+  // Expired, so the command refreshes and writes the file again.
+  await writeFile(
+    credentialsFile(),
+    JSON.stringify({ ...credentials, ...signIn, expiresAt: new Date(0).toISOString() }),
     { mode: 0o600 },
   );
 
@@ -207,13 +327,13 @@ test("an expired access token is refreshed, and the rotated refresh token is kep
   expect(listed.code, listed.stderr).toBe(0);
 
   const after = await stored();
-  expect(after.refreshToken).not.toBe(before.refreshToken);
-  expect(after.accessToken).not.toBe(before.accessToken);
-  expect(Date.parse(after.expiresAt)).toBeGreaterThan(Date.now());
+  expect(after.signIns.map((held) => held.resource)).toEqual([`${issuer.url}/`]);
+  expect(after.signIns[0]?.refreshToken).not.toBe(signIn?.refreshToken);
 });
 
 test("logout revokes the sign-in and forgets it", async () => {
-  const { clientId, refreshToken } = await stored();
+  const { clientId } = await stored();
+  const { refreshToken } = await storedSignIn();
 
   const refresh = () =>
     fetch(`${issuer.issuer}/oauth2/token`, {

@@ -6,16 +6,31 @@ import { Deferred, Effect, Match, Option } from "effect";
 import {
   readCredentials,
   removeCredentials,
+  saveSignIn,
   writeCredentials,
   type Credentials,
+  type SignIn,
 } from "./credentials.ts";
 import { discover, OAuthError, register, revoke, token, type Tokens } from "./oauth.ts";
 
-/** What the owner grants: everything, or only listing. */
-const scopes = (readOnly: boolean) =>
-  readOnly
-    ? "clankerauth:read offline_access"
-    : "clankerauth:read clankerauth:write offline_access";
+/** The issuer's own resource, administration: its origin root. */
+export const administrationOf = (url: string) => new URL("/", url).href;
+
+/** A sign-in asks for a refresh token too, so it lasts while it is used. */
+const withRefresh = (scope: string) =>
+  scope.split(" ").includes("offline_access") ? scope : `${scope} offline_access`;
+
+/** The command that signs in to `resource` again, with the scopes it was granted. */
+const loginAgain = (url: string, { resource, scope }: SignIn) => {
+  if (resource === administrationOf(url)) return `clankerauth login ${url}`;
+
+  const asked = scope
+    .split(" ")
+    .filter((granted) => granted !== "offline_access")
+    .join(" ");
+
+  return `clankerauth login ${url} --resource ${resource} --scope "${asked}"`;
+};
 
 /** The redirect a registration names; a sign-in adds the port it listens on. */
 const registeredRedirect = "http://127.0.0.1/callback";
@@ -118,32 +133,33 @@ const openBrowser = (url: string) =>
   });
 
 /**
- * Sign in to the issuer at `url` as its owner: discover it, register this CLI once per
- * issuer, send the owner to approve in the browser, and keep the tokens. What it prints on
+ * Sign in to the issuer at `url` as its owner, for `resource`, administration when none:
+ * discover the issuer, register this CLI once per issuer, send the owner to approve in the
+ * browser, and keep the tokens beside the sign-ins to other resources. What it prints on
  * stderr is for the person; stdout gets only the result.
  */
 export const login = Effect.fn("Cli.login")(function* (
   url: string,
-  readOnly: boolean,
+  target: Option.Option<string>,
+  asked: string,
   browser: boolean,
 ) {
   const origin = new URL(url).origin;
-  const { resource, server } = yield* discover(origin);
-  const previous = yield* readCredentials();
+  const discovered = yield* discover(origin);
+  const { server } = discovered;
+  const resource = Option.getOrElse(target, () => discovered.resource);
+  const previous = Option.filter(yield* readCredentials(), (kept) => kept.url === origin);
 
-  const clientId = yield* Option.match(
-    Option.filter(previous, (credentials) => credentials.url === origin),
-    {
-      onSome: (credentials) => Effect.succeed(credentials.clientId),
-      onNone: () => register(server, registeredRedirect),
-    },
-  );
+  const clientId = yield* Option.match(previous, {
+    onSome: (kept) => Effect.succeed(kept.clientId),
+    onNone: () => register(server, registeredRedirect),
+  });
 
   const { port, received } = yield* listen;
   const redirectUri = `http://127.0.0.1:${port}/callback`;
   const verifier = randomBytes(32).toString("base64url");
   const state = randomBytes(16).toString("base64url");
-  const scope = scopes(readOnly);
+  const scope = withRefresh(asked);
 
   const authorization = new URL(server.authorization_endpoint);
 
@@ -197,30 +213,48 @@ export const login = Effect.fn("Cli.login")(function* (
     }),
   );
 
-  const credentials: Credentials = {
-    url: origin,
+  const signIn: SignIn = {
     resource,
-    tokenEndpoint: server.token_endpoint,
-    revocationEndpoint: server.revocation_endpoint ?? null,
-    clientId,
     scope: tokens.scope ?? scope,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiresAt: expiry(tokens),
   };
 
-  yield* writeCredentials(credentials);
+  // Another issuer's sign-ins are dropped: the file keeps one issuer.
+  yield* saveSignIn(
+    Option.getOrElse(previous, () => ({
+      url: origin,
+      tokenEndpoint: server.token_endpoint,
+      revocationEndpoint: server.revocation_endpoint ?? null,
+      clientId,
+      signIns: [],
+    })),
+    signIn,
+  );
 
-  return { url: origin, scope: credentials.scope };
+  return { url: origin, resource, scope: signIn.scope };
 }, Effect.scoped);
 
 /**
- * The sign-in's access token, refreshed first when it has expired or is about to: the
- * refresh token rotates, so the new pair is saved before the token is used.
+ * A current access token for `resource`, refreshed first when it has expired or is about
+ * to: the refresh token rotates, so the new pair is saved before the token is used.
  */
-export const accessToken = Effect.fn("Cli.accessToken")(function* (credentials: Credentials) {
-  if (Date.parse(credentials.expiresAt) - Date.now() > 60_000)
-    return { credentials, token: credentials.accessToken };
+export const accessToken = Effect.fn("Cli.accessToken")(function* (
+  credentials: Credentials,
+  resource: string,
+) {
+  const signIn = credentials.signIns.find((held) => held.resource === resource);
+
+  if (signIn === undefined)
+    return yield* new OAuthError({
+      message:
+        resource === administrationOf(credentials.url)
+          ? `Not signed in to administration: run \`clankerauth login ${credentials.url}\` first.`
+          : `Not signed in to ${resource}: run \`clankerauth login ${credentials.url} --resource ${resource} --scope "<scopes>"\` first.`,
+    });
+
+  if (Date.parse(signIn.expiresAt) - Date.now() > 60_000) return signIn.accessToken;
 
   const tokens = yield* token(
     "Refresh",
@@ -228,43 +262,59 @@ export const accessToken = Effect.fn("Cli.accessToken")(function* (credentials: 
     new URLSearchParams({
       grant_type: "refresh_token",
       client_id: credentials.clientId,
-      refresh_token: credentials.refreshToken,
-      resource: credentials.resource,
+      refresh_token: signIn.refreshToken,
+      resource,
     }),
   ).pipe(
     Effect.mapError(
       (error) =>
         new OAuthError({
-          message: `${error.message}. Run \`clankerauth login ${credentials.url}\` again.`,
+          message: `${error.message}. Run \`${loginAgain(credentials.url, signIn)}\` again.`,
         }),
     ),
   );
 
-  const refreshed: Credentials = {
-    ...credentials,
-    scope: tokens.scope ?? credentials.scope,
+  const refreshed: SignIn = {
+    ...signIn,
+    scope: tokens.scope ?? signIn.scope,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiresAt: expiry(tokens),
   };
 
-  yield* writeCredentials(refreshed);
+  yield* saveSignIn(credentials, refreshed);
 
-  return { credentials: refreshed, token: refreshed.accessToken };
+  return refreshed.accessToken;
 });
 
-/** Forget the sign-in, revoking its refresh token first when the issuer can be reached. */
-export const logout = Effect.fn("Cli.logout")(function* () {
-  const credentials = yield* readCredentials();
+/**
+ * Forget the sign-in to `resource`, or every sign-in when none is named, revoking each
+ * refresh token first when the issuer can be reached. The file goes with the last one.
+ */
+export const logout = Effect.fn("Cli.logout")(function* (resource: Option.Option<string>) {
+  const stored = yield* readCredentials();
 
-  yield* Option.match(credentials, {
-    onNone: () => Effect.void,
-    onSome: ({ revocationEndpoint, clientId, refreshToken }) =>
-      revocationEndpoint === null
-        ? Effect.void
-        : Effect.ignore(revoke(revocationEndpoint, clientId, refreshToken)),
-  });
-  yield* removeCredentials();
+  if (Option.isNone(stored)) return { signedOut: false };
 
-  return { signedOut: Option.isSome(credentials) };
+  const credentials = stored.value;
+
+  const leaving = credentials.signIns.filter((signIn) =>
+    Option.match(resource, { onNone: () => true, onSome: (named) => signIn.resource === named }),
+  );
+
+  const staying = credentials.signIns.filter((signIn) => !leaving.includes(signIn));
+  const { revocationEndpoint, clientId } = credentials;
+
+  if (revocationEndpoint !== null)
+    yield* Effect.forEach(
+      leaving,
+      ({ refreshToken }) => Effect.ignore(revoke(revocationEndpoint, clientId, refreshToken)),
+      { concurrency: "unbounded", discard: true },
+    );
+
+  yield* staying.length === 0
+    ? removeCredentials()
+    : writeCredentials({ ...credentials, signIns: staying });
+
+  return { signedOut: leaving.length > 0 };
 });

@@ -226,7 +226,13 @@ port. `--read-only` asks for `clankerauth:read` alone. The sign-in is kept in
 `$XDG_CONFIG_HOME/clankerauth/credentials.json`, by default under `~/.config`, readable by
 its owner alone; a command refreshes the access token when it has expired and saves the
 rotated refresh token, so a sign-in lasts while it is used at least every 30 days.
-`logout` revokes it and deletes the file.
+`logout` revokes every sign-in and deletes the file.
+
+`login --resource <identifier> --scope <scopes>` signs in to an application's resource too,
+with its own consent and refresh token, and `clankerauth token --resource <identifier>`
+prints a current access token for it and nothing else. A script or another command takes
+its bearer token from there instead of keeping an API key; `logout --resource` forgets that
+sign-in alone.
 
 Each action is a command named after it in kebab case, with a flag per input field, as
 `clankerauth <command> --help` shows. A command prints the action's result as JSON on
