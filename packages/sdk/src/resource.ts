@@ -1,7 +1,7 @@
-import { Clock, Context, Duration, Effect, Layer, Option, Redacted, Result } from "effect";
+import { Clock, Context, Duration, Effect, Layer, Option, Redacted, Ref, Result } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { HttpRouter, HttpServerResponse } from "effect/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpClient } from "effect/http";
 import type { HttpApiSecurity } from "effect/http-api";
 import type { ConfigurationError } from "./errors.ts";
@@ -63,8 +63,10 @@ export const authenticate = (
 export interface Options {
   readonly issuer: string;
   /**
-   * The origin browsers and agents reach this application at. The resource is its origin
-   * root, so any path here is discarded: one identifier covers `/api`, `/mcp` and sockets.
+   * The origin browsers and agents reach this application at: the listener that publishes
+   * discovery. The resource is its origin root, so any path here is discarded: one identifier
+   * covers `/api`, `/mcp` and sockets. A request reaching that listener at another host is
+   * logged once as a warning, since an OAuth client discovering the resource there refuses it.
    */
   readonly publicUrl: URL;
   /** `false` refuses API keys without reading the issuer's key list; only OAuth access tokens are accepted. */
@@ -72,7 +74,8 @@ export interface Options {
   /**
    * `false` publishes no RFC 9728 discovery and names none in a challenge: for a surface
    * whose callers hold API keys and never run an OAuth flow, such as a second listener
-   * beside the one that publishes the resource.
+   * beside the one that publishes the resource. That listener still names the same resource,
+   * so it takes the publishing listener's `publicUrl`, not its own.
    */
   readonly discovery?: boolean;
 }
@@ -384,12 +387,30 @@ export const make = <
   // The descriptor's verifier: a token to its principal, a refusal, or `ProviderUnavailable`.
   const provider = Authentication.layer(
     declaring,
-    Effect.map(
-      service,
-      ({ verifier }) =>
-        (token: Redacted.Redacted<string>) =>
-          authenticate(verifier, token),
-    ),
+    Effect.gen(function* () {
+      const { verifier, resource, protectedResource } = yield* service;
+      const host = new URL(resource).host;
+      const warned = yield* Ref.make(protectedResource === undefined);
+
+      // RFC 9728 has a client refuse metadata naming another resource than the one it
+      // reached, so a listener publishing discovery at another host fails every OAuth login
+      // while keys keep working. A proxy may rewrite the host, so this warns and refuses nothing.
+      const noteHost = Effect.gen(function* () {
+        if (yield* Ref.get(warned)) return;
+
+        const reached = (yield* HttpServerRequest.HttpServerRequest).headers.host;
+
+        if (reached === undefined || reached === host) return;
+
+        yield* Ref.set(warned, true);
+        yield* Effect.logWarning(
+          `The resource ${resource} publishes discovery, but a request reached it at ${reached}: an OAuth client discovering it there refuses the mismatch. Set publicUrl to the origin this listener is reached at.`,
+        );
+      });
+
+      return (token: Redacted.Redacted<string>) =>
+        Effect.andThen(noteHost, authenticate(verifier, token));
+    }),
     { protectedResource: Effect.map(service, ({ protectedResource }) => protectedResource) },
   );
 

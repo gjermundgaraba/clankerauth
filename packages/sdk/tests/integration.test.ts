@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Logger, Result, Schema } from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -223,6 +223,66 @@ test("a surface without discovery authenticates and publishes nothing", async ()
     );
   } finally {
     await web.dispose();
+    await issuer.close();
+  }
+});
+
+test("a listener publishing discovery warns once when reached at another host", async () => {
+  const issuer = await startIssuer(resourceId);
+
+  const app = Action.implement(Identity, () => identity, { authorize });
+
+  const warnings: Array<string> = [];
+
+  const capture = Logger.make(({ logLevel, message }) => {
+    if (logLevel === "Warn") warnings.push(String(message));
+  });
+
+  const listener = (discovery: boolean) =>
+    HttpRouter.toWebHandler(
+      ActionHttp.layer(Http, app).pipe(
+        Layer.provide(Notes.provider),
+        Layer.provide(
+          Notes.layer({ issuer: issuer.issuer, publicUrl: new URL(publicUrl), discovery }),
+        ),
+        Layer.provide(FetchHttpClient.layer),
+        Layer.provide(HttpServer.layerServices),
+        Layer.provide(Logger.layer([capture])),
+      ),
+    );
+
+  const call = (web: ReturnType<typeof listener>, host: string) =>
+    web.handler(
+      new Request(`${publicUrl}/api/identity`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host,
+          authorization: `Bearer ${issuer.key}`,
+        },
+        body: "{}",
+      }),
+    );
+
+  const publishing = listener(true);
+  const beside = listener(false);
+
+  try {
+    assert.equal((await call(publishing, new URL(publicUrl).host)).status, 200);
+    assert.deepEqual(warnings, []);
+
+    // Keys keep working at any host; only discovery there is broken, so it is said once.
+    assert.equal((await call(publishing, "notes.elsewhere.example")).status, 200);
+    assert.equal((await call(publishing, "notes.elsewhere.example")).status, 200);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /notes\.elsewhere\.example/u);
+
+    // A listener beside it publishes nothing, so its own host is not the resource's.
+    assert.equal((await call(beside, "notes.elsewhere.example")).status, 200);
+    assert.equal(warnings.length, 1);
+  } finally {
+    await publishing.dispose();
+    await beside.dispose();
     await issuer.close();
   }
 });
