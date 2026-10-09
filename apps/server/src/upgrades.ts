@@ -3,7 +3,7 @@ import type { Kysely } from "kysely";
 import type { OwnerError } from "@clankerauth/admin-api";
 import { persisted, transaction, type DatabaseSchema, type Sql } from "./database.ts";
 import { clearGrants } from "./grants.ts";
-import { administrationIdentifier, legacyAdministrationIdentifier } from "./resources.ts";
+import { administrationIdentifier } from "./resources.ts";
 
 const decodeVersion = persisted(Schema.Tuple([Schema.Struct({ user_version: Schema.Number })]));
 
@@ -28,7 +28,7 @@ const steps: ReadonlyArray<(query: Sql, baseURL: string) => Effect.Effect<unknow
   // provider seeds the resource's name and scopes onto the renamed row when it starts.
   (query, baseURL) =>
     Effect.gen(function* () {
-      const legacy = legacyAdministrationIdentifier(baseURL);
+      const legacy = `${baseURL}/mcp`;
       const current = administrationIdentifier(baseURL);
 
       const held = (identifier: string) =>

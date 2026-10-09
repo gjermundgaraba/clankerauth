@@ -11,6 +11,11 @@ export default defineConfig({
     outExtensions: () => ({ js: ".mjs" }),
     dts: false,
   },
-  // The tests run the packed binary against a real issuer, so they follow the build.
-  test: { include: ["tests/**/*.test.ts"], testTimeout: 30000 },
+  // The tests run the packed binary, which `test` builds first, each against an issuer of
+  // its own: a random order keeps them independent.
+  test: {
+    include: ["tests/**/*.test.ts"],
+    testTimeout: 30000,
+    sequence: { shuffle: { tests: true } },
+  },
 });

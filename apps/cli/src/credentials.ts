@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { Effect, Option, Schema, SchemaGetter } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 /** The kept sign-ins cannot be read or written. */
 export class CredentialsError extends Schema.TaggedError<CredentialsError>()("CredentialsError", {
@@ -29,43 +29,26 @@ export const SignIn = Schema.Struct({
 
 export type SignIn = typeof SignIn.Type;
 
-const issuerFields = {
+/**
+ * The issuer signed in to, the client this CLI registered there, and one sign-in per
+ * resource. `server` is the part of the issuer's RFC 8414 metadata a refresh and a
+ * revocation need, under its RFC names.
+ */
+export const Credentials = Schema.Struct({
   /** The issuer's origin, `CLANKERAUTH_BASE_URL`: where `/api/owner/<action>` is served. */
   url: Schema.String,
-  tokenEndpoint: Schema.String,
-  /** Where `logout` revokes a refresh token; null when the issuer publishes none. */
-  revocationEndpoint: Schema.NullOr(Schema.String),
+  server: Schema.Struct({
+    issuer: Schema.String,
+    token_endpoint: Schema.String,
+    revocation_endpoint: Schema.String,
+  }),
   clientId: Schema.String,
-};
-
-/** The issuer signed in to, the client this CLI registered there, and one sign-in per resource. */
-export const Credentials = Schema.Struct({ ...issuerFields, signIns: Schema.Array(SignIn) });
+  signIns: Schema.Array(SignIn),
+});
 
 export type Credentials = typeof Credentials.Type;
 
-/** What 0.16.0 kept: one sign-in, to administration, beside the issuer's fields. */
-const Before017 = Schema.Struct({ ...issuerFields, ...SignIn.fields });
-
 const CredentialsJson = Schema.fromJsonString(Credentials);
-
-/** A file either version wrote, as this version keeps it. */
-const StoredJson = Schema.fromJsonString(
-  Schema.Union([
-    Credentials,
-    Before017.pipe(
-      Schema.decodeTo(Credentials, {
-        decode: SchemaGetter.transform(
-          ({ resource, scope, accessToken, refreshToken, expiresAt, ...issuer }) => ({
-            ...issuer,
-            signIns: [{ resource, scope, accessToken, refreshToken, expiresAt }],
-          }),
-        ),
-        // Only this version's form is ever written.
-        encode: SchemaGetter.forbiddenEncoding,
-      }),
-    ),
-  ]),
-);
 
 /** Where the sign-ins are kept: `$XDG_CONFIG_HOME/clankerauth`, or `~/.config/clankerauth`. */
 export const credentialsPath = () =>
@@ -75,25 +58,20 @@ export const credentialsPath = () =>
     "credentials.json",
   );
 
-/** The sign-ins, if there are any. A file that does not decode is a failure, not a sign-out. */
-export const readCredentials = Effect.fn("Credentials.read")(
-  function* () {
-    const text = yield* Effect.tryPromise(() => readFile(credentialsPath(), "utf8")).pipe(
-      Effect.map(Option.some),
-      Effect.catchIf(
-        (error) =>
-          error.cause instanceof Error && "code" in error.cause && error.cause.code === "ENOENT",
-        () => Effect.succeed(Option.none<string>()),
-      ),
-    );
-
-    return yield* Option.match(text, {
-      onNone: () => Effect.succeedNone,
-      onSome: (json) => Effect.map(Schema.decodeEffect(StoredJson)(json), Option.some),
-    });
-  },
-  Effect.mapError(failed("Cannot read")),
-);
+/**
+ * The sign-ins, if there are any. A file this version cannot decode, such as one another
+ * version wrote, holds none: the next `login` replaces it.
+ */
+export const readCredentials = () =>
+  Effect.tryPromise(() => readFile(credentialsPath(), "utf8")).pipe(
+    Effect.map(Schema.decodeOption(CredentialsJson)),
+    Effect.catchIf(
+      (error) =>
+        error.cause instanceof Error && "code" in error.cause && error.cause.code === "ENOENT",
+      () => Effect.succeedNone,
+    ),
+    Effect.mapError(failed("Cannot read")),
+  );
 
 /**
  * Replace the sign-ins, readable by their owner alone. Written beside the file and renamed

@@ -20,12 +20,13 @@
   },
   "scripts": {
     "build": "vp pack",
-    "test": "vp test"
+    "test": "vp pack && vp test"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "oauth4webapi": "catalog:"
   },
   "devDependencies": {
     "@clankerauth/admin-api": "workspace:*",

@@ -32,18 +32,5 @@ jobs:
         working-directory: packages/sdk
       - run: pnpm publish --no-git-checks
         working-directory: packages/dev
-      # A package's first release is published by hand, since npm registers a trusted
-      # publisher only on a package that exists. Until then, and for a version published by
-      # hand, there is nothing to publish here.
-      - name: Publish the CLI
+      - run: pnpm publish --no-git-checks
         working-directory: apps/cli
-        run: |
-          name=@gjermundgaraba/clankerauth
-          version=${GITHUB_REF_NAME#v}
-          if [ -z "$(npm view "$name" name 2>/dev/null)" ]; then
-            echo "$name is not on npm yet: publish its first release by hand"
-          elif [ -n "$(npm view "$name@$version" version 2>/dev/null)" ]; then
-            echo "$name@$version is already published"
-          else
-            pnpm publish --no-git-checks
-          fi

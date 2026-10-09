@@ -12,7 +12,7 @@ clankerauth create-api-key --name "notes sync" \
 clankerauth logout
 ```
 
-`login` discovers the issuer, registers the command as a native OAuth client the first time, and asks the owner to approve in the browser: it prints the approval URL on stderr, opens it unless `--no-browser`, and listens for the redirect on a loopback port. `--read-only` asks for `clankerauth:read` alone, which lists and never changes. The sign-ins are kept in `$XDG_CONFIG_HOME/clankerauth/credentials.json`, `~/.config/clankerauth/credentials.json` by default, readable by its owner alone. A command refreshes an access token once it has expired and saves the rotated refresh token. `logout` revokes every sign-in and deletes the file.
+`login` discovers the issuer at the URL given, which must be its own origin, `CLANKERAUTH_BASE_URL`; registers the command as a native OAuth client the first time; prints the approval URL on stderr for the owner to open; and listens for the redirect on a loopback port. It asks for `clankerauth:read clankerauth:write`, unless `--scope` names fewer: `--scope clankerauth:read` lists and never changes. The sign-ins are kept in `$XDG_CONFIG_HOME/clankerauth/credentials.json`, `~/.config/clankerauth/credentials.json` by default, readable by their owner alone; a file the command cannot read, such as one another version wrote, counts as signed out and the next `login` replaces it. A command refreshes an access token once it has expired and saves the rotated refresh token, so a sign-in lasts while it is used at least every 30 days. `logout` revokes every sign-in and deletes the file.
 
 ## Tokens for other commands
 
@@ -26,7 +26,7 @@ curl -H "authorization: Bearer $(clankerauth token --resource https://notes.home
 clankerauth logout --resource https://notes.home.example/
 ```
 
-The identifier is the resource's, exactly as the dashboard lists it. A sign-in to another issuer replaces every kept one, since the file holds one issuer.
+The identifier is the resource's, exactly as the dashboard lists it. The file holds one issuer's sign-ins: signing in to another issuer revokes and forgets the kept ones first.
 
 Every other command is an administration action, named after it in kebab case, with a flag per input field: `clankerauth <command> --help` lists them. A field that is not text takes JSON, such as `--permissions` above or `--expires-at null`. A command prints the action's result as JSON on stdout, and a refusal on stderr, exiting 1. A created API key or client secret is in that JSON once, so send it where it belongs:
 

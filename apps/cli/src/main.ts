@@ -7,7 +7,7 @@ import * as ActionCli from "@gjermundgaraba/effect-actions/ActionCli";
 import { Administration, OwnerHttp } from "@clankerauth/admin-api";
 import manifest from "../package.json" with { type: "json" };
 import { readCredentials, type CredentialsError } from "./credentials.ts";
-import { accessToken, administrationOf, login, logout } from "./login.ts";
+import { accessToken, administrationOf, administrationScopes, login, logout } from "./login.ts";
 import type { OAuthError } from "./oauth.ts";
 
 /** A failure of this CLI's own, rendered as its message on stderr, exiting 1. */
@@ -27,66 +27,44 @@ const resourceFlag = (description: string) =>
     Flag.optional,
   );
 
-const usage = (message: string) => new CliError.UserError({ cause: message, userMessage: message });
-
-/** The scopes a sign-in asks for: `--scope`, or administration's, read-only or not. */
+/** The scopes a sign-in asks for: `--scope`, which another resource than administration needs. */
 const scopeFor = Effect.fn("Cli.scopeFor")(function* (
   resource: Option.Option<string>,
   scope: Option.Option<string>,
-  readOnly: boolean,
 ) {
-  if (Option.isSome(resource)) {
-    if (readOnly)
-      return yield* usage(
-        "--read-only is for administration; name another resource's scopes with --scope.",
-      );
+  if (Option.isSome(scope)) return scope.value;
 
-    if (Option.isNone(scope))
-      return yield* usage(`Name the scopes to ask ${resource.value} for with --scope.`);
+  if (Option.isNone(resource)) return administrationScopes;
 
-    return scope.value;
-  }
+  const message = `Name the scopes to ask ${resource.value} for with --scope.`;
 
-  if (readOnly && Option.isSome(scope))
-    return yield* usage("Give --read-only or --scope, not both.");
-
-  return Option.getOrElse(scope, () =>
-    readOnly ? "clankerauth:read" : "clankerauth:read clankerauth:write",
-  );
+  return yield* new CliError.UserError({ cause: message, userMessage: message });
 });
 
 const loginCommand = Command.make(
   "login",
   {
     url: Argument.String("url").pipe(
-      Argument.withDescription("The issuer's origin, such as https://auth.example.com"),
+      Argument.withDescription("The issuer's origin, its CLANKERAUTH_BASE_URL"),
     ),
     resource: resourceFlag(
       "Sign in to this resource instead of administration, for `token` to use",
     ),
     scope: Flag.String("scope").pipe(
-      Flag.withDescription("The scopes to ask for, space-separated; needed with --resource"),
+      Flag.withDescription(
+        `The scopes to ask for, space-separated: needed with --resource, and "${administrationScopes}" for administration by default`,
+      ),
       Flag.optional,
     ),
-    readOnly: Flag.Boolean("read-only").pipe(
-      Flag.withDescription("Ask administration for clankerauth:read alone: list, never change"),
-      Flag.withDefault(false),
-    ),
-    browser: Flag.Boolean("browser").pipe(
-      Flag.withDescription("Open the approval page; --no-browser only prints its URL"),
-      Flag.withDefault(true),
-    ),
   },
-  ({ url, resource, scope, readOnly, browser }) =>
-    scopeFor(resource, scope, readOnly).pipe(
-      Effect.flatMap((asked) =>
-        login(url, resource, asked, browser).pipe(Effect.mapError(refused)),
-      ),
+  ({ url, resource, scope }) =>
+    scopeFor(resource, scope).pipe(
+      Effect.flatMap((asked) => login(url, resource, asked).pipe(Effect.mapError(refused))),
       Effect.flatMap(json),
     ),
 ).pipe(
   Command.withDescription(
-    "Sign in to an issuer as its owner, for administration or, with --resource, for another resource. Sign-ins are kept in ~/.config/clankerauth.",
+    "Sign in to an issuer as its owner, for administration or, with --resource, for another resource: approve the URL it prints in the browser. Sign-ins are kept in ~/.config/clankerauth.",
   ),
 );
 

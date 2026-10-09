@@ -1,149 +1,186 @@
-import { Effect, Option, Schema } from "effect";
+import * as oauth from "oauth4webapi";
+import { Effect, Schema } from "effect";
+import type { Credentials } from "./credentials.ts";
 
-/** Something the issuer answered that a sign-in or a refresh cannot go on from. */
+/** Something the issuer answered that a sign-in, a refresh or a revocation cannot go on from. */
 export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   message: Schema.String,
 }) {}
 
-/** RFC 9728: where a resource says its tokens come from. */
-const ProtectedResource = Schema.Struct({
-  resource: Schema.String,
-  authorization_servers: Schema.NonEmptyArray(Schema.String),
-});
-
-/** RFC 8414: the endpoints a sign-in uses. */
-const AuthorizationServer = Schema.Struct({
+/** The issuer's RFC 8414 metadata a sign-in uses, every endpoint required. */
+const Server = Schema.Struct({
   issuer: Schema.String,
   authorization_endpoint: Schema.String,
   token_endpoint: Schema.String,
   registration_endpoint: Schema.String,
-  revocation_endpoint: Schema.optionalKey(Schema.String),
+  revocation_endpoint: Schema.String,
 });
 
-export type AuthorizationServer = typeof AuthorizationServer.Type;
+export type Server = typeof Server.Type;
 
-const Registration = Schema.Struct({ client_id: Schema.String });
+/** This CLI as the issuer knows it: a public client, authenticating with nothing. */
+export const client = (clientId: string): oauth.Client => ({ client_id: clientId });
 
-export const Tokens = Schema.Struct({
-  access_token: Schema.String,
-  refresh_token: Schema.String,
-  expires_in: Schema.Number,
-  scope: Schema.optionalKey(Schema.String),
+/** Plain HTTP is allowed for an issuer the owner named over it, such as one on loopback. */
+const transport = (url: string) => ({
+  [oauth.allowInsecureRequests]: new URL(url).protocol === "http:",
 });
 
-export type Tokens = typeof Tokens.Type;
+/**
+ * What went wrong, as the issuer said it when it sent an OAuth error, and with the status
+ * of an answer the library refused.
+ */
+const reason = (error: Error) => {
+  if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError)
+    return [error.error, error.error_description].filter(Boolean).join(": ");
 
-/** An OAuth error response's fields, when the issuer sent one. */
-const ErrorBody = Schema.Struct({
-  error: Schema.String,
-  error_description: Schema.optionalKey(Schema.String),
-});
+  return error instanceof oauth.OperationProcessingError && error.cause instanceof Response
+    ? `${error.message} (HTTP ${error.cause.status})`
+    : error.message;
+};
 
-/** Send `request` and decode its JSON as `schema`, failing with what the issuer said. */
-const exchange = <A, I>(
-  what: string,
-  schema: Schema.Codec<A, I>,
-  request: () => Promise<Response>,
-) =>
-  Effect.gen(function* () {
-    const response = yield* Effect.tryPromise({
-      try: request,
-      catch: (error) =>
-        new OAuthError({ message: `${what}: the issuer cannot be reached (${String(error)})` }),
-    });
-
-    const text = yield* Effect.promise(() => response.text());
-
-    if (!response.ok) {
-      const reason = Option.match(
-        Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody))(text),
-        {
-          onNone: () => `HTTP ${response.status}`,
-          onSome: (body) =>
-            body.error_description === undefined
-              ? body.error
-              : `${body.error}: ${body.error_description}`,
-        },
-      );
-
-      return yield* new OAuthError({ message: `${what}: ${reason}` });
-    }
-
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
-      Effect.mapError(
-        (error) => new OAuthError({ message: `${what}: unexpected answer (${error.message})` }),
-      ),
-    );
+/** Run one step of the protocol, failing with what the issuer, or the library, said. */
+const step = <A>(what: string, run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (error) =>
+      new OAuthError({
+        message: `${what}: ${error instanceof Error ? reason(error) : String(error)}`,
+      }),
   });
 
 /**
- * The issuer at `url` as a sign-in reaches it: its administration resource, published at the
- * origin root's RFC 9728 document, and the authorization server that resource names.
+ * The issuer at `url`, its origin: administration's RFC 9728 metadata at the origin root,
+ * which must name that root, and the RFC 8414 metadata of the issuer it names, which must
+ * name that issuer. Both checks are the library's.
  */
 export const discover = Effect.fn("OAuth.discover")(function* (url: string) {
-  const resource = yield* exchange("Discovery", ProtectedResource, () =>
-    fetch(new URL("/.well-known/oauth-protected-resource", url)),
+  const administration = new URL("/", url);
+
+  const metadata = yield* step(`Discovery at ${administration.origin}`, async () =>
+    oauth.processResourceDiscoveryResponse(
+      administration,
+      await oauth.resourceDiscoveryRequest(administration, transport(url)),
+    ),
+  ).pipe(
+    Effect.mapError(
+      ({ message }) =>
+        new OAuthError({
+          message: `${message}. Sign in at the issuer's own origin, its CLANKERAUTH_BASE_URL.`,
+        }),
+    ),
   );
 
-  const issuer = new URL(resource.authorization_servers[0]);
+  const [named] = metadata.authorization_servers ?? [];
 
-  // RFC 8414 inserts the well-known segment before the issuer's path.
-  const metadata = new URL(
-    `/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`,
-    issuer,
+  if (named === undefined)
+    return yield* new OAuthError({
+      message: "Discovery: the issuer names no authorization server",
+    });
+
+  const issuer = new URL(named);
+
+  const server = yield* step("Discovery", async () =>
+    oauth.processDiscoveryResponse(
+      issuer,
+      await oauth.discoveryRequest(issuer, { algorithm: "oauth2", ...transport(url) }),
+    ),
   );
 
-  const server = yield* exchange("Discovery", AuthorizationServer, () => fetch(metadata));
-
-  return { resource: resource.resource, server };
+  return yield* Schema.decodeUnknownEffect(Server)(server).pipe(
+    Effect.mapError(
+      (error) =>
+        new OAuthError({ message: `Discovery: the issuer lacks an endpoint (${error.message})` }),
+    ),
+  );
 });
 
 /**
  * Register this CLI as a public native client. The issuer matches a loopback redirect without
  * its port (RFC 8252), so one registration serves every port a sign-in listens on.
  */
-export const register = Effect.fn("OAuth.register")(function* (
-  server: AuthorizationServer,
-  redirectUri: string,
-) {
-  const registration = yield* exchange("Registration", Registration, () =>
-    fetch(server.registration_endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        client_name: "clankerauth CLI",
-        redirect_uris: [redirectUri],
-        application_type: "native",
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-      }),
-    }),
-  );
+export const register = (url: string, server: Server, redirectUri: string) =>
+  step("Registration", async () =>
+    oauth.processDynamicClientRegistrationResponse(
+      await oauth.dynamicClientRegistrationRequest(
+        server,
+        {
+          client_name: "clankerauth CLI",
+          redirect_uris: [redirectUri],
+          application_type: "native",
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+        },
+        transport(url),
+      ),
+    ),
+  ).pipe(Effect.map((registered) => registered.client_id));
 
-  return registration.client_id;
-});
+/**
+ * Check the redirect a browser brought back (its state, the RFC 9207 issuer, an error the
+ * issuer sent instead of a code) and exchange its code for tokens.
+ */
+export const exchangeCode = (
+  url: string,
+  server: Server,
+  clientId: string,
+  callback: URLSearchParams,
+  expected: { readonly state: string; readonly verifier: string; readonly redirectUri: string },
+  resource: string,
+) =>
+  step("Sign-in", async () => {
+    const parameters = oauth.validateAuthResponse(
+      server,
+      client(clientId),
+      callback,
+      expected.state,
+    );
 
-/** Ask the token endpoint for tokens, with the grant's own form fields. */
-export const token = (what: string, endpoint: string, form: URLSearchParams) =>
-  exchange(what, Tokens, () =>
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: form,
-    }),
+    return oauth.processAuthorizationCodeResponse(
+      server,
+      client(clientId),
+      await oauth.authorizationCodeGrantRequest(
+        server,
+        client(clientId),
+        oauth.None(),
+        parameters,
+        expected.redirectUri,
+        expected.verifier,
+        { additionalParameters: { resource }, ...transport(url) },
+      ),
+    );
+  });
+
+/** Refresh the tokens of one sign-in: the refresh token rotates. */
+export const refresh = (credentials: Credentials, refreshToken: string, resource: string) =>
+  step("Refresh", async () =>
+    oauth.processRefreshTokenResponse(
+      credentials.server,
+      client(credentials.clientId),
+      await oauth.refreshTokenGrantRequest(
+        credentials.server,
+        client(credentials.clientId),
+        oauth.None(),
+        refreshToken,
+        { additionalParameters: { resource }, ...transport(credentials.url) },
+      ),
+    ),
   );
 
 /** Revoke a refresh token, and with it every token of its family. */
-export const revoke = (endpoint: string, clientId: string, refreshToken: string) =>
-  Effect.tryPromise(() =>
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        token: refreshToken,
-        token_type_hint: "refresh_token",
-        client_id: clientId,
-      }),
-    }),
+export const revoke = (credentials: Credentials, refreshToken: string) =>
+  step("Revocation", async () =>
+    oauth.processRevocationResponse(
+      await oauth.revocationRequest(
+        credentials.server,
+        client(credentials.clientId),
+        oauth.None(),
+        refreshToken,
+        {
+          additionalParameters: { token_type_hint: "refresh_token" },
+          ...transport(credentials.url),
+        },
+      ),
+    ),
   );

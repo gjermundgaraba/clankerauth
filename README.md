@@ -208,37 +208,12 @@ curl "$CLANKERAUTH_BASE_URL/api/listClients" \
 
 ### Administer from the command line
 
-`@gjermundgaraba/clankerauth` is the `clankerauth` command, every administration action
-over `/api/owner`:
-
-```sh
-npm install --global @gjermundgaraba/clankerauth
-clankerauth login https://clankerauth.home.example   # approve in the browser
-clankerauth list-clients
-clankerauth create-api-key --name "notes sync" \
-  --permissions '{"https://notes.home.example/":["notes:read"]}' --expires-at null
-clankerauth logout
-```
-
-`login` registers the command as a native client the first time, prints the approval URL
-on stderr and opens it, unless `--no-browser`, and listens for the redirect on a loopback
-port. `--read-only` asks for `clankerauth:read` alone. The sign-in is kept in
-`$XDG_CONFIG_HOME/clankerauth/credentials.json`, by default under `~/.config`, readable by
-its owner alone; a command refreshes the access token when it has expired and saves the
-rotated refresh token, so a sign-in lasts while it is used at least every 30 days.
-`logout` revokes every sign-in and deletes the file.
-
-`login --resource <identifier> --scope <scopes>` signs in to an application's resource too,
-with its own consent and refresh token, and `clankerauth token --resource <identifier>`
-prints a current access token for it and nothing else. A script or another command takes
-its bearer token from there instead of keeping an API key; `logout --resource` forgets that
-sign-in alone.
-
-Each action is a command named after it in kebab case, with a flag per input field, as
-`clankerauth <command> --help` shows. A command prints the action's result as JSON on
-stdout and a refusal on stderr, exiting 1. A created API key or client secret is in that
-JSON once, so redirect it where it belongs rather than to a terminal:
-`clankerauth create-api-key … | jq -r .key > key`.
+[`@gjermundgaraba/clankerauth`](apps/cli/README.md) is the `clankerauth` command. `clankerauth
+login <url>` signs in as the owner through the browser, and every administration action is a
+command over `/api/owner` printing JSON. `login --resource <identifier> --scope <scopes>` signs
+in to an application's resource too, and `clankerauth token --resource <identifier>` prints a
+current access token for it, so a script takes its bearer token from there instead of keeping
+an API key.
 
 See the breaking [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 

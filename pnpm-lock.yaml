@@ -203,6 +203,9 @@ catalogs:
     jose:
       specifier: 6.2.12
       version: 6.2.12
+    oauth4webapi:
+      specifier: 3.8.8
+      version: 3.8.8
     playwright:
       specifier: 1.64.0
       version: 1.64.0
@@ -248,6 +251,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.2
+      oauth4webapi:
+        specifier: 'catalog:'
+        version: 3.8.8
     devDependencies:
       '@clankerauth/admin-api':
         specifier: workspace:*
@@ -1665,6 +1671,9 @@ packages:
     resolution: {integrity: sha512-rQLB6eV4f2AW/n3L0JmwCROpaisYy9EDEADvEFSd1C/qG8hB6O5TPlh9A791JRbJr4CnMQBzptDcvD9OR1+6WA==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
@@ -2653,6 +2662,8 @@ snapshots:
   nanoid@3.3.19: {}
 
   nanostores@1.5.3: {}
+
+  oauth4webapi@3.8.8: {}
 
   obug@2.2.1: {}
 

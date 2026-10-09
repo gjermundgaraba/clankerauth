@@ -25,9 +25,6 @@ export const administrationScopes = { read: "clankerauth:read", write: "clankera
  */
 export const administrationIdentifier = (baseURL: string) => new URL("/", baseURL).href;
 
-/** What the administration resource was named before 0.16.0. */
-export const legacyAdministrationIdentifier = (baseURL: string) => `${baseURL}/mcp`;
-
 /** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
 export const protocolScopes = ["offline_access"];
 
