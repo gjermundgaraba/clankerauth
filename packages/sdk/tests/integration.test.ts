@@ -146,7 +146,7 @@ test("one resource protects HTTP and MCP, and the application's one rule authori
       web.handler(
         Result.getOrThrow(
           HttpClientRequest.toWebResult(
-            Testing.mcpRequest("tools/list", undefined, { url: `${publicUrl}/mcp`, headers }),
+            ActionMcp.request("tools/list", undefined, { url: `${publicUrl}/mcp`, headers }),
           ),
         ),
       );
@@ -158,7 +158,7 @@ test("one resource protects HTTP and MCP, and the application's one rule authori
 
     const refusedTool = await Effect.runPromise(
       Effect.gen(function* () {
-        const tools = yield* Testing.mcpClient(app.actions, {
+        const tools = yield* ActionMcp.client(app.actions, {
           url: `${publicUrl}/mcp`,
           transformClient: asKey,
         });

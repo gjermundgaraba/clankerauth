@@ -186,8 +186,8 @@ catalogs:
       specifier: 4.0.4
       version: 4.0.4
     '@gjermundgaraba/effect-actions':
-      specifier: 0.14.0
-      version: 0.14.0
+      specifier: 0.15.0
+      version: 0.15.0
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -253,7 +253,7 @@ importers:
         version: 4.0.4(effect@4.0.4)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.14.0(effect@4.0.4)
+        version: 0.15.0(effect@4.0.4)
       effect:
         specifier: 'catalog:'
         version: 4.0.4
@@ -311,7 +311,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.14.0(effect@4.0.4)
+        version: 0.15.0(effect@4.0.4)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.7(@opentelemetry/api@1.9.1)(vitest@5.0.3)
@@ -357,7 +357,7 @@ importers:
         version: link:../../packages/admin-api
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.14.0(effect@4.0.4)
+        version: 0.15.0(effect@4.0.4)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.7(@opentelemetry/api@1.9.1)(vitest@5.0.3)
@@ -381,7 +381,7 @@ importers:
     dependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.14.0(effect@4.0.4)
+        version: 0.15.0(effect@4.0.4)
       effect:
         specifier: 'catalog:'
         version: 4.0.4
@@ -428,7 +428,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.14.0(effect@4.0.4)
+        version: 0.15.0(effect@4.0.4)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
@@ -585,8 +585,8 @@ packages:
       effect: ^4.0.4
       redis: '>=5.0.0 <7.0.0'
 
-  '@gjermundgaraba/effect-actions@0.14.0':
-    resolution: {integrity: sha512-iZg8UwZvYFLmorKNWzytBBFgBDpMOP4O38dMT6+dUooHY7EprTzVh6yI7qcC4fHsvY/v8b2km4BLH1Y1cHagVg==}
+  '@gjermundgaraba/effect-actions@0.15.0':
+    resolution: {integrity: sha512-CW4t6lWJg57chliQAPvXkdFyDxu1J0ZID3MjA3t7T2VaZgTN/aZ6h8pQnTSv2DcJjQHEHhpU6EpFwTX3hYj7NA==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     peerDependencies:
       effect: ~4.0.4
@@ -2030,7 +2030,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@gjermundgaraba/effect-actions@0.14.0(effect@4.0.4)':
+  '@gjermundgaraba/effect-actions@0.15.0(effect@4.0.4)':
     dependencies:
       effect: 4.0.4
 

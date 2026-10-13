@@ -5,7 +5,7 @@ import { administrationResource, mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 import { Effect, Exit, Layer, Result, Scope, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-import type * as Testing from "@gjermundgaraba/effect-actions/Testing";
+import type * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
@@ -352,7 +352,7 @@ const ownerBearer = async () =>
 
 const mcp = async (
   method: string,
-  params: Testing.McpParams = {},
+  params: ActionMcp.Params = {},
   headers: Record<string, string> = {},
 ) =>
   handle(
@@ -365,6 +365,19 @@ const mcp = async (
   );
 
 const ownerTools = async () => administrationTools(handle, origin, await ownerBearer());
+
+test("MCP administration advertises no list changes and refuses subscriptions", async () => {
+  const discovery = await mcp("server/discover");
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).result.capabilities.tools).toEqual({ listChanged: false });
+
+  // The refusal is the stream's one event.
+  const listen = await (
+    await mcp("subscriptions/listen", { notifications: { toolsListChanged: true } })
+  ).text();
+
+  expect(JSON.parse(listen.replace(/^data: /m, "").trim()).error.code).toBe(-32601);
+});
 
 test("HTTP and MCP share administration contracts, writes, secrets and revocation", async () => {
   const discovery = await mcp("tools/list");

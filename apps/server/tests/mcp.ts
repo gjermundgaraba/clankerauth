@@ -2,19 +2,20 @@ import { Effect, Result } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import * as Testing from "@gjermundgaraba/effect-actions/Testing";
+import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { Administration } from "@clankerauth/admin-api";
 
 interface WebMcpRequest {
   readonly method: string;
-  readonly params?: Testing.McpParams;
+  readonly params?: ActionMcp.Params;
   readonly url: string;
   readonly headers?: Record<string, string>;
 }
 
-/** `Testing.mcpRequest` as a web `Request`, for a test to hand to a handler or to `fetch`. */
+/** `ActionMcp.request` as a web `Request`, for a test to hand to a handler or to `fetch`. */
 export const webMcpRequest = ({ method, params, url, headers }: WebMcpRequest) =>
   Result.getOrThrow(
-    HttpClientRequest.toWebResult(Testing.mcpRequest(method, params, { url, headers })),
+    HttpClientRequest.toWebResult(ActionMcp.request(method, params, { url, headers })),
   );
 
 /** The administration tools of `handler`'s `/mcp`, called as `token`'s owner. */
@@ -24,7 +25,7 @@ export const administrationTools = (
   token: string,
 ) =>
   Effect.runPromise(
-    Testing.mcpClient(Administration, {
+    ActionMcp.client(Administration, {
       url: `${origin}/mcp`,
       transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
     }).pipe(Effect.provide(Testing.layer(handler))),
