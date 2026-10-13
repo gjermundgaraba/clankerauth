@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "The clankerauth command line: sign in to an issuer as its owner and administer it over HTTP.",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@effect/platform-node-shared": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
     "effect": "catalog:",
     "oauth4webapi": "catalog:"

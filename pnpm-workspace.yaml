@@ -4,12 +4,16 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.3
+  "@effect/platform-node": 4.0.4
+  # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
+  # it by caret, and a newer one requires a newer effect, so npm would install a second effect
+  # under it. Keep it equal to effect.
+  "@effect/platform-node-shared": 4.0.4
   "@better-auth/oauth-provider": 1.7.7
   "@better-auth/api-key": 1.7.7
   better-auth: 1.7.7
   better-call: 1.4.0
-  effect: 4.0.3
+  effect: 4.0.4
   "@types/node": 26.6.4
   jose: 6.2.12
   typescript: 7.0.2
@@ -22,7 +26,7 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.7
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.87.0
-  "@gjermundgaraba/effect-actions": 0.13.0
+  "@gjermundgaraba/effect-actions": 0.14.0
   oauth4webapi: 3.8.8
 
 overrides:
@@ -47,6 +51,10 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  # Effect 4.0.4 is newer than the one-day release age; drop these once it is not.
+  - effect@4.0.4
+  - "@effect/platform-node@4.0.4"
+  - "@effect/platform-node-shared@4.0.4"
   # Playwright 1.64.0 is newer than the one-day release age; drop these once it is not.
   - playwright@1.64.0
   - playwright-core@1.64.0
