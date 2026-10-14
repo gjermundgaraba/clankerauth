@@ -1,3 +1,4 @@
+import { administrationIdentifier } from "@clankerauth/admin-api";
 /**
  * Forward auth: a reverse proxy asks this issuer on every browser request. A signed-in
  * owner gets a short-lived access token for the app's resource in an Authorization header,
@@ -10,10 +11,11 @@
  */
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
 import { provider, respond } from "../issuer/errors.ts";
-import { administrationIdentifier, ResourceCatalog } from "../resources/catalog.ts";
+import { ResourceCatalog } from "../resources/catalog.ts";
 import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
 
 /** The `client_id` claim of forward-auth tokens. Not a registered client: administration
@@ -182,7 +184,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       return Layer.mergeAll(
         HttpRouter.add("GET", "/forward-auth", Effect.catch(check, respond)),
         HttpRouter.add("GET", "/forward-auth/continue", Effect.catch(proceed, respond)),
-        HttpRouter.add("GET", "/forward-auth/logout", Effect.catch(logout, respond)),
+        HttpRouter.add("GET", signOutPath, Effect.catch(logout, respond)),
       );
     }),
   );

@@ -53,12 +53,15 @@ export const Whoami = Action.make("whoami", {
   success: Principal,
 });
 
+/** Where the issuer signs the owner out and clears the forward cookie. */
+export const signOutPath = "/forward-auth/logout";
+
 /**
  * Sign out at the issuer, which ends its session and every app's forward cookie, then
  * return to `returnTo`. It is a plain link: any page under the cookie domain may use it.
  */
 export const signOutUrl = (issuer: string, returnTo: string): string => {
-  const url = new URL("/forward-auth/logout", issuer);
+  const url = new URL(signOutPath, issuer);
   url.searchParams.set("rd", returnTo);
 
   return url.href;

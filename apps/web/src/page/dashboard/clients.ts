@@ -14,14 +14,8 @@ import {
 import { Change } from "./change.ts";
 import { editAccess, editClient, registerClient } from "./form.ts";
 import { Message } from "./message.ts";
-import {
-  type SectionContext,
-  codesView,
-  footView,
-  itemButtonView,
-  momentOf,
-  noteView,
-} from "./parts.ts";
+import { type SectionContext, footView, itemButtonView, momentOf, noteView } from "./parts.ts";
+import { codesView } from "../codes.ts";
 
 type ClientView = typeof Client.Type;
 

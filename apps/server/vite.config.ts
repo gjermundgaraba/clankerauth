@@ -2,7 +2,7 @@ import { defineConfig } from "vite-plus";
 
 export default defineConfig({
   pack: {
-    deps: { resolveDepSubpath: true },
+    deps: { resolveDepSubpath: true, alwaysBundle: ["@clankerauth/web/document-paths"] },
     entry: ["src/main.ts"],
     platform: "node",
     format: ["esm"],

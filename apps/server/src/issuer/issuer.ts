@@ -12,16 +12,18 @@ import {
   type ClientMetadataResourceFetch,
 } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
-import { MAXIMUM_PASSWORD_LENGTH, MINIMUM_PASSWORD_LENGTH } from "@clankerauth/admin-api";
-import { Database, type DatabaseSchema } from "../platform/sqlite.ts";
-import { CimdTransport } from "../platform/cimd-transport.ts";
-import { resourceReference } from "../authorization/authorization.ts";
+import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
   administrationIdentifier,
   administrationScopes,
-  protocolScopes,
-  ResourceCatalog,
-} from "../resources/catalog.ts";
+  MAXIMUM_PASSWORD_LENGTH,
+  MINIMUM_PASSWORD_LENGTH,
+} from "@clankerauth/admin-api";
+import { Database, type DatabaseSchema } from "../platform/sqlite.ts";
+import { CimdTransport } from "../platform/cimd-transport.ts";
+import { peerHeader } from "../platform/node-http.ts";
+import { resourceReference } from "../authorization/authorization.ts";
+import { exactlyOneResource, protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
 import { signer } from "./signing.ts";
 import { Settings, type IssuerSettings } from "./settings.ts";
 
@@ -72,7 +74,7 @@ const providerOptions = (
         if (identifiers.length !== 1 || !(await runCallback(catalog.get(identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
-            error_description: "Choose exactly one Resource",
+            error_description: exactlyOneResource,
           });
         const clientId = query.get("client_id");
 
@@ -164,7 +166,7 @@ const providerOptions = (
     },
     // The owner's session is the single sign-on session across first-party clients.
     session: { expiresIn: 60 * 60 * 24 * 30, updateAge: 60 * 60 * 24 },
-    advanced: { ipAddress: { ipAddressHeaders: ["x-clankerauth-peer"] } },
+    advanced: { ipAddress: { ipAddressHeaders: [peerHeader] } },
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -174,7 +176,7 @@ const providerOptions = (
     },
     plugins: [
       apiKey({
-        defaultPrefix: "clankerauth_",
+        defaultPrefix: KeyList.keyPrefix,
         maximumNameLength: 100,
         enableSessionForAPIKeys: false,
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },

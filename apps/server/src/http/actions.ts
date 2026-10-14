@@ -5,6 +5,7 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import {
+  administrationScopes,
   Administration,
   binding,
   IssuerActions,
@@ -19,7 +20,6 @@ import { setupActions } from "../owner/setup.ts";
 import { administrationResource } from "../owner/administration-resource.ts";
 import { ApiKeys } from "../api-keys/api-keys.ts";
 import { authorizeOwner, bearerOwner, sessionOwner } from "../owner/authentication.ts";
-import { administrationScopes } from "../resources/catalog.ts";
 import { responseCookies } from "./response-cookies.ts";
 import { Issuer } from "../issuer/issuer.ts";
 

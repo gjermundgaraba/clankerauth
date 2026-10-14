@@ -4,10 +4,10 @@ import { Argument, CliError, Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import * as ActionCli from "@gjermundgaraba/effect-actions/ActionCli";
-import { Administration, OwnerHttp } from "@clankerauth/admin-api";
+import { Administration, administrationIdentifier, OwnerHttp } from "@clankerauth/admin-api";
 import manifest from "../package.json" with { type: "json" };
 import { readCredentials, type CredentialsError } from "./credentials.ts";
-import { accessToken, administrationOf, administrationScopes, login, logout } from "./login.ts";
+import { accessToken, administrationScope, login, logout } from "./login.ts";
 import type { OAuthError } from "./oauth.ts";
 
 /** A failure of this CLI's own, rendered as its message on stderr, exiting 1. */
@@ -34,7 +34,7 @@ const scopeFor = Effect.fn("Cli.scopeFor")(function* (
 ) {
   if (Option.isSome(scope)) return scope.value;
 
-  if (Option.isNone(resource)) return administrationScopes;
+  if (Option.isNone(resource)) return administrationScope;
 
   const message = `Name the scopes to ask ${resource.value} for with --scope.`;
 
@@ -52,7 +52,7 @@ const loginCommand = Command.make(
     ),
     scope: Flag.String("scope").pipe(
       Flag.withDescription(
-        `The scopes to ask for, space-separated: needed with --resource, and "${administrationScopes}" for administration by default`,
+        `The scopes to ask for, space-separated: needed with --resource, and "${administrationScope}" for administration by default`,
       ),
       Flag.optional,
     ),
@@ -97,7 +97,7 @@ const tokenCommand = Command.make(
 
       const token = yield* accessToken(
         credentials,
-        Option.getOrElse(resource, () => administrationOf(credentials.url)),
+        Option.getOrElse(resource, () => administrationIdentifier(credentials.url)),
       ).pipe(Effect.mapError(refused));
 
       yield* Effect.sync(() => process.stdout.write(`${token}\n`));
@@ -115,7 +115,7 @@ const tokenCommand = Command.make(
 const administrationClient = Effect.gen(function* () {
   const credentials = yield* signedIn;
 
-  const token = yield* accessToken(credentials, administrationOf(credentials.url)).pipe(
+  const token = yield* accessToken(credentials, administrationIdentifier(credentials.url)).pipe(
     Effect.mapError(refused),
   );
 

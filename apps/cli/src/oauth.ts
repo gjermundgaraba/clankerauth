@@ -129,6 +129,38 @@ export const register = (url: string, server: Server, redirectUri: string) =>
  * Check the redirect a browser brought back (its state, the RFC 9207 issuer, an error the
  * issuer sent instead of a code) and exchange its code for tokens.
  */
+/** What an issuer answers a token request with. */
+export type Tokens = oauth.TokenEndpointResponse;
+
+/**
+ * The authorization request a browser follows, with the PKCE verifier and state the code
+ * exchange checks it against.
+ */
+export const authorizationRequest = Effect.fn("OAuth.authorizationRequest")(function* (
+  server: Server,
+  clientId: string,
+  redirectUri: string,
+  scope: string,
+  resource: string,
+) {
+  const verifier = oauth.generateRandomCodeVerifier();
+  const state = oauth.generateRandomState();
+  const url = new URL(server.authorization_endpoint);
+
+  url.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope,
+    resource,
+    code_challenge: yield* Effect.promise(() => oauth.calculatePKCECodeChallenge(verifier)),
+    code_challenge_method: "S256",
+    state,
+  }).toString();
+
+  return { url, state, verifier };
+});
+
 export const exchangeCode = (
   url: string,
   server: Server,

@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { documentPaths } from "@clankerauth/web/document-paths";
 import { InternalServerError } from "@clankerauth/admin-api";
 import { sql as query } from "kysely";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
@@ -482,7 +483,7 @@ describe("owner boundary", () => {
   test("serves the built web workspace rather than the server working directory", async () => {
     const assets = new Set<string>();
 
-    for (const path of ["/", "/resources", "/keys", "/setup", "/login", "/consent"]) {
+    for (const path of documentPaths) {
       const response = await request(path);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");

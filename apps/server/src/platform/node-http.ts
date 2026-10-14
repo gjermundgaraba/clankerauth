@@ -8,6 +8,9 @@ import {
   HttpServerResponse,
 } from "effect/http";
 
+/** The header carrying the client address that rate limits and sessions attribute a request to. */
+export const peerHeader = "x-clankerauth-peer";
+
 export const createNodeServer = (listener?: RequestListener) =>
   createServer({ requestTimeout: 15000, headersTimeout: 10000 }, listener);
 
@@ -64,10 +67,7 @@ export const requestPolicy =
           ? Headers.remove("forwarded")
           : Headers.removeMany(["forwarded", "x-forwarded-host", "x-forwarded-proto"]),
         Headers.set("host", new URL(baseURL).host),
-        Headers.set(
-          "x-clankerauth-peer",
-          peerAddress(incoming.headers, incoming.remoteAddress, trustProxy),
-        ),
+        Headers.set(peerHeader, peerAddress(incoming.headers, incoming.remoteAddress, trustProxy)),
         Headers.remove("x-forwarded-for"),
       );
 

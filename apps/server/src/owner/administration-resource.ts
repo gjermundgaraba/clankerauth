@@ -1,3 +1,4 @@
+import { administrationScopes, administrationIdentifier } from "@clankerauth/admin-api";
 /**
  * The issuer's own OAuth resource, administration, at its origin root as an application's
  * is: `/mcp` and `/api/owner/<action>` take its tokens. The dashboard at `/` is not part of
@@ -11,8 +12,9 @@ import { Effect, Layer } from "effect";
 import type * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
-import { administrationScopes, administrationIdentifier } from "../resources/catalog.ts";
 import { Issuer } from "../issuer/issuer.ts";
+import { peerHeader } from "../platform/node-http.ts";
+import { protocolScopes } from "../resources/catalog.ts";
 import { Settings } from "../issuer/settings.ts";
 
 export const administrationResource = Effect.fn("AdministrationResource.make")(function* () {
@@ -27,7 +29,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const protectedResource = {
     resource,
     authorizationServers: [issuer],
-    scopesSupported: [administrationScopes.read, administrationScopes.write, "offline_access"],
+    scopesSupported: [administrationScopes.read, administrationScopes.write, ...protocolScopes],
     scopesRequired: [administrationScopes.read, administrationScopes.write],
   } satisfies Authentication.ProtectedResource;
 
@@ -37,7 +39,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const loopback: typeof fetch = (input, init) => {
     const request = new Request(input, init);
     // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
-    request.headers.set("x-clankerauth-peer", "127.0.0.1");
+    request.headers.set(peerHeader, "127.0.0.1");
 
     return auth.handler(request);
   };

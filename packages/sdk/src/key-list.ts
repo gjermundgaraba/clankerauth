@@ -16,6 +16,9 @@ import { base64url } from "jose";
 /** The list's JWT `typ`, so neither a list nor an access token can pass for the other. */
 export const type = "key-list+jwt";
 
+/** Every API key the issuer creates begins with this, which tells it apart from a JWT. */
+export const keyPrefix = "clankerauth_";
+
 /**
  * How long a list decides, in seconds from its `iat`: for as long as a resource server
  * cannot read a newer one, it keeps accepting the keys this one grants. So it is also the

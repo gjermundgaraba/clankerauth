@@ -7,7 +7,8 @@
   ],
   "type": "module",
   "exports": {
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./document-paths": "./src/document-paths.ts"
   },
   "scripts": {
     "build": "tsc && vp build",

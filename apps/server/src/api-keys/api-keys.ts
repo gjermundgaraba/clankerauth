@@ -2,18 +2,19 @@ import { Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "eff
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
+  administrationIdentifier,
   CurrentOwner,
   KeyPermissions,
   type ApiKeyId,
   type ApiKeyInput,
   type ApiKeyUpdate,
-  type MachineKey,
+  type ApiKey,
   type OwnerError,
 } from "@clankerauth/admin-api";
 import { Database } from "../platform/sqlite.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
-import { administrationIdentifier, ResourceCatalog } from "../resources/catalog.ts";
+import { ResourceCatalog } from "../resources/catalog.ts";
 import { invalidInput, provider } from "../issuer/errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
@@ -62,7 +63,7 @@ const summary = Effect.fnUntraced(function* (key: {
 
 type Refusal = OwnerError | Action.InvalidInput;
 
-type Summary = typeof MachineKey.Type;
+type Summary = typeof ApiKey.Type;
 
 /** The owner's API keys, and the signed key lists resource servers verify them against. */
 export class ApiKeys extends Context.Service<
@@ -101,7 +102,7 @@ export class ApiKeys extends Context.Service<
 
       // The contract's schemas check the name and that each grant names scopes, once each; what
       // remains depends on the stored resources.
-      const validate = Effect.fn("MachineKeys.validate")(function* (
+      const validate = Effect.fn("ApiKeys.validate")(function* (
         grants: typeof KeyPermissions.Type | undefined,
       ) {
         if (grants === undefined) return;
@@ -123,7 +124,7 @@ export class ApiKeys extends Context.Service<
       });
 
       return {
-        list: Effect.fn("MachineKeys.list")(function* () {
+        list: Effect.fn("ApiKeys.list")(function* () {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
@@ -137,7 +138,7 @@ export class ApiKeys extends Context.Service<
 
           return { keys: yield* Effect.forEach(result.apiKeys, summary) };
         }),
-        create: Effect.fn("MachineKeys.create")(function* (input: typeof ApiKeyInput.Type) {
+        create: Effect.fn("ApiKeys.create")(function* (input: typeof ApiKeyInput.Type) {
           const owner = yield* CurrentOwner;
           yield* validate(input.permissions);
 
@@ -164,7 +165,7 @@ export class ApiKeys extends Context.Service<
 
           return { ...(yield* summary(key)), key: key.key };
         }),
-        update: Effect.fn("MachineKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
+        update: Effect.fn("ApiKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
           const owner = yield* CurrentOwner;
           yield* validate(input.permissions);
 
@@ -186,14 +187,14 @@ export class ApiKeys extends Context.Service<
             ),
           );
         }),
-        delete: Effect.fn("MachineKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
+        delete: Effect.fn("ApiKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
           yield* provider(() => auth.api.deleteApiKey({ headers, body: { keyId } }));
 
           return { deleted: true };
         }),
-        keyList: Effect.fn("MachineKeys.keyList")(function* (identifier: string) {
+        keyList: Effect.fn("ApiKeys.keyList")(function* (identifier: string) {
           const now = yield* Clock.currentTimeMillis;
           const resource = yield* catalog.get(identifier);
 

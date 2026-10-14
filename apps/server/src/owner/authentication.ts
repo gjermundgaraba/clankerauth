@@ -4,13 +4,17 @@ import { HttpServerRequest } from "effect/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
-import { CurrentOwner, OwnerToken, ServiceUnavailable } from "@clankerauth/admin-api";
+import {
+  administrationScopes,
+  CurrentOwner,
+  OwnerToken,
+  ServiceUnavailable,
+} from "@clankerauth/admin-api";
 import type { OwnerSession } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
 import { provider } from "../issuer/errors.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
 import { OwnerAccount } from "./owner.ts";
-import { administrationScopes } from "../resources/catalog.ts";
 import { Issuer } from "../issuer/issuer.ts";
 
 /**

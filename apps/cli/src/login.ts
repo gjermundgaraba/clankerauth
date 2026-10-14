@@ -1,7 +1,7 @@
 import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import * as oauth from "oauth4webapi";
 import { Deferred, Effect, Option } from "effect";
+import { administrationIdentifier, administrationScopes } from "@clankerauth/admin-api";
 import {
   readCredentials,
   removeCredentials,
@@ -10,13 +10,19 @@ import {
   type Credentials,
   type SignIn,
 } from "./credentials.ts";
-import { discover, exchangeCode, OAuthError, refresh, register, revoke } from "./oauth.ts";
-
-/** The issuer's own resource, administration: its origin root, as discovery checks. */
-export const administrationOf = (url: string) => new URL("/", url).href;
+import {
+  authorizationRequest,
+  discover,
+  exchangeCode,
+  OAuthError,
+  refresh,
+  register,
+  revoke,
+  type Tokens,
+} from "./oauth.ts";
 
 /** The scopes a sign-in to administration asks for unless told otherwise. */
-export const administrationScopes = "clankerauth:read clankerauth:write";
+export const administrationScope = `${administrationScopes.read} ${administrationScopes.write}`;
 
 /** A sign-in asks for a refresh token too, so it lasts while it is used. */
 const withRefresh = (scope: string) =>
@@ -32,11 +38,11 @@ export const loginHint = (url: string, resource: string, scope?: string) => {
     .filter((granted) => granted !== "offline_access")
     .join(" ");
 
-  const administration = resource === administrationOf(url);
+  const administration = resource === administrationIdentifier(url);
   const resourceFlag = administration ? "" : ` --resource ${resource}`;
 
   const scopeFlag =
-    administration && (asked === undefined || asked === administrationScopes)
+    administration && (asked === undefined || asked === administrationScope)
       ? ""
       : ` --scope "${asked ?? "<scopes>"}"`;
 
@@ -50,7 +56,7 @@ const registeredRedirect = "http://127.0.0.1/callback";
 const approvalWindow = "5 minutes";
 
 /** When tokens issued now expire; an issuer that does not say is asked again next time. */
-const expiry = (tokens: oauth.TokenEndpointResponse) =>
+const expiry = (tokens: Tokens) =>
   new Date(Date.now() + (tokens.expires_in ?? 0) * 1000).toISOString();
 
 /**
@@ -122,7 +128,7 @@ export const login = Effect.fn("Cli.login")(function* (
 ) {
   const origin = new URL(url).origin;
   const server = yield* discover(origin);
-  const resource = Option.getOrElse(target, () => administrationOf(origin));
+  const resource = Option.getOrElse(target, () => administrationIdentifier(origin));
   const kept = yield* readCredentials();
   const previous = Option.filter(kept, (credentials) => credentials.url === origin);
 
@@ -133,22 +139,13 @@ export const login = Effect.fn("Cli.login")(function* (
 
   const { port, received } = yield* listen;
   const redirectUri = `http://127.0.0.1:${port}/callback`;
-  const verifier = oauth.generateRandomCodeVerifier();
-  const state = oauth.generateRandomState();
   const scope = withRefresh(asked);
 
-  const authorization = new URL(server.authorization_endpoint);
-
-  authorization.search = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope,
-    resource,
-    code_challenge: yield* Effect.promise(() => oauth.calculatePKCECodeChallenge(verifier)),
-    code_challenge_method: "S256",
+  const {
+    url: authorization,
     state,
-  }).toString();
+    verifier,
+  } = yield* authorizationRequest(server, clientId, redirectUri, scope, resource);
 
   yield* Effect.sync(() =>
     process.stderr.write(

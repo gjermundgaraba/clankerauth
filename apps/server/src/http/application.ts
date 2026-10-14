@@ -1,13 +1,14 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Layer, Schema } from "effect";
+import { documentPaths } from "@clankerauth/web/document-paths";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpPlatform, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { provider, respond } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { Database } from "../platform/sqlite.ts";
-import { ResourceCatalog } from "../resources/catalog.ts";
+import { exactlyOneResource, ResourceCatalog } from "../resources/catalog.ts";
 import { actionRoutes } from "./actions.ts";
 import { forwardAuthRoutes } from "../forward-auth/forward-auth.ts";
 import { requestPolicy } from "../platform/node-http.ts";
@@ -48,7 +49,7 @@ const cacheablePaths = new Set([
   "/.well-known/oauth-authorization-server/api/auth",
 ]);
 
-const spaRoutes = new Set(["/", "/resources", "/keys", "/login", "/consent", "/setup"]);
+const spaRoutes = new Set(documentPaths);
 
 const assetPath = /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css|woff2)$/;
 
@@ -103,7 +104,7 @@ export const application = (
             return json(
               {
                 error: "invalid_target",
-                error_description: "Exactly one configured resource is required",
+                error_description: exactlyOneResource,
               },
               400,
             );

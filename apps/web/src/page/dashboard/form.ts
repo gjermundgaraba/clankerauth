@@ -2,7 +2,7 @@ import {
   ClientAuthMethod,
   KeyPermissions,
   type Client,
-  type MachineKey,
+  type ApiKey,
   type ResourceSummary,
 } from "@clankerauth/admin-api";
 import { Array, Option, Record, Result, Schema, String, pipe } from "effect";
@@ -67,7 +67,7 @@ type ResourceView = typeof ResourceSummary.Type;
 
 type ClientView = typeof Client.Type;
 
-type KeyView = typeof MachineKey.Type;
+type KeyView = typeof ApiKey.Type;
 
 type Grants = typeof KeyPermissions.Type;
 

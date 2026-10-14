@@ -2,7 +2,6 @@ import { Schema, pipe } from "effect";
 import { Route } from "foldkit";
 import { defineRouteUnion, literal } from "foldkit/route";
 
-// The server serves the dashboard document at exactly these paths (apps/server/src/http/application.ts).
 export const AppRoute = defineRouteUnion({
   Clients: {},
   Resources: {},
@@ -16,7 +15,9 @@ export const AppRoute = defineRouteUnion({
 export type AppRoute = typeof AppRoute.Type;
 
 /** The dashboard's three screens, which share its listing. */
-export const DashboardRoute = AppRoute.subset(["Clients", "Resources", "Keys"]);
+const dashboardScreens = ["Clients", "Resources", "Keys"] as const;
+
+export const DashboardRoute = AppRoute.subset(dashboardScreens);
 
 export type DashboardRoute = typeof DashboardRoute.Type;
 
@@ -43,4 +44,4 @@ const routeParser = Route.oneOf(
 
 export const urlToAppRoute = Route.parseUrlWithFallback(routeParser, AppRoute.NotFound);
 
-export const isDashboardRoute = AppRoute.isAnyOf(["Clients", "Resources", "Keys"]);
+export const isDashboardRoute = AppRoute.isAnyOf(dashboardScreens);

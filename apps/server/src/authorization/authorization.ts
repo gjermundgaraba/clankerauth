@@ -7,7 +7,7 @@ import type { Sql } from "../platform/sqlite.ts";
  */
 export const resourceReference = (identifier: string) => `${referencePrefix}${identifier}`;
 
-/** A reference is this prefix and the identifier, so SQL can join grants to resources. */
+/** A reference is this prefix and the identifier, so SQL can join stored authorization to resources. */
 export const referencePrefix = "resource:";
 
 /** Pending authorization codes live in the verification table, outside the client's
@@ -19,7 +19,7 @@ export const clearCodes = (query: Sql, clientId: string | null, reference: strin
  * Clears stored authorization: a client's, a resource's, or one client's for one
  * resource. The provider has no bulk revocation API, so this stays local SQL.
  */
-export const clearGrants = Effect.fn("Grants.clear")(function* (
+export const clearAuthorization = Effect.fn("Authorization.clear")(function* (
   query: Sql,
   selection: { readonly clientId?: string; readonly resource?: string },
 ) {
