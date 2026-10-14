@@ -1,9 +1,8 @@
-import { administrationIdentifier } from "@clankerauth/admin-api";
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { returnToParameter, signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
 import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
-import { provider, respond } from "../issuer/errors.ts";
+import { provider, refusal, respond, unavailability } from "../issuer/errors.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
 import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
 import { seal, unseal } from "../issuer/cookies.ts";
@@ -35,7 +34,6 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       };
 
       const secret = Redacted.value(settings.secret);
-      const reserved = administrationIdentifier(settings.baseURL);
       const loginPage = new URL("/login", settings.baseURL);
 
       const cookieOptions = {
@@ -56,7 +54,9 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       };
 
       const session = (cookie: string) =>
-        provider(() => auth.api.getSession({ headers: new Headers({ cookie }) }));
+        provider(() => auth.api.getSession({ headers: new Headers({ cookie }) }), {
+          unavailable: unavailability,
+        });
 
       const check = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
@@ -73,7 +73,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         if (!returnTo) return json(400, "invalid_forwarded_request");
         const identifier = new URL(request.url, settings.baseURL).searchParams.get("resource");
 
-        const resource = identifier && identifier !== reserved && (yield* catalog.get(identifier));
+        const resource = identifier && (yield* catalog.application(identifier));
 
         if (!resource) return json(403, "unknown_resource");
         const sealed = request.cookies[forwardCookie];
@@ -147,11 +147,13 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
         const returnTo = (requested && allowedReturnURL(requested)) || loginPage;
 
-        const { headers } = yield* provider(() =>
-          auth.api.signOut({
-            headers: new Headers({ cookie: request.headers.cookie ?? "" }),
-            returnHeaders: true,
-          }),
+        const { headers } = yield* provider(
+          () =>
+            auth.api.signOut({
+              headers: new Headers({ cookie: request.headers.cookie ?? "" }),
+              returnHeaders: true,
+            }),
+          { refused: refusal, unavailable: unavailability },
         );
 
         return yield* HttpServerResponse.mergeCookies(

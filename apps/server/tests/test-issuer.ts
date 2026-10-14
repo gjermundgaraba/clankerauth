@@ -34,15 +34,10 @@ export const testSettings = (overrides: SettingsOverrides) =>
     ),
   );
 
-const cimdLayer = (transport: ClientMetadataResourceFetch | undefined) =>
-  transport === undefined
-    ? CimdTransport.layer
-    : Layer.succeed(CimdTransport, { fetch: transport });
-
 export const issuerGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
   Layer.unwrap(
     Effect.map(Settings, (settings) =>
-      issuerServices(Layer.succeed(Settings, settings), cimdLayer(cimdTransport)),
+      issuerServices(Layer.succeed(Settings, settings), CimdTransport.layerWith(cimdTransport)),
     ),
   );
 

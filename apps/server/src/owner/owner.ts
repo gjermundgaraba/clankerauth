@@ -1,12 +1,12 @@
-import { Context, Effect, Layer, Schema, Scope, Semaphore } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
 import {
-  InternalServerError,
   OwnerExists,
-  ProviderRefused,
+  type InternalServerError,
   type Owner,
+  type ProviderRefused,
 } from "@clankerauth/admin-api";
 import { Database, persisted } from "../platform/sqlite.ts";
-import { provider } from "../issuer/errors.ts";
+import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { providerSessionFor } from "./provider-session.ts";
@@ -28,10 +28,6 @@ export class OwnerAccount extends Context.Service<
       readonly email: string;
       readonly password: string;
     }) => Effect.Effect<string[], OwnerExists | ProviderRefused | InternalServerError>;
-    /** A temporary provider session for `userId`, deleted when the calling scope closes. */
-    readonly providerSession: (
-      userId: string,
-    ) => Effect.Effect<Headers, InternalServerError, Scope.Scope>;
     /** The owner as administration's caller, acting through a temporary provider session. */
     readonly caller: (userId: string, email: string, writable: boolean) => Owner;
   }
@@ -45,7 +41,7 @@ export class OwnerAccount extends Context.Service<
       const setup = yield* Semaphore.make(1);
       const providerSession = providerSessionFor(context, baseURL);
 
-      const find = Effect.fn("Owner.find")(function* () {
+      const find = Effect.fn("OwnerAccount.find")(function* () {
         const rows = yield* sql`SELECT id FROM user LIMIT 1`;
 
         if (!rows.length) return undefined;
@@ -55,32 +51,24 @@ export class OwnerAccount extends Context.Service<
 
       return {
         find,
-        create: Effect.fn("Owner.create")(
+        create: Effect.fn("OwnerAccount.create")(
           function* (input: { readonly email: string; readonly password: string }) {
+            // why: the provider refuses an existing email before its hook can answer a conflict
             if (yield* find()) return yield* Effect.fail(OwnerExists.of());
 
-            const { headers } = yield* provider(() =>
-              auth.api.signUpEmail({
-                body: { name: "Owner", email: input.email.trim(), password: input.password },
-                returnHeaders: true,
-              }),
-            ).pipe(
-              Effect.catchTag("ProviderFailure", (failure) =>
-                Effect.fail(
-                  failure.status === 409
-                    ? OwnerExists.of()
-                    : failure.status === 400 || failure.status === 422
-                      ? new ProviderRefused({ message: failure.message })
-                      : InternalServerError.of(failure),
-                ),
-              ),
+            const { headers } = yield* provider(
+              () =>
+                auth.api.signUpEmail({
+                  body: { name: "Owner", email: input.email.trim(), password: input.password },
+                  returnHeaders: true,
+                }),
+              { refused: refusal, conflict: OwnerExists.of },
             );
 
             return headers.getSetCookie();
           },
           (effect) => setup.withPermit(effect),
         ),
-        providerSession,
         caller: (userId, email, writable) => ({
           userId,
           email,

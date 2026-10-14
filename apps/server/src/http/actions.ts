@@ -42,7 +42,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
           revokeClient: clients.revoke,
           blockClient: clients.block,
           rotateClientSecret: clients.rotate,
-          setClientAccess: clients.setAccess,
+          setClientAccess: resources.setAccess,
           createResource: resources.create,
           updateResource: resources.update,
           deleteResource: resources.delete,

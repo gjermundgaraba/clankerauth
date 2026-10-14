@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, type RequestListener } from "node:http";
-import { ByteSize, Effect, Match, Option, Stream, pipe } from "effect";
+import { ByteSize, Effect, Match, Option, type Scope, Stream, pipe } from "effect";
 import {
   Headers,
   HttpBody,
@@ -12,6 +12,52 @@ export const peerHeader = "x-clankerauth-peer";
 
 export const createNodeServer = (listener?: RequestListener) =>
   createServer({ requestTimeout: 15000, headersTimeout: 10000 }, listener);
+
+export interface Listener {
+  readonly port: number;
+  /** Answers with `handler`, 503 until then. Closing the calling scope stops listening first. */
+  readonly serve: (handler: RequestListener) => Effect.Effect<void, never, Scope.Scope>;
+}
+
+const unavailable: RequestListener = (_incoming, outgoing) => {
+  outgoing.writeHead(503).end();
+};
+
+export const listen = Effect.fn("NodeHttp.listen")(function* (
+  port: number,
+  host?: string,
+): Effect.fn.Return<Listener, Error, Scope.Scope> {
+  let handler = unavailable;
+  const server = createNodeServer((incoming, outgoing) => handler(incoming, outgoing));
+
+  // why: stop admitting connections first, then interrupt open responses without waiting
+  const stop = Effect.callback<void>((resume) => {
+    server.close(() => resume(Effect.void));
+    server.closeAllConnections();
+  });
+
+  yield* Effect.acquireRelease(
+    Effect.callback<void, Error>((resume) => {
+      const failed = (error: Error) => resume(Effect.fail(error));
+      server.once("error", failed);
+      server.listen(port, host, () => {
+        server.off("error", failed);
+        resume(Effect.void);
+      });
+    }),
+    () => stop,
+  );
+
+  const address = server.address();
+
+  if (!(address instanceof Object)) return yield* Effect.die(new Error("Expected a TCP listener"));
+
+  return {
+    port: address.port,
+    serve: (next) =>
+      Effect.addFinalizer(() => stop).pipe(Effect.tap(() => Effect.sync(() => (handler = next)))),
+  };
+});
 
 const maxBodySize = ByteSize.bytes(65536);
 

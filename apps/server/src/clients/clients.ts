@@ -1,14 +1,11 @@
 import { Clock, Context, Effect, Layer, Schema, type Scope } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
-  administrationIdentifier,
   CurrentOwner,
-  ClientIsAutomatic,
   ClientNotFound,
-  InternalServerError,
+  type ClientIsAutomatic,
+  type InternalServerError,
   type ProviderRefused,
-  type ClientAccessInput,
-  type ClientAccessResult,
   type ClientBlockInput,
   type ClientCredentials,
   type ClientId,
@@ -20,12 +17,13 @@ import {
   type Connection,
 } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
-import { internal, provider, refused, refusedOrMissing } from "../issuer/errors.ts";
+import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { clearCodes, clearAuthorization, referencePrefix } from "../authorization/authorization.ts";
-import { isAutomatic, protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
+import { protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
 import { Resources } from "../resources/resources.ts";
+import { isAutomatic, requireManaged } from "./managed.ts";
 
 const decodeConnections = persisted(
   Schema.Array(
@@ -53,10 +51,6 @@ const ClientRow = Schema.Struct({
 });
 
 const decodeClients = persisted(Schema.Array(ClientRow));
-
-const clientOwners = persisted(
-  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) })),
-);
 
 type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
@@ -86,12 +80,6 @@ export class Clients extends Context.Service<
       ReadonlyArray<typeof Connection.Type>,
       InternalServerError
     >;
-    readonly setAccess: (
-      input: typeof ClientAccessInput.Type,
-    ) => Effect.Effect<
-      typeof ClientAccessResult.Type,
-      InternalServerError | Action.InvalidInput | Editing
-    >;
     /** Without a resource, every authorization the client holds. */
     readonly revoke: (
       input: typeof ClientRevokeInput.Type,
@@ -120,16 +108,6 @@ export class Clients extends Context.Service<
       const exists = Effect.fn("Clients.exists")(function* (clientId: string, query: Sql) {
         if (!(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`).length)
           return yield* Effect.fail(ClientNotFound.of(clientId));
-      });
-
-      const managedClient = Effect.fn("Clients.managed")(function* (clientId: string) {
-        const [client] = yield* clientOwners(
-          yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
-        );
-
-        if (!client) return yield* Effect.fail(ClientNotFound.of(clientId));
-
-        if (isAutomatic(client)) return yield* Effect.fail(ClientIsAutomatic.of(clientId));
       });
 
       const revoke = Effect.fn("Clients.revoke")(function* (
@@ -207,10 +185,7 @@ export class Clients extends Context.Service<
 
           return {
             clients,
-            resources: listed.resources.map((resource) => ({
-              ...resource,
-              builtIn: resource.identifier === administrationIdentifier(baseURL),
-            })),
+            resources: listed.resources,
             clientAccess: listed.clientAccess,
             connections: listed.connections,
             email,
@@ -224,8 +199,8 @@ export class Clients extends Context.Service<
 
           const headers = yield* providerHeaders;
 
-          const client = yield* refused(
-            provider(() =>
+          const client = yield* provider(
+            () =>
               // why: the plain endpoint drops skip_consent; the administrative one keeps it
               auth.api.adminCreateOAuthClient({
                 headers,
@@ -239,21 +214,15 @@ export class Clients extends Context.Service<
                   skip_consent: true,
                 },
               }),
-            ),
+            { refused: refusal },
           );
 
           yield* resources
-            .setAccess({ client_id: client.client_id, resources: input.resources })
+            .link(client.client_id, input.resources)
             .pipe(
-              Effect.catchTags({
-                ClientNotFound: (error) => Effect.fail(InternalServerError.of(error)),
-                ClientIsAutomatic: (error) => Effect.fail(InternalServerError.of(error)),
-              }),
               Effect.tapError(() =>
-                internal(
-                  provider(() =>
-                    auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
-                  ),
+                provider(() =>
+                  auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
                 ),
               ),
             );
@@ -261,12 +230,12 @@ export class Clients extends Context.Service<
           return client;
         }),
         update: Effect.fn("Clients.update")(function* (input: typeof ClientUpdateInput.Type) {
-          yield* managedClient(input.client_id);
+          yield* requireManaged(input.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          return yield* refusedOrMissing(() => ClientNotFound.of(input.client_id))(
-            provider(() =>
+          return yield* provider(
+            () =>
               auth.api.updateOAuthClient({
                 headers,
                 body: {
@@ -278,20 +247,18 @@ export class Clients extends Context.Service<
                   },
                 },
               }),
-            ),
+            { refused: refusal, missing: () => ClientNotFound.of(input.client_id) },
           );
         }),
         rotate: Effect.fn("Clients.rotate")(function* (body: typeof ClientId.Type) {
-          yield* managedClient(body.client_id);
+          yield* requireManaged(body.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          return yield* refusedOrMissing(() => ClientNotFound.of(body.client_id))(
-            provider(() => auth.api.rotateClientSecret({ headers, body })),
-          );
-        }),
-        setAccess: Effect.fn("Clients.setAccess")(function* (input: typeof ClientAccessInput.Type) {
-          return { clientAccess: yield* resources.setAccess(input) };
+          return yield* provider(() => auth.api.rotateClientSecret({ headers, body }), {
+            refused: refusal,
+            missing: () => ClientNotFound.of(body.client_id),
+          });
         }),
         revoke: ({ client_id, resource }) =>
           transaction((query) => revoke(client_id, resource, query)),

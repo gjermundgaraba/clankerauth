@@ -42,7 +42,7 @@ it.live.each([false, true])(
       yield* Effect.addFinalizer(() => Effect.sync(() => allowDeletion.resolve()));
 
       const request = yield* OwnerAccount.use((owners) =>
-        Effect.scoped(owners.providerSession(owner)),
+        Effect.scoped(owners.caller(owner, "owner@example.internal", true).providerHeaders),
       ).pipe(Effect.provideContext(services), Effect.exit, Effect.forkIn(scope));
 
       yield* Effect.promise(() => startedDeletion.promise);
@@ -70,7 +70,7 @@ it.live("cancellation releases a temporary provider session that lasts at most o
     const request = yield* Effect.forkChild(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* owners.providerSession(owner);
+          yield* owners.caller(owner, "owner@example.internal", true).providerHeaders;
           acquired.resolve();
 
           return yield* Effect.never;

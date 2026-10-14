@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Context, Effect, Exit, Fiber, FileSystem, Layer, Redacted, Schema, Scope } from "effect";
@@ -9,8 +8,8 @@ import {
   ApiKeys,
   CimdTransport,
   Clients,
-  createNodeServer,
   issuerServices,
+  listen,
   nodeHandler,
   OwnerAccount,
   ResourceCatalog,
@@ -142,46 +141,9 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
           resolve(dataDir),
         );
 
-  // why: listen first, as the issuer's URL needs the port; requests get 503 until it is up.
-  let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
-    outgoing.writeHead(503).end();
-  };
-
-  const server = createNodeServer((incoming, outgoing) => {
-    try {
-      options.onRequest?.({
-        method: incoming.method ?? "GET",
-        url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
-      });
-      serve(incoming, outgoing);
-    } catch {
-      if (outgoing.headersSent) outgoing.destroy();
-      else outgoing.writeHead(500).end("Request failed");
-    }
-  });
-
-  const stopListening = Effect.callback<void>((resume) => {
-    server.close(() => resume(Effect.void));
-    server.closeAllConnections();
-  });
-
-  yield* Effect.acquireRelease(
-    Effect.callback<void, Error>((resume) => {
-      const failed = (error: Error) => resume(Effect.fail(error));
-      server.once("error", failed);
-      server.listen(options.port ?? 0, "127.0.0.1", () => {
-        server.off("error", failed);
-        resume(Effect.void);
-      });
-    }),
-    () => stopListening,
-  );
-
-  const address = server.address();
-
-  if (!(address instanceof Object))
-    return yield* Effect.fail(new Error("Disposable issuer failed to bind a TCP port"));
-  const { port } = address;
+  // why: listen first, as the issuer's URL needs the port
+  const listener = yield* listen(options.port ?? 0, "127.0.0.1");
+  const { port } = listener;
 
   // why: a cookie shared across hosts needs a common parent domain, which an IP address lacks.
   const url =
@@ -203,13 +165,11 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     cookieDomain: options.cookieDomain,
   });
 
-  const cimdTransport =
-    options.cimdTransport === undefined
-      ? CimdTransport.layer
-      : Layer.succeed(CimdTransport, { fetch: options.cimdTransport });
-
   const issuer = yield* Layer.build(
-    issuerServices(Layer.succeed(Settings, settings), cimdTransport),
+    issuerServices(
+      Layer.succeed(Settings, settings),
+      CimdTransport.layerWith(options.cimdTransport),
+    ),
   );
 
   const account = Context.get(issuer, OwnerAccount);
@@ -217,12 +177,23 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
 
   const requests = yield* Scope.fork(yield* Effect.scope);
 
-  serve = yield* nodeHandler(staticRoot).pipe(
+  const handler = yield* nodeHandler(staticRoot).pipe(
     Effect.provide(issuer),
     Effect.provideService(Scope.Scope, requests),
   );
 
-  yield* Effect.addFinalizer(() => stopListening);
+  yield* listener.serve((incoming, outgoing) => {
+    try {
+      options.onRequest?.({
+        method: incoming.method ?? "GET",
+        url: new URL(incoming.url ?? "/", `http://127.0.0.1:${incoming.socket.localPort}`),
+      });
+      handler(incoming, outgoing);
+    } catch {
+      if (outgoing.headersSent) outgoing.destroy();
+      else outgoing.writeHead(500).end("Request failed");
+    }
+  });
 
   const owner = { email: identity.email, password: identity.password };
 

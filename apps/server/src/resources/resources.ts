@@ -1,27 +1,24 @@
 import { Clock, Context, Effect, Layer, Schema, Scope, Semaphore } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
-  administrationIdentifier,
-  ClientIsAutomatic,
-  ClientNotFound,
   CurrentOwner,
   ResourceNotFound,
   type ClientAccess,
   type ClientAccessInput,
+  type ClientAccessResult,
+  type ClientIsAutomatic,
+  type ClientNotFound,
   type InternalServerError,
   type ProviderRefused,
   type ResourceId,
 } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
-import { invalidInput, missing, provider, refused, refusedOrMissing } from "../issuer/errors.ts";
+import { invalidInput, provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
-import { Settings } from "../issuer/settings.ts";
 import { clearAuthorization } from "../authorization/authorization.ts";
+import { requireManaged } from "../clients/managed.ts";
 import {
   accessForClient,
-  automatic,
-  isAutomatic,
-  managed,
   protocolScopes,
   ResourceCatalog,
   scopesOf,
@@ -30,10 +27,6 @@ import {
 } from "./catalog.ts";
 
 const clientIds = persisted(Schema.Array(Schema.Struct({ clientId: Schema.String })));
-
-const clientOwners = persisted(
-  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) })),
-);
 
 const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
@@ -90,11 +83,17 @@ export class Resources extends Context.Service<
     readonly setAccess: (
       input: typeof ClientAccessInput.Type,
     ) => Effect.Effect<
-      ReadonlyArray<typeof ClientAccess.Type>,
+      typeof ClientAccessResult.Type,
       InternalServerError | Action.InvalidInput | ClientNotFound | ClientIsAutomatic
     >;
-    /** Publishes the catalog to the provider and rebuilds every client's copy of it. */
-    readonly synchronize: () => Effect.Effect<void, InternalServerError>;
+    /** `setAccess` for a client this issuer has just registered, so managed. */
+    readonly link: (
+      clientId: string,
+      identifiers: readonly string[],
+    ) => Effect.Effect<
+      ReadonlyArray<typeof ClientAccess.Type>,
+      InternalServerError | Action.InvalidInput
+    >;
   }
 >()("clankerauth/Resources") {
   static readonly layer = Layer.effect(
@@ -103,7 +102,6 @@ export class Resources extends Context.Service<
       const { sql, transaction } = yield* Database;
       const { auth, publishScopes } = yield* Issuer;
       const catalog = yield* ResourceCatalog;
-      const reservedIdentifier = administrationIdentifier((yield* Settings).baseURL);
       const mutating = yield* Semaphore.make(1);
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => mutating.withPermit(effect);
 
@@ -135,25 +133,52 @@ export class Resources extends Context.Service<
         );
 
         yield* publishScopes(scopes);
-        yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE ${automatic()} AND scopes IS NOT ${JSON.stringify(scopes)}`;
+        yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE userId IS NULL AND scopes IS NOT ${JSON.stringify(scopes)}`;
 
         for (const client of yield* clientIds(
-          yield* sql`SELECT clientId FROM oauthClient WHERE ${managed()} ORDER BY clientId`,
+          yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NOT NULL ORDER BY clientId`,
         ))
           yield* syncClient(sql, resources, client.clientId);
       });
 
-      const reserved = (identifier: string) =>
-        identifier === reservedIdentifier
-          ? Effect.fail(invalidInput(["identifier"], "The administration Resource is fixed"))
-          : Effect.void;
+      const reserved = Effect.fn("Resources.reserved")(function* (identifier: string) {
+        if ((yield* catalog.get(identifier))?.builtIn)
+          return yield* invalidInput(["identifier"], "The administration Resource is fixed");
+      });
 
       const providerHeaders = Effect.flatMap(CurrentOwner, (owner) => owner.providerHeaders);
 
       yield* synchronize();
 
+      const link = Effect.fn("Resources.link")(function* (
+        clientId: string,
+        identifiers: readonly string[],
+      ) {
+        const resources = yield* catalog.list();
+        yield* validateSelection(resources, identifiers);
+        const now = yield* Clock.currentTimeMillis;
+
+        yield* transaction((query) =>
+          Effect.gen(function* () {
+            const previous = (yield* accessForClient(clientId, query)).map((link) => link.resource);
+
+            for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
+              yield* query`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
+              yield* clearAuthorization(query, { clientId, resource: identifier });
+            }
+
+            for (const identifier of identifiers)
+              yield* query`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt)
+                VALUES (${crypto.randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
+            yield* syncClient(query, resources, clientId);
+          }),
+        );
+
+        return yield* accessForClient(clientId, sql);
+      }, serialized);
+
       return {
-        synchronize,
+        link,
         create: Effect.fn("Resources.create")(function* (input: ResourceValue) {
           const resource = yield* validateInput(input);
           const headers = yield* providerHeaders;
@@ -162,8 +187,8 @@ export class Resources extends Context.Service<
             yield* transaction((query) =>
               clearAuthorization(query, { resource: resource.identifier }),
             );
-          yield* refused(
-            provider(() =>
+          yield* provider(
+            () =>
               auth.api.adminCreateOAuthResource({
                 headers,
                 body: {
@@ -172,7 +197,7 @@ export class Resources extends Context.Service<
                   allowedScopes: [...protocolScopes, ...resource.scopes],
                 },
               }),
-            ),
+            { refused: refusal },
           );
           yield* synchronize();
 
@@ -183,8 +208,8 @@ export class Resources extends Context.Service<
           yield* reserved(resource.identifier);
           const headers = yield* providerHeaders;
 
-          yield* refusedOrMissing(() => ResourceNotFound.of(resource.identifier))(
-            provider(() =>
+          yield* provider(
+            () =>
               auth.api.adminUpdateOAuthResource({
                 headers,
                 params: resourceParams(resource.identifier),
@@ -193,7 +218,7 @@ export class Resources extends Context.Service<
                   allowedScopes: [...protocolScopes, ...resource.scopes],
                 },
               }),
-            ),
+            { refused: refusal, missing: () => ResourceNotFound.of(resource.identifier) },
           );
           yield* synchronize();
 
@@ -203,10 +228,10 @@ export class Resources extends Context.Service<
           yield* reserved(identifier);
           const headers = yield* providerHeaders;
 
-          yield* missing(() => ResourceNotFound.of(identifier))(
-            provider(() =>
+          yield* provider(
+            () =>
               auth.api.adminDeleteOAuthResource({ headers, params: resourceParams(identifier) }),
-            ),
+            { missing: () => ResourceNotFound.of(identifier) },
           );
           yield* transaction((query) => clearAuthorization(query, { resource: identifier }));
           yield* synchronize();
@@ -217,37 +242,10 @@ export class Resources extends Context.Service<
           client_id: clientId,
           resources: identifiers,
         }: typeof ClientAccessInput.Type) {
-          const [client] = yield* clientOwners(
-            yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
-          );
+          yield* requireManaged(clientId, sql);
 
-          if (!client) return yield* Effect.fail(ClientNotFound.of(clientId));
-
-          if (isAutomatic(client)) return yield* Effect.fail(ClientIsAutomatic.of(clientId));
-          const resources = yield* catalog.list();
-          yield* validateSelection(resources, identifiers);
-          const now = yield* Clock.currentTimeMillis;
-
-          yield* transaction((query) =>
-            Effect.gen(function* () {
-              const previous = (yield* accessForClient(clientId, query)).map(
-                (link) => link.resource,
-              );
-
-              for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
-                yield* query`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
-                yield* clearAuthorization(query, { clientId, resource: identifier });
-              }
-
-              for (const identifier of identifiers)
-                yield* query`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt)
-                  VALUES (${crypto.randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
-              yield* syncClient(query, resources, clientId);
-            }),
-          );
-
-          return yield* accessForClient(clientId, sql);
-        }, serialized),
+          return { clientAccess: yield* link(clientId, identifiers) };
+        }),
       };
     }),
   );
