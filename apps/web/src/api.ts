@@ -7,23 +7,14 @@ import { Array, Effect, Option, Schema, pipe } from "effect";
 
 // ISSUER
 
-/** The issuer's administration actions, each an Effect a Command runs. */
 export const issuer = ActionHttp.fetchClient(Http);
 
-/** The issuer's own errors, each of which names its subject: their sentence is `message`. */
 const isIssuerError = Schema.is(Schema.Union(errors));
 
-/** effect-actions' own errors, which every endpoint declares: their sentence is `message`. */
 const isBuiltIn = Schema.is(Action.BuiltIn);
 
 const UNKNOWN_FAILURE = "Request could not be completed. Please try again.";
 
-/**
- * The sentence the owner reads for a refused call. The contract's own refusals, and input the
- * issuer cannot serve, carry the sentence written for the owner; input that does not decode
- * carries each rule's sentence as an issue. Anything else reached the browser instead of the
- * issuer's answer, and reads the same either way.
- */
 const reasonOf = <E>(error: E): string => {
   if (isIssuerError(error)) {
     return error.message;
@@ -45,7 +36,6 @@ const reasonOf = <E>(error: E): string => {
   return UNKNOWN_FAILURE;
 };
 
-/** An issuer call whose failure, typed or not, is the owner's sentence. */
 export const toOwnerSentence = <A, E>(call: Effect.Effect<A, E>): Effect.Effect<A, string> =>
   call.pipe(
     Effect.mapError(reasonOf),
@@ -54,11 +44,9 @@ export const toOwnerSentence = <A, E>(call: Effect.Effect<A, E>): Effect.Effect<
 
 // SESSION
 
-// The provider client follows the OAuth redirects itself: after a sign-in that continues an
-// authorization, and after a consent decision.
+// why: the provider client follows OAuth redirects itself; a second navigation would cancel it
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
 
-/** Better Auth answers `{ data, error }` rather than rejecting; a rejection is the network. */
 const settled = <A, E>(
   call: () => Promise<Readonly<{ data: A | null; error: E | null }>>,
   failure: string,
@@ -69,7 +57,6 @@ const settled = <A, E>(
     ),
   );
 
-/** Whether this browser holds the owner's session. No session is an answer; an error is not. */
 export const isSignedIn: Effect.Effect<boolean, string> = Effect.tryPromise({
   try: () => auth.getSession(),
   catch: () => UNKNOWN_FAILURE,
@@ -90,15 +77,12 @@ export const signOut: Effect.Effect<void, string> = settled(
   "Sign-out failed. Please try again.",
 ).pipe(Effect.asVoid);
 
-/** The display name a client registered, which it chose itself. */
 export const publicClientName = (clientId: string): Effect.Effect<Option.Option<string>, string> =>
   settled(
     () => auth.oauth2.publicClient({ query: { client_id: clientId } }),
     "Sign in through your application to continue authorization.",
   ).pipe(Effect.map(({ client_name }) => Option.fromNullishOr(client_name)));
 
-/** Answers the authorization request on this page. On success the provider client follows the
- *  redirect to the client's callback; a second navigation would cancel it. */
 export const decideConsent = (
   accept: boolean,
   maybeScope: Option.Option<string>,

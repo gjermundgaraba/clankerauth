@@ -1,11 +1,9 @@
 import foldkitRecommended from "@foldkit/oxlint-plugin/recommended.json" with { type: "json" };
 import { defineConfig } from "vite-plus";
 
-// The dashboard is a Foldkit application: its source takes Foldkit's recommended rules, with
-// the plugin's own per-file overrides (the entry, the tests) scoped to the same files.
 const foldkitSource = "apps/web/src";
 
-// The JSON is untyped text; every level in it is "error" or "off".
+// why: the recommended JSON is untyped, and every level in it is "error" or "off".
 const level = (value: string): "error" | "off" => (value === "off" ? "off" : "error");
 
 const levels = (rules: Record<string, string | undefined>) =>
@@ -18,6 +16,22 @@ const levels = (rules: Record<string, string | undefined>) =>
 const within = (patterns: ReadonlyArray<string> = []) =>
   patterns.map((pattern) => `${foldkitSource}/${pattern}`);
 
+const proseComments = (options: {
+  readonly docBlocks?: "all";
+  readonly sectionHeaders?: true;
+}): ["error", typeof options] => ["error", options];
+
+const commentOverrides = [
+  {
+    files: ["packages/sdk/src/**", "packages/dev/src/**"],
+    rules: { "clankerauth/no-prose-comments": proseComments({ docBlocks: "all" }) },
+  },
+  {
+    files: [`${foldkitSource}/**`],
+    rules: { "clankerauth/no-prose-comments": proseComments({ sectionHeaders: true }) },
+  },
+];
+
 const foldkitOverrides = [
   { files: [`${foldkitSource}/**/*.ts`], rules: levels(foldkitRecommended.rules) },
   ...foldkitRecommended.overrides.map((override) => ({
@@ -25,8 +39,7 @@ const foldkitOverrides = [
     excludeFiles: within(override.excludeFiles),
     rules: levels(override.rules),
   })),
-  // The dashboard's fixtures read its listing as the tests do, answering the Query's fetches
-  // with the Query's own Messages.
+  // why: the fixtures answer the dashboard Query's fetches with its own Messages, as tests do.
   {
     files: [`${foldkitSource}/page/dashboard/dashboard.fixture.ts`],
     rules: levels({ "foldkit/no-child-message-construction-in-root": "off" }),
@@ -48,7 +61,7 @@ export default defineConfig({
       ".roo/**",
       ".windsurf/**",
       "tools/oxlint/anti-slop/**",
-      // The vendored Foldkit reference is read, never checked here.
+      // why: the vendored Foldkit reference is read, never checked here.
       "repos/**",
     ],
   },
@@ -76,6 +89,7 @@ export default defineConfig({
         name: "anti-slop-effect",
         specifier: "./tools/oxlint/anti-slop/effect/index.ts",
       },
+      { name: "clankerauth", specifier: "./tools/oxlint/clankerauth/index.ts" },
     ],
     rules: {
       "oxc/no-accumulating-spread": "error",
@@ -102,8 +116,9 @@ export default defineConfig({
       "anti-slop-effect/no-manual-tagged-construction": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
       "anti-slop-effect/prefer-effect-match": "error",
+      "clankerauth/no-prose-comments": "error",
     },
-    overrides: foldkitOverrides,
+    overrides: [...foldkitOverrides, ...commentOverrides],
   },
   run: { cache: true },
 });

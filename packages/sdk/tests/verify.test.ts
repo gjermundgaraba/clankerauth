@@ -40,13 +40,11 @@ it.live("API keys verify offline against one key list, with their actor, scopes 
     assert.deepEqual((yield* verifier.verifyToken(issuer.readOnlyKey)).scopes, ["notes:read"]);
     assert.equal(issuer.keyLists(), 1);
 
-    // An unknown key has no entry to find.
     assert(
       (yield* Effect.flip(verifier.verifyToken(`clankerauth_${"x".repeat(43)}`))) instanceof
         Unauthorized,
     );
 
-    // Revocation reaches a verifier with its next list; a new one reads it now.
     issuer.revoke(issuer.key);
     yield* verifier.verifyToken(issuer.key);
     assert(
@@ -59,7 +57,6 @@ it.live("API keys verify offline against one key list, with their actor, scopes 
     const listed = yield* verifierFor(issuer);
     assert.equal((yield* listed.verifyToken(expiring)).expiresAt, expiresAt.getTime());
 
-    // One key reaches several resources, with each resource's own scopes.
     const reports = "https://reports.internal/api";
 
     const both = issuer.apiKey({
@@ -70,7 +67,6 @@ it.live("API keys verify offline against one key list, with their actor, scopes 
     const elsewhere = yield* verifierFor(issuer, reports);
     assert.deepEqual((yield* elsewhere.verifyToken(both)).scopes, ["notes:read"]);
 
-    // A key with no grant on a resource is not that resource's credential at all.
     assert((yield* Effect.flip(elsewhere.verifyToken(issuer.readOnlyKey))) instanceof Unauthorized);
   }),
 );
@@ -113,8 +109,6 @@ it.live("JWTs bind exact issuer, audience, claims, lifetime and required scopes"
     yield* verifier.verifyToken(
       yield* sign(issuer, { aud: [resource, "https://reports.internal/api"] }),
     );
-    // A missing required scope is the one 403: it names only the scope that is missing, and
-    // the credential's actor, which decides whether the caller can step up to it.
     assert.deepEqual(
       yield* Effect.flip(verifier.verifyToken(yield* sign(issuer, { scope: "notes:write" }))),
       new InsufficientScope({
@@ -134,12 +128,10 @@ it.live("malformed credentials and outages remain distinct typed outcomes", () =
       "invalid,",
       "not.a.jwt",
       "eyJhbGciOiJIUzI1NiJ9.e30.AA",
-      // A token that does not name its key is refused before any key lookup.
       `${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
     ])
       assert((yield* Effect.flip(verifier.verifyToken(token))) instanceof Unauthorized);
     assert.equal(issuer.keyLists(), 0);
-    // Before any list is read, an unreachable issuer leaves a key undecided.
     issuer.fail(503);
     assert((yield* Effect.flip(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
     assert(

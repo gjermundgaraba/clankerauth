@@ -49,7 +49,6 @@ type PrivateKeyRegistration = {
   jwks?: { keys: object[] };
 };
 
-/** The web application, and the cookie of the owner signed in to its dashboard. */
 class Dashboard extends Context.Service<
   Dashboard,
   { readonly handle: TestHandler; readonly cookie: string }
@@ -130,13 +129,11 @@ const refresh = (client_id: string, refresh_token: string) =>
     ),
   );
 
-/** `mcpOAuthGrant` as the signed-in owner. */
 const grant = (options?: Parameters<typeof mcpOAuthGrant>[3]) =>
   Effect.flatMap(Dashboard, ({ handle, cookie }) =>
     Effect.promise(() => mcpOAuthGrant(handle, baseURL, cookie, options)),
   );
 
-/** The issuer's refusal of a token holding neither administration scope: step up to read. */
 const neitherScope = Schema.encodeSync(Action.Forbidden)(
   new Action.Forbidden({ message: "Insufficient scope", scopes: ["clankerauth:read"] }),
 );
@@ -146,7 +143,6 @@ it.live("anonymous discovery leads to PKCE owner consent, bearer administration,
     const { handle } = yield* Dashboard;
     const unauthorized = yield* mcp();
     expect(unauthorized.status).toBe(401);
-    // A client finds the issuer's discovery where the challenge points.
     const challenge = unauthorized.headers.get("www-authenticate");
     const metadataURL = /resource_metadata="([^"]+)"/.exec(challenge ?? "")?.[1];
     const metadata = yield* send(new Request(metadataURL ?? ""));
@@ -172,7 +168,6 @@ it.live("anonymous discovery leads to PKCE owner consent, bearer administration,
     const { client_id, tokens } = yield* grant();
     expect((yield* mcp(tokens.access_token)).status).toBe(200);
 
-    // The token grants MCP access only; browser administration still requires its own session.
     const http = yield* send(
       new Request(`${baseURL}/api/listClients`, {
         method: "POST",
@@ -239,7 +234,6 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
 
       return createClient(context);
     });
-    // Fail once the provider has created the client, so the handler has to remove it again.
     vi.spyOn(yield* Resources, "setAccess").mockReturnValue(
       Effect.fail(new InternalServerError({ message: "Request could not be completed" })),
     );
@@ -250,7 +244,7 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
       return deleted;
     });
 
-    // Serve and shut down the way main.ts does: the server's scope owns its request fibers.
+    // why: served as main.ts serves, so the server's scope owns its request fibers
     const scope = yield* Scope.make();
 
     const server = createNodeServer(
@@ -297,7 +291,7 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
         ),
       );
 
-      // Stateless MCP has no cancellation: the aborted call still owns its provider write.
+      // why: stateless MCP has no cancellation, so the aborted call still owns its write
       yield* Effect.sleep("50 millis");
       expect(stopped).toBe(false);
       release.resolve();
@@ -426,7 +420,6 @@ it.live(
     Effect.gen(function* () {
       const { handle } = yield* Dashboard;
 
-      // The client asks for both; the owner unticks write at consent.
       const { client_id, tokens } = yield* grant({
         granted: "offline_access clankerauth:read",
       });
@@ -458,7 +451,6 @@ it.live(
         ),
       );
 
-      // A change needs write: the refusal names it, for the client to step up to.
       const tools = yield* administrationTools(handle, baseURL, tokens.access_token);
 
       const escalation = yield* Effect.flip(
@@ -473,10 +465,8 @@ it.live(
         "clankerauth:write",
       ]);
 
-      // The refused call created nothing.
       expect((yield* json(yield* admin("listApiKeys", {}))).keys).toEqual([]);
 
-      // Write allows everything, listing included.
       const writeOnly = yield* grant({
         scope: "offline_access clankerauth:write",
       });
@@ -504,7 +494,6 @@ it.live(
         ),
       );
 
-      // A token with neither scope is refused at admission, naming read to step up to.
       const neither = yield* grant({ scope: "offline_access" });
       const refused = yield* mcp(neither.tokens.access_token);
 
@@ -554,7 +543,7 @@ it.live.each(["block", "revoke"] as const)(
 
         expect(denied.headers.get("location") ?? "").not.toContain("/consent");
       } else {
-        // Revocation clears stored grants; an already-issued access token lasts until it expires.
+        // why: revocation clears stored grants; an issued access token lives until it expires
         expect(afterwards.status).toBe(200);
       }
 
@@ -593,7 +582,6 @@ it.live("MCP protocol and owner-identity operations do not acquire provider sess
           headers: { authorization: `Bearer ${tokens.access_token}` },
         },
         async (client) => {
-          // Connecting initializes the protocol; listing tools needs no provider credentials either.
           expect((await client.listTools()).tools.length).toBeGreaterThan(0);
           expect(createSession).not.toHaveBeenCalled();
 
@@ -692,7 +680,7 @@ it.live(
           },
         ),
       );
-      // HTTP responses may resolve before the request Scope finishes its asynchronous release.
+      // why: a response may resolve before its request Scope finishes releasing
       yield* Effect.promise(() =>
         expect.poll(() => Effect.runPromiseWith(services)(sessions)).toEqual(before),
       );
@@ -745,7 +733,7 @@ it.live("offline MCP access and refresh survive browser-session expiry and clean
   }).pipe(Effect.provide(dashboardIssuer())),
 );
 
-// Mixed case also guards case-insensitive Basic scheme parsing.
+// why: mixed case also checks that the Basic scheme is matched case-insensitively
 it.live.each(["bAsIc", "private_key_jwt"])(
   "%s authentication without body client_id issues usable grants after revocation",
   (method) =>
@@ -860,13 +848,11 @@ it.live("an access token administers over HTTP at /api/owner, as it does over MC
 
     const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-    // Without a token, the challenge points at the resource's discovery, as `/mcp`'s does.
     const anonymous = yield* owner("listApiKeys", {});
     expect(anonymous.status).toBe(401);
     expect(anonymous.headers.get("www-authenticate")).toContain(
       `resource_metadata="${baseURL}/.well-known/oauth-protected-resource"`,
     );
-    // The dashboard's cookie is not a credential here.
     expect((yield* owner("listApiKeys", {}, { cookie, origin: baseURL })).status).toBe(401);
 
     const resource = {
@@ -895,7 +881,6 @@ it.live("an access token administers over HTTP at /api/owner, as it does over MC
       key.keyId,
     ]);
 
-    // A read-only token lists, and is refused a change.
     const reader = yield* grant({
       scope: "offline_access clankerauth:read",
     });
@@ -906,7 +891,6 @@ it.live("an access token administers over HTTP at /api/owner, as it does over MC
         .status,
     ).toBe(403);
 
-    // The issuer's public actions stay at `/api` alone.
     expect(
       (yield* owner("keyList", { resource: resource.identifier }, bearer(tokens.access_token)))
         .status,

@@ -12,13 +12,11 @@ interface WebMcpRequest {
   readonly headers?: Record<string, string>;
 }
 
-/** `ActionMcp.request` as a web `Request`, for a test to hand to a handler or to `fetch`. */
 export const webMcpRequest = ({ method, params, url, headers }: WebMcpRequest) =>
   Result.getOrThrow(
     HttpClientRequest.toWebResult(ActionMcp.request(method, params, { url, headers })),
   );
 
-/** The administration tools of `handler`'s `/mcp`, called as `token`'s owner. */
 export const administrationTools = (
   handler: (request: Request) => Promise<Response>,
   origin: string,
@@ -37,10 +35,6 @@ interface OfficialClientOptions {
   readonly headers: Record<string, string>;
 }
 
-/**
- * Connect an official client pinned to MCP 2026-07-28, the revision the endpoint serves,
- * and always close its transport after the callback.
- */
 export const withMcpClient = async <A>(
   { fetch, path, baseUrl, headers }: OfficialClientOptions,
   run: (client: Client) => Promise<A>,

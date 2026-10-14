@@ -29,8 +29,9 @@ import { Settings, type IssuerSettings } from "./settings.ts";
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
-/** Access tokens from OAuth flows and forward auth alike expire after fifteen minutes. */
 export const accessTokenLifetime = 15 * 60;
+
+export const refreshTokenReuseSeconds = 30;
 
 type RunCallback = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
@@ -42,7 +43,6 @@ const providerOptions = (
   runCallback: RunCallback,
   ownerExists: () => Promise<boolean>,
 ) => {
-  // The provider and forward auth both name the OAuth issuer, which is the provider's own default.
   const jwtOptions = {
     disableSettingJwtHeader: true,
     jwt: { issuer: `${settings.baseURL}/api/auth` },
@@ -53,7 +53,6 @@ const providerOptions = (
     loginPage: "/login",
     consentPage: "/consent",
     scopes: [...protocolScopes],
-    // The administration resource is fixed: every start re-applies its name and scopes.
     resources: [
       {
         identifier: administrationIdentifier(settings.baseURL),
@@ -98,16 +97,13 @@ const providerOptions = (
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
     clientRegistrationRequirePKCE: true,
-    // Client access is enforced by consentReferenceId above, where an automatic client
-    // may ask for any resource and a managed one only for its own. The provider's check
-    // would need every automatic client linked to every resource.
+    // why: consentReferenceId enforces access; the provider's check would need every client linked
     enforcePerClientResources: false,
     accessTokenExpiresIn: accessTokenLifetime,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
-    // A retried refresh inside the window replays the same replacement instead of revoking the family.
-    refreshTokenReuseInterval: 30,
+    refreshTokenReuseInterval: refreshTokenReuseSeconds,
     codeExpiresIn: 120,
-    // Setup creates the only account; any authenticated user is the owner.
+    // why: setup creates the only account, so any authenticated user is the owner
     clientPrivileges: async ({ user, action }) =>
       !!user && action !== "configure-client-credentials-scopes",
     resourcePrivileges: async ({ user }) => !!user,
@@ -138,8 +134,7 @@ const providerOptions = (
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
-        // The provider registers web clients by default, which forbids loopback callbacks.
-        // MCP clients commonly omit application_type while using loopback redirects.
+        // why: the provider defaults to web clients, which refuse MCP clients' loopback redirects
         if (ctx.path === "/oauth2/register") {
           const redirects = ctx.body.redirect_uris;
 
@@ -158,13 +153,11 @@ const providerOptions = (
           )
             ctx.body.application_type = "native";
 
-          // Automatic clients may ask for any resource with consent, so a registration's
-          // own resource list means nothing here; the provider would refuse it instead.
+          // why: consent picks the resources; the provider would refuse a registration's list
           delete ctx.body.resources;
         }
       }),
     },
-    // The owner's session is the single sign-on session across first-party clients.
     session: { expiresIn: 60 * 60 * 24 * 30, updateAge: 60 * 60 * 24 },
     advanced: { ipAddress: { ipAddressHeaders: [peerHeader] } },
     rateLimit: {
@@ -180,8 +173,7 @@ const providerOptions = (
         maximumNameLength: 100,
         enableSessionForAPIKeys: false,
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
-        // The plugin counts verifications through its own endpoint, which nothing calls:
-        // resource servers verify keys offline, against key lists.
+        // why: the plugin rate-limits its verify endpoint, which offline verification never calls
         rateLimit: { enabled: false },
       }),
       jwt(jwtOptions),
@@ -213,11 +205,6 @@ export type ProviderAuth = Auth<ProviderOptions>;
 /** The provider's resolved context: its adapter, cookie names and secret. */
 export type ProviderContext = Awaited<ProviderAuth["$context"]>;
 
-/**
- * The authorization server: Better Auth with its plugins, migrated and initialized on the
- * issuer's database. Its scope must outlive the HTTP server's: request fibers settle
- * before the connection closes.
- */
 export class Issuer extends Context.Service<
   Issuer,
   {
@@ -234,8 +221,7 @@ export class Issuer extends Context.Service<
       const { kysely } = yield* Database;
       const catalog = yield* ResourceCatalog;
       const { fetch } = yield* CimdTransport;
-      // Construction is application-scoped. Provider callbacks inherit these services,
-      // never a later request's identity or scope.
+      // why: provider callbacks get these services, never a later request's identity or scope
       const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
 
       const { options, oauthPlugin } = providerOptions(
@@ -244,7 +230,7 @@ export class Issuer extends Context.Service<
         catalog,
         fetch,
         runCallback,
-        // Runs inside the provider's sign-up transaction, so it must use that adapter.
+        // why: runs inside the provider's sign-up transaction, so it must use that adapter
         async () => {
           const adapter = await getCurrentAdapter((await auth.$context).adapter);
 
@@ -252,9 +238,7 @@ export class Issuer extends Context.Service<
         },
       );
 
-      // Migrations and provider initialization cannot be cancelled; they settle here so the
-      // layer never hands out a service whose database finalizer could outrun them. The
-      // provider is constructed after migrating, since its initialization reads the schema.
+      // why: migration and initialization cannot be cancelled, so the database must outlive them
       const { auth, context } = yield* Effect.fn("Auth.initialize")(function* () {
         const plan = yield* Effect.tryPromise(() => getMigrations(options));
 
@@ -262,7 +246,6 @@ export class Issuer extends Context.Service<
           return yield* Effect.fail(new Error("Database schema requires manual repair"));
         yield* Effect.tryPromise(() => plan.runMigrations());
         const auth = betterAuth(options);
-        // Provider initialization seeds the administration resource; publish the catalog after it.
         const context = yield* Effect.tryPromise(() => auth.$context);
 
         return { auth, context };

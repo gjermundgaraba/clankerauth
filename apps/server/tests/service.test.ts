@@ -11,7 +11,7 @@ import { issuerGeneration, testSettings, WebApplication } from "./test-issuer.ts
 import { administrationResource } from "./mcp-oauth-helper.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
-import { Issuer } from "../src/issuer/issuer.ts";
+import { Issuer, refreshTokenReuseSeconds } from "../src/issuer/issuer.ts";
 import { ResourceCatalog } from "../src/resources/catalog.ts";
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
@@ -169,7 +169,6 @@ const dynamicClient = Effect.gen(function* () {
   return yield* json(response);
 });
 
-/** An authorization request without a prompt parameter: the server decides about consent. */
 function unprompted(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
   const flow = authorization(clientId, resource, extra);
   const url = new URL(flow.path, baseURL);
@@ -301,7 +300,6 @@ describe("first-run setup", () => {
 
             expect(created.status, yield* text(created)).toBe(201);
             expect(yield* json(created)).toEqual({ created: true });
-            // Over plain HTTP, the provider's session cookie has no `__Secure-` prefix and is not `Secure`.
             expect(
               created.headers
                 .getSetCookie()
@@ -321,7 +319,6 @@ describe("first-run setup", () => {
             expect(yield* json(yield* request("/api/setupStatus", {}))).toEqual({
               required: false,
             });
-            // The setup cookie is the owner session; no separate sign-in is needed.
             expect((yield* request("/api/listClients", {})).status).toBe(200);
             expect((yield* request("/api/listClients", {}, { anonymous: true })).status).toBe(401);
             expect((yield* login()).status).toBe(200);
@@ -339,7 +336,6 @@ describe("first-run setup", () => {
             expect((yield* request("/api/listClients", {})).status).toBe(200);
             expect((yield* request("/api/setupOwner", { email, password })).status).toBe(409);
             const { auth } = yield* Issuer;
-            // The provider's own sign-up is closed by the user-creation hook once the account exists.
             expect(
               yield* rejection(() =>
                 auth.api.signUpEmail({
@@ -395,7 +391,7 @@ describe("first-run setup", () => {
           ),
         );
 
-        // Refused, whatever status the library answers the encoding with.
+        // why: the library's status for an unparseable encoding varies; any 4xx is a refusal
         expect(response.status, contentType).toBeGreaterThanOrEqual(400);
         expect(response.status, contentType).toBeLessThan(500);
         expect(yield* text(response)).not.toContain(password);
@@ -561,7 +557,6 @@ describe("owner boundary", () => {
       const signedIn = yield* login();
       expect(signedIn.status).toBe(200);
       expect(signedIn.headers.getSetCookie().join(";")).toContain("HttpOnly");
-      // The session cookie is the CSRF boundary for owner actions; Origin is not inspected.
       expect(signedIn.headers.getSetCookie().join(";")).toContain("SameSite=Lax");
       const session = yield* request("/api/auth/get-session");
       expect(session.status).toBe(200);
@@ -643,7 +638,6 @@ describe("OAuth boundaries and lifecycle", () => {
 
       expect(issued.status, yield* text(issued)).toBe(200);
       expect((yield* json(issued)).scope.split(" ")).toContain("notes:read");
-      // An explicit prompt still asks, and automatic clients always ask.
       const prompted = yield* request(authorization(app.client_id).path);
       expect(new URL(prompted.headers.get("location")!, baseURL).pathname).toBe("/consent");
       const dynamic = yield* dynamicClient;
@@ -833,8 +827,6 @@ describe("OAuth boundaries and lifecycle", () => {
 
         expect((yield* json(multiple)).error).toBe("invalid_target");
 
-        // A resource outside a managed client's access is refused by the issuer itself, as
-        // JSON rather than a redirect to the client, even for silent authorization.
         const unallowed = yield* request(
           authorization(app.client_id, resourceB, { prompt: "none" }).path,
         );
@@ -845,8 +837,6 @@ describe("OAuth boundaries and lifecycle", () => {
           error_description: "Client access is required",
         });
 
-        // A forced consent screen is shown before client access is checked; approving it
-        // for a resource the client lacks is refused before any consent or code exists.
         const forced = yield* request(authorization(app.client_id, resourceB).path);
         const consentQuery = new URL(forced.headers.get("location")!, baseURL).search;
 
@@ -897,7 +887,6 @@ describe("OAuth boundaries and lifecycle", () => {
             }),
           );
 
-          // Exactly the requested resource: no UserInfo or other downstream audience.
           expect(verified.payload.aud).toEqual(resourceA);
           expect(verified.payload.scope).toContain("notes:read");
           expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(900);
@@ -965,11 +954,9 @@ describe("OAuth boundaries and lifecycle", () => {
         expect(rotatedResponse.status, yield* text(rotatedResponse)).toBe(200);
         const rotated = yield* json(rotatedResponse);
         expect(rotated.refresh_token).not.toBe(original.refresh_token);
-        // A retried refresh inside the reuse window replays the same replacement.
         const replayed = yield* refresh(original.refresh_token, resourceA);
         expect(replayed.status, yield* text(replayed)).toBe(200);
         expect((yield* json(replayed)).refresh_token).toBe(rotated.refresh_token);
-        // Omitting resource reuses the resource bound to the refresh token.
         const bare = yield* refresh(rotated.refresh_token);
         expect(bare.status, yield* text(bare)).toBe(200);
         const next = yield* json(bare);
@@ -978,8 +965,7 @@ describe("OAuth boundaries and lifecycle", () => {
 
         yield* withFakeDate(
           Effect.gen(function* () {
-            vi.setSystemTime(Date.now() + 31_000);
-            // Outside the window, replaying a rotated token revokes the whole family.
+            vi.setSystemTime(Date.now() + (refreshTokenReuseSeconds + 1) * 1000);
             expect((yield* refresh(rotated.refresh_token, resourceA)).status).toBe(400);
             expect((yield* refresh(next.refresh_token, resourceA)).status).toBe(400);
           }),
@@ -1123,7 +1109,6 @@ describe("dashboard resources and client access", () => {
           );
         }
 
-        // RFC 8707 forbids a fragment: the issuer refuses it before the provider, naming the field.
         const fragment = yield* request("/api/createResource", {
           ...valid,
           identifier: "https://api.internal/#fragment",
@@ -1137,7 +1122,6 @@ describe("dashboard resources and client access", () => {
           },
         ]);
 
-        // A reserved protocol scope is well formed, so it is named where it was sent, as reserved.
         const reserved = yield* request("/api/createResource", {
           ...valid,
           scopes: ["read", " offline_access "],
@@ -1195,7 +1179,6 @@ describe("dashboard resources and client access", () => {
         identifier: `${baseURL}/`,
       });
 
-      // The caller named it, so the refusal names the field.
       expect(reserved.status).toBe(400);
       const refused = yield* json(reserved);
       expect(refused._tag).toBe("InvalidInput");
@@ -1203,8 +1186,6 @@ describe("dashboard resources and client access", () => {
         { path: ["identifier"], message: "The administration Resource is fixed" },
       ]);
 
-      // The provider bridge declares no refusal of its own. A catalogue row this issuer
-      // can no longer read is its own failure, answered exactly as the action API answers.
       yield* sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`;
 
       const authorize = yield* request(
@@ -1506,7 +1487,6 @@ describe("dashboard resources and client access", () => {
         const restoredCode = yield* exchange(app.client_id, retainedA, resourceA);
         expect(restoredCode.status).toBe(200);
         expect((yield* json(restoredCode)).scope.split(" ")).toContain("notes:read");
-        // Exchanging a code consumes it even when resource policy narrows its scopes.
         expect((yield* exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
       }).pipe(Effect.provide(signedInIssuer())),
   );
@@ -1530,7 +1510,6 @@ describe("dashboard resources and client access", () => {
       );
       expect((yield* refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
 
-      // Restoring access does not revive what removal revoked.
       expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
       expect((yield* refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
       expect((yield* exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
@@ -1592,7 +1571,7 @@ describe("dashboard resources and client access", () => {
         { concurrency: "unbounded" },
       );
 
-      // Linking wins, or loses at whichever provider step first sees the deleted resource.
+      // why: linking races the deletion, so it may lose at any provider step
       expect([200, 400, 404]).toContain(results[0]?.status);
       expect(results[1]?.status).toBe(200);
       const state = yield* listing();

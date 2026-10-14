@@ -63,10 +63,6 @@ const text = (response: Response) => Effect.promise(() => response.text());
 
 const keyList = (target = resource) => call("/api/keyList", { resource: target }, { cookie: "" });
 
-/**
- * What a resource server decides for this key once it reads its next key list: the
- * SDK's own verifier, cold, against this issuer in-process.
- */
 const verify = (key: string, target = resource) =>
   Effect.gen(function* () {
     const handle = yield* WebApplication;
@@ -155,7 +151,6 @@ it.live("hash-only storage, explicit scopes, one-time display and next-list disa
 
     const stored = yield* (yield* Database).sql`SELECT key FROM apikey WHERE id = ${key.keyId}`;
 
-    // The digest the provider stores is the one a resource server derives from the key.
     expect(stored[0]?.key).toBe(
       Buffer.from(yield* Effect.promise(() => KeyList.digest(key.key))).toString("base64url"),
     );
@@ -197,14 +192,12 @@ it.live(
       expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(KeyList.lifetime);
       const entries = Schema.decodeUnknownSync(KeyList.Claims)(claims).keys;
       expect(entries).toHaveLength(1);
-      // An entry is its lookup ID and a sealed box, nothing readable besides.
       expect(Object.keys(entries[0] ?? {}).sort()).toEqual(["id", "sealed"]);
       const sealed = Buffer.from(entries[0]?.sealed ?? "", "base64url").toString("latin1");
 
       for (const secret of [key.keyId, owner ?? "", "example:read"])
         expect(sealed).not.toContain(secret);
 
-      // Unknown resources and administration have no entries, and say nothing more.
       yield* (yield* Database)
         .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: ["example:read"], [`${origin}/`]: ["clankerauth:write"] })} WHERE id = ${key.keyId}`;
 
@@ -254,7 +247,6 @@ it.live("one key reaches several resources, each with only its own scopes", () =
     expect(yield* verify(key.key)).toMatchObject({ scopes: ["example:read"] });
     expect(yield* verify(key.key, host)).toMatchObject({ scopes: ["host:write"] });
 
-    // A key granted on one resource alone is refused by the other.
     const example = yield* create;
     expect(yield* verify(example.key, host)).toBe("Unauthorized");
   }).pipe(Effect.provide(apiKeysIssuer())),
@@ -322,7 +314,6 @@ it.live("creation rejects implicit, unknown and invalid expiry grants, naming th
         ["permissions", unknown],
       ],
       [{ name: "", permissions: { [resource]: ["example:read"] }, expiresAt: null }, ["name"]],
-      // The past decodes but cannot be served: the built-in 400, naming the field.
       [
         {
           name: "Bad",
@@ -358,16 +349,13 @@ it.live("expiry travels as an ISO timestamp all the way to key verification", ()
 
     expect(response.status).toBe(201);
     const created = yield* json(response);
-    // The plugin takes a lifetime in seconds and dates it itself, so the stored instant
-    // is the requested one shifted forward by however far apart those two clock reads
-    // are — at most this request's own duration, less the millisecond seconds round away.
+    // why: the plugin dates a lifetime in whole seconds itself, so expiry drifts by the request
     expect(Date.parse(created.expiresAt)).toBeGreaterThanOrEqual(requested - 1);
     expect(Date.parse(created.expiresAt)).toBeLessThanOrEqual(requested + (Date.now() - sent));
     expect(Date.parse(created.createdAt)).toBeLessThanOrEqual(Date.now());
     const expiresAt: string = created.expiresAt;
     const listed = yield* json(yield* call("/api/listApiKeys", {}));
     expect(listed.keys).toEqual([expect.objectContaining({ keyId: created.keyId, expiresAt })]);
-    // Sealed in the key's entry, so a resource server enforces it without the issuer.
     expect(yield* verify(created.key)).toMatchObject({ expiresAt: Date.parse(expiresAt) });
   }).pipe(Effect.provide(apiKeysIssuer())),
 );
@@ -431,7 +419,6 @@ it.live("MCP administration advertises no list changes and refuses subscriptions
     expect(discovery.status).toBe(200);
     expect((yield* json(discovery)).result.capabilities.tools).toEqual({ listChanged: false });
 
-    // The refusal is the stream's one event.
     const listen = yield* text(
       yield* mcp("subscriptions/listen", { notifications: { toolsListChanged: true } }),
     );
@@ -489,7 +476,6 @@ it.live("HTTP and MCP share administration contracts, writes, secrets and revoca
     });
     expect(yield* verify(key.key)).toBe("Unauthorized");
 
-    // Input that decodes but cannot be served is the built-in `InvalidInput`, naming the field.
     const refused = yield* Effect.flip(
       administration.createResource({ identifier: "not a URL", name: "Invalid", scopes: [] }),
     );
@@ -542,7 +528,6 @@ it.live(
       yield* (yield* Database)
         .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: [42] })} WHERE id = ${key.keyId}`;
 
-      // The broken key fails closed on its own; every other key verifies as before.
       expect(yield* verify(key.key)).toBe("Unauthorized");
       expect(yield* verify(intact.key)).toMatchObject({
         actor: { kind: "key", keyId: intact.keyId },
@@ -595,10 +580,9 @@ it.live("HTTP administration requires the owner session; MCP requires bearer aut
     expect((yield* call("/api/listClients", {}, { cookie: "" })).status).toBe(401);
     expect((yield* mcp("tools/list", {}, { cookie: "" })).status).toBe(200);
 
-    // The SameSite session cookie is the CSRF boundary; owner actions do not inspect Origin.
+    // why: the SameSite session cookie is the CSRF boundary, so owner actions ignore Origin
     for (const origin of ["https://evil.example", ""])
       expect((yield* call("/api/listClients", {}, { origin })).status).toBe(200);
-    // MCP validates Origin as the protocol requires.
     expect((yield* mcp("tools/list", {}, { origin: "https://evil.example" })).status).toBe(403);
 
     const key = yield* create;

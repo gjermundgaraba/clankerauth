@@ -6,19 +6,15 @@ import { Message } from "./message.ts";
 import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
 
-/** The listing's reads in order, by the request number each answers: the dashboard's first
- *  read on opening, then each read again. */
 export const FIRST_READ = 1;
 
 export const SECOND_READ = 2;
 
 export const THIRD_READ = 3;
 
-/** What a read of the listing answers. */
 export const readOf = (generation: number, data: Listing) =>
   listingQuery.Message.CompletedFetch({ generation, result: Result.succeed(data) });
 
-/** A read of the listing the issuer refused. */
 export const failedReadOf = (generation: number) =>
   listingQuery.Message.CompletedFetch({
     generation,
@@ -28,7 +24,6 @@ export const failedReadOf = (generation: number) =>
 const settled = (model: Model, message: typeof listingQuery.Message.Type): Model =>
   update(model, Message.GotListingMessage({ message })).model;
 
-/** The dashboard reading its listing again, with the last read on show. */
 export const rereading = (model: Model): Model =>
   modifyFields(model, { listing: (query) => listingQuery.revalidate(query).model });
 
@@ -62,10 +57,8 @@ export const listing = Schema.decodeUnknownSync(Listing)({
 
 export const listed = settled(init().model, readOf(FIRST_READ, listing));
 
-/** `listed` after a read again that failed: the listing shows, out of date. */
 export const staleListed = settled(rereading(listed), failedReadOf(SECOND_READ));
 
-/** The dashboard whose first read failed. */
 export const unlisted = settled(init().model, failedReadOf(FIRST_READ));
 
 export const catalog = Schema.decodeUnknownSync(Listing)({

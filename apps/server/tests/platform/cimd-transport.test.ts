@@ -3,7 +3,6 @@ import { Effect } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { CimdTransport, createAbortAwareTransport } from "../../src/platform/cimd-transport.ts";
 
-/** What the production transport rejects `url` with. */
 const rejection = (url: string) =>
   Effect.gen(function* () {
     const { fetch } = yield* CimdTransport;
@@ -51,7 +50,7 @@ describe("abort-aware CIMD transport", () => {
     await rejected;
     stalled.reject(new Error("DNS eventually failed"));
     await stalled.promise.catch(() => {});
-    // Flush the wrapper's settlement continuation.
+    // why: the wrapper releases capacity in a continuation one microtask after settlement
     await Promise.resolve();
     transport.mockImplementation(() => Promise.resolve(new Response("recovered")));
     expect(await (await fetch(url)).text()).toBe("recovered");

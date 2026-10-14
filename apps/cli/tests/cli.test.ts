@@ -19,11 +19,7 @@ interface Run {
   readonly stderr: string;
 }
 
-/**
- * An issuer of the test's own and its owner's dashboard session, which approves a sign-in
- * as the browser would. Each test has its own: the issuer limits token requests to twenty
- * a minute, which a shared one would reach.
- */
+// why: one issuer per test, as the issuer allows twenty token requests a minute.
 const startOwner = async () => {
   const issuer = await startDisposableIssuer({
     resources: [notes],
@@ -52,11 +48,10 @@ type Owner = Awaited<ReturnType<typeof startOwner>>;
 
 const Redirect = Schema.Struct({ url: Schema.String });
 
-/** Approve an authorization URL as the signed-in owner's browser, through consent. */
 const approve = async ({ issuer, cookie }: Owner, authorization: string) => {
   const authorize = await fetch(authorization, { headers: { cookie }, redirect: "manual" });
 
-  // A script's request is answered with the redirect as JSON, a browser's with a 302.
+  // why: the issuer answers a script's request with the redirect as JSON, a browser's with a 302.
   const location =
     authorize.status === 302
       ? (authorize.headers.get("location") ?? "")
@@ -76,11 +71,9 @@ const approve = async ({ issuer, cookie }: Owner, authorization: string) => {
 
   const callback = await fetch(Schema.decodeUnknownSync(Redirect)(await consent.json()).url);
   expect(callback.status).toBe(200);
-  // The page claims nothing: the sign-in is decided after the browser has it.
   expect(await callback.text()).toContain("Return to the terminal.");
 };
 
-/** The sign-in to `resource` among the kept ones; a test fails without it. */
 const signInTo = (credentials: Credentials, resource: string): SignIn => {
   const found = credentials.signIns.find((held) => held.resource === resource);
 
@@ -89,13 +82,11 @@ const signInTo = (credentials: Credentials, resource: string): SignIn => {
   return found;
 };
 
-/** The audience a printed access token was issued for. */
 const audience = (jwt: string) =>
   Schema.decodeUnknownSync(
     Schema.Struct({ aud: Schema.Union([Schema.String, Schema.Array(Schema.String)]) }),
   )(JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString())).aud;
 
-/** A CLI with a config directory of its own, signed out. */
 const home = async () => {
   const config = await mkdtemp(join(tmpdir(), "clankerauth-cli-"));
 
@@ -103,10 +94,6 @@ const home = async () => {
 
   const file = join(config, "clankerauth", "credentials.json");
 
-  /**
-   * Run the packed CLI. `onStderr` sees its stderr as it arrives, which is where `login`
-   * prints the approval URL while it waits.
-   */
   const run = (args: ReadonlyArray<string>, onStderr?: (text: string, stop: () => void) => void) =>
     new Promise<Run>((resolve, reject) => {
       const child = spawn(process.execPath, [binary, ...args], {
@@ -127,14 +114,13 @@ const home = async () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-  /** Sign in at `owner`'s issuer with the packed CLI, approving the URL it prints. */
   const login = async (owner: Owner, ...flags: ReadonlyArray<string>) => {
     let approving: Promise<void> | undefined;
 
     const result = await run(["login", owner.issuer.url, ...flags], (stderr, stop) => {
       const url = /https?:\/\/\S+\/oauth2\/authorize\S+/.exec(stderr)?.[0];
 
-      // A failed approval would leave the sign-in waiting for its whole window.
+      // why: a failed approval would otherwise leave `login` waiting out its approval window.
       if (url !== undefined && approving === undefined)
         approving = approve(owner, url).catch((error: Error) => {
           stop();
@@ -150,7 +136,6 @@ const home = async () => {
   const stored = async () =>
     Schema.decodeUnknownSync(Schema.fromJsonString(Credentials))(await readFile(file, "utf8"));
 
-  /** Mark every kept access token expired, so the next command refreshes it. */
   const expireAll = async () => {
     const credentials = await stored();
 
@@ -170,7 +155,6 @@ const home = async () => {
   return { file, run, login, stored, expireAll };
 };
 
-/** An issuer, and a CLI signed in to its administration. */
 const signedIn = async (...flags: ReadonlyArray<string>) => {
   const owner = await startOwner();
   const cli = await home();
@@ -181,7 +165,6 @@ const signedIn = async (...flags: ReadonlyArray<string>) => {
   return { owner, cli };
 };
 
-/** Refresh `refreshToken` at the token endpoint directly, as a revoked one is refused. */
 const refreshDirectly = (
   { issuer }: Owner,
   clientId: string,
@@ -211,7 +194,7 @@ test("an administration command before signing in says how to sign in", async ()
   expect(result.stdout).toBe("");
 });
 
-test("login signs in through the owner's approval and keeps the sign-in to its owner", async () => {
+test("login signs in through the owner's approval and keeps its tokens in an owner-only file, not its output", async () => {
   const owner = await startOwner();
   const cli = await home();
   const result = await cli.login(owner);
@@ -225,7 +208,6 @@ test("login signs in through the owner's approval and keeps the sign-in to its o
 
   const credentials = await cli.stored();
   expect(credentials.url).toBe(owner.issuer.url);
-  // Tokens stay in the file: neither stream shows them.
   expect(result.stdout + result.stderr).not.toContain(
     signInTo(credentials, owner.administration).refreshToken,
   );
@@ -323,7 +305,6 @@ test("a sign-in to another resource is kept beside administration's, and `token`
 
   const notesToken = await cli.run(["token", "--resource", notes.identifier]);
   expect(notesToken.code, notesToken.stderr).toBe(0);
-  // The token alone, so `$(clankerauth token …)` is the bearer.
   expect(notesToken.stdout).toBe(`${signInTo(await cli.stored(), notes.identifier).accessToken}\n`);
   expect(audience(notesToken.stdout.trim())).toContain(notes.identifier);
 
@@ -331,7 +312,6 @@ test("a sign-in to another resource is kept beside administration's, and `token`
   expect(administrationToken.code, administrationToken.stderr).toBe(0);
   expect(audience(administrationToken.stdout.trim())).toContain(owner.administration);
 
-  // Administration still works through its own sign-in.
   expect((await cli.run(["list-api-keys"])).code).toBe(0);
 });
 
@@ -348,7 +328,6 @@ test("`token` refreshes each sign-in on its own", async () => {
   expect(signInTo(after, notes.identifier).refreshToken).not.toBe(
     signInTo(before, notes.identifier).refreshToken,
   );
-  // Administration's was not asked for, so its refresh token is the one it had.
   expect(signInTo(after, owner.administration).refreshToken).toBe(
     signInTo(before, owner.administration).refreshToken,
   );

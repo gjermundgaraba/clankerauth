@@ -134,9 +134,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     });
   }, Effect.scoped);
 
-  // One read serves every key identifier until it expires, or for the cooldown if it
-  // failed, so an unknown `kid` in an unauthenticated request never becomes traffic at
-  // the issuer. A read every caller gave up on is dropped, and the next caller reads again.
   const keys = yield* Effect.cachedWithTTL(document(), (exit) =>
     Exit.isSuccess(exit) ? documentLifetime : cooldown,
   );
@@ -146,7 +143,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
     return yield* Effect.tryPromise({
       try: () => resolve({ alg: "EdDSA", kid }),
-      // Selecting from fetched keys does no I/O: every failure is the credential's.
       catch: unauthorized,
     });
   });
@@ -163,8 +159,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       catch: unauthorized,
     });
 
-    // The issuer always names its key, so key selection is never ambiguous. Reject other
-    // documents before doing provider I/O; JOSE still enforces its algorithm allowlist.
+    // why: refused before any JWKS read, so an unauthenticated request causes no issuer traffic.
     if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
     const key = yield* signingKey(header.kid);
     const now = yield* Clock.currentTimeMillis;
@@ -178,7 +173,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
           typ,
           currentDate: new Date(now),
         }),
-      // Verification against a resolved key does no I/O either.
       catch: unauthorized,
     });
 
@@ -198,7 +192,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       subject: claims.sub,
       scopes: claims.scope.split(" ").filter(Boolean),
       actor: { kind: "client", clientId: claims.client_id },
-      // `jwtVerify` already checked this claim against the current time.
       expiresAt: claims.exp * 1000,
     } satisfies Principal;
   });
@@ -220,7 +213,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       Effect.mapError((cause) => new ProviderUnavailable({ operation: "key-list.decode", cause })),
     );
 
-    // A list that does not verify is no list: the held one keeps deciding.
     const rejected = (cause: unknown) =>
       new ProviderUnavailable({ operation: "key-list.verify", cause });
 
@@ -239,8 +231,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     } satisfies Keys;
   }, Effect.scoped);
 
-  // While a list is held, a failing issuer is otherwise invisible until that list runs
-  // out. Reads are logged when they start failing and when they recover, not per retry.
   const failing = yield* Ref.make(false);
 
   const readList = yield* Effect.cachedWithTTL(
@@ -268,8 +258,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     cooldown,
   );
 
-  // The list is verified once, when it is read. Holding its entries, not the document,
-  // is what lets keys verify through an outage that has already taken JWKS with it.
   const held = yield* Ref.make<Keys | undefined>(undefined);
 
   /** The list read now, or within the cooldown, or else the held one, while inside its window. */
@@ -279,7 +267,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     if (Result.isSuccess(fetched)) yield* Ref.set(held, fetched.success);
     const list = yield* Ref.get(held);
 
-    // A list is held past its own check, so the window is checked on every use.
     if (list !== undefined && list.expiresAt > (yield* Clock.currentTimeMillis)) return list;
 
     return yield* Result.isFailure(fetched)
@@ -297,7 +284,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const now = yield* Clock.currentTimeMillis;
     const current = yield* Ref.get(held);
 
-    // One read decides the keys it names for a minute, without the issuer.
     const list =
       current !== undefined &&
       now - current.readAt < Duration.toMillis(keyListRefresh) &&
@@ -305,15 +291,12 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
         ? current
         : yield* latest;
 
-    // A key it does not name may have been created since, so the list is read again,
-    // unless a read answered within the cooldown and there is nothing new to look in.
     const grant =
       (yield* open(list)) ??
       (yield* Effect.flatMap(latest, (next) =>
         next === list ? Effect.succeed(undefined) : open(next),
       ));
 
-    // No entry is the same case as a token for another audience: not this resource's.
     if (grant === undefined) return yield* unauthorized();
 
     if (grant.expiresAt !== null && grant.expiresAt <= (yield* Clock.currentTimeMillis))

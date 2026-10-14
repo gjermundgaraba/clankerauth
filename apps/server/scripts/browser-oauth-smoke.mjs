@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { createServer as createViteServer } from "vite";
 
-// Run the built application against a disposable database and a real foreign-origin browser.
 const directory = await mkdtemp(join(tmpdir(), "clankerauth-browser-oauth-"));
 
 const fixture = await createViteServer({
@@ -96,7 +95,7 @@ try {
 
       if (ready) break;
     } catch {
-      // Startup readiness polling; the listener may not yet be bound.
+      // why: the listener may not be bound yet
     }
 
     await setTimeout(50);
@@ -117,7 +116,6 @@ try {
   page.setDefaultTimeout(15_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  // The issuer's pages run under its Content Security Policy; anything it refuses is a defect.
   const policyViolations = [];
   page.on("console", (message) => {
     if (message.type() === "error" && message.text().includes("Content Security Policy")) {
@@ -134,7 +132,6 @@ try {
   await page.waitForFunction(() => Boolean(window.mcpTest));
   const discovery = await page.evaluate(() => window.mcpTest.inspectDiscovery());
   assert.equal(discovery.status, 401);
-  // The issuer's CORS policy exposes the challenge to a browser client.
   assert.ok(discovery.challenge);
   assert.equal(discovery.resource.resource, new URL("/", issuer).href);
   assert.deepEqual(discovery.resource.scopes_supported, [

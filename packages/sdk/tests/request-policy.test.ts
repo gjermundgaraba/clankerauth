@@ -14,7 +14,6 @@ const allows = (target: string, host: string | undefined, origin?: string): bool
 test("the Host header must equal the public host, as sent", () => {
   assert.equal(allows("/api", "notes.example"), true);
   assert.equal(allows("/api", "other.example"), false);
-  // A forwarded header cannot redefine the app's identity, and no normalization widens it.
   assert.equal(allows("/api", "notes.example:443"), false);
   assert.equal(allows("/api", "NOTES.EXAMPLE"), false);
   assert.equal(allows("/api", undefined), false);
@@ -108,7 +107,6 @@ test("the middleware refuses before any handler runs and lets exempt paths throu
     assert.equal((await call("/api", { host: "notes.example", origin: "wtf://app" })).status, 200);
     assert.equal(handled, 2);
 
-    // A container probe carries neither header.
     assert.equal((await call("/healthz", {})).status, 200);
   } finally {
     await web.dispose();

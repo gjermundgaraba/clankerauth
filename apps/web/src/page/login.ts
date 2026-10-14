@@ -1,3 +1,4 @@
+import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
 import { Boolean, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -33,8 +34,6 @@ export const Problem = defineTaggedUnion({
 
 type Problem = typeof Problem.Type;
 
-/** Where a sign-in goes on to: back into an OAuth authorization, which the provider client
- *  continues itself, or to a page of this origin. */
 export const Continuation = defineTaggedUnion({
   ContinueAuthorization: {},
   RedirectTo: { destination: Schema.String },
@@ -70,11 +69,6 @@ export type Message = typeof Message.Type;
 
 // INIT
 
-/**
- * A sign-in for the address's query. `rd` is where to go once signed in (forward auth names
- * the protected page), and `fallback` where to go without one; `sig` marks a sign-in inside
- * an OAuth authorization, which the provider client continues itself.
- */
 export const init = (search: string, fallback: string): Model => {
   const query = new URLSearchParams(search);
 
@@ -86,7 +80,7 @@ export const init = (search: string, fallback: string): Model => {
     maybeProblem: Option.none(),
     continuation: query.has("sig")
       ? Continuation.ContinueAuthorization()
-      : Continuation.RedirectTo({ destination: query.get("rd") ?? fallback }),
+      : Continuation.RedirectTo({ destination: query.get(returnToParameter) ?? fallback }),
   };
 };
 
@@ -104,8 +98,7 @@ export const SignIn = Command.define("SignIn", {
     ),
 });
 
-// Forward auth continues on this origin, which validates the real destination; anywhere else
-// is not this issuer's to send the owner to.
+// why: never redirect off this origin; forward auth continues here and validates the destination
 export const ContinueAfterSignIn = Command.define("ContinueAfterSignIn", {
   args: { destination: Schema.String },
   messages: [Message.CompletedContinueAfterSignIn],
@@ -120,10 +113,6 @@ export const ContinueAfterSignIn = Command.define("ContinueAfterSignIn", {
     ).pipe(Effect.as(Message.CompletedContinueAfterSignIn())),
 });
 
-/**
- * The navigation that follows a sign-in, which an owner already signed in takes at once.
- * Inside an authorization there is none: only signing in through the form continues it.
- */
 export const continuationOf = (model: Model) =>
   Continuation.match(model.continuation, {
     ContinueAuthorization: () => Option.none(),
@@ -173,8 +162,6 @@ export const update = (model: Model, message: Message) =>
       model: modifyFields(model, { isPasswordShown: Boolean.not }),
     }),
     SubmittedSignIn: () => (model.isSigningIn ? { model } : submitted(model)),
-    // NOTE: inside an authorization the provider client has already followed the redirect,
-    // and a second navigation would cancel it, so the button stays busy until the page goes.
     SucceededSignIn: () =>
       Option.match(continuationOf(model), {
         onNone: () => ({ model }),

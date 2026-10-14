@@ -11,32 +11,24 @@ import { startFakeIssuer, type FakeIssuerOptions } from "../src/testing.ts";
 
 export const publicUrl = "http://127.0.0.1:7337";
 
-/** A refusal as every effect-actions surface sends it. */
 export const sent = Schema.encodeSync(Schema.toCodecJson(Action.Refusal));
 
 export const withHttp = <A, E>(
   effect: Effect.Effect<A, E, import("effect/http/HttpClient").HttpClient>,
 ) => effect.pipe(Effect.provide(FetchHttpClient.layer));
 
-/**
- * How a caller proves it is a principal of the tests' resource, as a binding names it, and
- * what its verifier fails with when the issuer cannot be reached.
- */
 export const Login = Authentication.make("notes.Login", CurrentPrincipal, {
   error: ProviderUnavailable,
 });
 
-/** The resource the tests declare: one service, built per test by `Notes.layer(options)`. */
 export const Notes = Resource.make(Login, {
   scopes: ["notes:read", "notes:write"],
   required: "notes:read",
 });
 
-/** The application's own rule, which its implementations state: a write needs `notes:write`. */
 export const authorize = (action: Action.Any) =>
   action.readOnly ? Effect.void : Notes.requires("notes:write");
 
-/** A resource of `scopes`, built from `options`, for a test to call directly. */
 export const resourceOf = <const Scope extends string>({
   scopes,
   required,
@@ -47,14 +39,12 @@ export const resourceOf = <const Scope extends string>({
   return Effect.provide(Effect.service(declared.service), declared.layer(options));
 };
 
-/** The published fake issuer, closed with the test's scope. */
 export const fakeIssuer = (options: FakeIssuerOptions) =>
   Effect.acquireRelease(
     Effect.promise(() => startFakeIssuer(options)),
     (fake) => Effect.promise(() => fake.close()),
   );
 
-/** The published fake issuer, with a read-write key (`key-1`) and a read-only key (`key-2`). */
 export const startIssuer = (resource: string) =>
   Effect.map(fakeIssuer({ resource, scopes: ["notes:read", "notes:write"] }), (fake) => ({
     ...fake,
@@ -62,15 +52,12 @@ export const startIssuer = (resource: string) =>
     readOnlyKey: fake.apiKey({ [resource]: ["notes:read"] }),
   }));
 
-/** A web handler built by `build`, disposed with the test's scope. */
 export const webHandler = <Web extends { readonly dispose: () => Promise<void> }>(
   build: () => Web,
 ) => Effect.acquireRelease(Effect.sync(build), (web) => Effect.promise(() => web.dispose()));
 
-/** A response's JSON body. */
 export const json = (response: Response) => Effect.promise(() => response.json());
 
-/** A key list as the issuer signs it: sealed entries, its `typ`, and the format's lifetime. */
 export const signList = async (
   privateKey: CryptoKey,
   issuer: string,

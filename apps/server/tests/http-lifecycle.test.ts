@@ -66,7 +66,7 @@ it.live("shutdown waits for a provider request to settle after its client discon
         async (request) => {
           entered.resolve(request);
           await release.promise;
-          // Work still owned by the provider must not encounter a closed database.
+          // why: this query fails if shutdown closed the database under the provider's work
           await Effect.runPromiseWith(services)(Database.use(({ sql }) => sql`SELECT 1`));
 
           return Response.json({ keys: [] });
@@ -104,7 +104,7 @@ it.live("disconnect does not abandon an uncancellable SDK call in an action rout
       const destroy = vi.spyOn(Context.get(services, Database).kysely, "destroy");
       const { context } = Context.get(services, Issuer);
       const hash = context.password.hash;
-      // Sign-up hashes inside the provider's transaction, which holds the connection.
+      // why: sign-up hashes inside the provider's transaction, so stalling here holds it open
       vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
         entered.resolve();
         await release.promise;
@@ -137,7 +137,6 @@ it.live("disconnect does not abandon an uncancellable SDK call in an action rout
       release.resolve();
       yield* Fiber.join(closing);
       expect(destroy).toHaveBeenCalledTimes(1);
-      // The disconnected request still committed the account before the database closed.
       const stored = new DatabaseSync(database);
       expect(stored.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 1 });
       stored.close();
@@ -163,7 +162,6 @@ it.live(
           if (new URL(request.url).pathname.endsWith("/jwks")) {
             entered.resolve();
             await release.promise;
-            // Work still owned by the provider must not encounter a closed database.
             await Effect.runPromiseWith(services)(Database.use(({ sql }) => sql`SELECT 1`)).catch(
               (cause: unknown) => {
                 stalledCallFailed = cause;
@@ -214,14 +212,11 @@ it.live(
 
         yield* Effect.promise(() => entered.promise);
         const closing = yield* Effect.forkChild(shutdown, { startImmediately: true });
-        // Past the deadline a Resource would apply: the raw verifier has none, so the request
-        // fiber is still waiting on the provider, and shutdown is still waiting on the fiber.
+        // why: outlasts the deadline a Resource would apply; the raw verifier has none
         yield* Effect.sleep("5500 millis");
         expect(answered).toBe(false);
         expect(destroy).not.toHaveBeenCalled();
         release.resolve();
-        // Shutdown interrupts the request once its provider work is done, so the client
-        // sees the interruption, not a verdict; the provider's query still reached SQLite.
         yield* Fiber.join(response);
         yield* Fiber.join(closing);
         expect(destroy).toHaveBeenCalledTimes(1);

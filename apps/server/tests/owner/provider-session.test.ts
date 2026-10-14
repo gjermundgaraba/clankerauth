@@ -48,7 +48,6 @@ it.live.each([false, true])(
       yield* Effect.promise(() => startedDeletion.promise);
       const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
       yield* Effect.sleep("50 millis");
-      // The request fiber is owned by the scope shutting down, ahead of the database.
       expect(destroy).not.toHaveBeenCalled();
       allowDeletion.resolve();
       yield* Fiber.await(request);

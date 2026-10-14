@@ -5,11 +5,8 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { chromium } from "playwright";
 import { preview } from "vite";
 
-// The shipped bundle in a real browser, without an API server, database, or real credentials.
-// What the dashboard decides is covered by its stories and scenes; this checks only what a
-// browser or the wire can show: dialogs and focus, presses on held controls, navigation
-// without reloads, served addresses, layout, and the requests the issuer receives.
-await readFile(new URL("../dist/index.html", import.meta.url)); // Fail clearly if the build is missing.
+// why: fail here on a missing build, not later on a page that preview cannot serve
+await readFile(new URL("../dist/index.html", import.meta.url));
 
 const server = await preview({
   configFile: false,
@@ -26,7 +23,6 @@ try {
   const page = await browser.newPage({ serviceWorkers: "block" });
   page.setDefaultTimeout(10_000);
   const errors = [];
-  // Every question is the page's own ConfirmDialog; a native dialog is a regression.
   page.on("dialog", async (dialog) => {
     errors.push(`Unexpected native dialog: ${dialog.message()}`);
     await dialog.dismiss();
@@ -200,13 +196,11 @@ try {
   const lastBody = (key) => bodies.get(key)?.at(-1);
   const credentials = page.locator("#credentials");
   const stored = page.getByRole("button", { name: "I've stored them", exact: true });
-  // The open dialog: the editor or the confirmation, each a native `<dialog>`.
   const dialog = page.locator("dialog[open]");
   const headAction = page.locator(".page-head .page-acts button");
   const button = (name) => page.getByRole("button", { name, exact: true });
   const isHeld = async (target) => (await target.getAttribute("aria-disabled")) === "true";
 
-  // Nothing is saving and the listing is current: the section's own action is offered.
   const waitForIdle = () =>
     page.waitForFunction(() => {
       const action = document.querySelector(".page-head .page-acts button");
@@ -214,8 +208,6 @@ try {
       return action && action.getAttribute("aria-disabled") !== "true";
     });
 
-  // The open dialog takes focus and the page behind it is inert, so nothing there can be
-  // pressed or focused until it closes.
   const assertModalWithFocus = async () => {
     await dialog.waitFor();
     await page.waitForFunction(() => {
@@ -228,7 +220,6 @@ try {
     });
   };
 
-  // The dashboard's sections are one document: moving between them reads nothing again.
   const showSection = async (label, heading) => {
     const loads = count("POST /api/setupStatus");
     await page
@@ -246,7 +237,6 @@ try {
 
   const submitForm = (label) => dialog.getByRole("button", { name: label, exact: true }).click();
 
-  // A change that revokes or destroys asks first, in a modal of its own.
   const confirmChange = async (label) => {
     await assertModalWithFocus();
     await dialog.getByRole("button", { name: label, exact: true }).click();
@@ -254,14 +244,13 @@ try {
     await waitForIdle();
   };
 
-  // A held control has no handler; even a synthetic press on it opens nothing.
+  // why: `dispatchEvent` skips Playwright's enabled check, so the press reaches the held control
   const pressHeld = async (target) => {
     assert.equal(await isHeld(target), true);
     await target.dispatchEvent("click");
     assert.equal(await dialog.count(), 0);
   };
 
-  // A ticked row is a `role="checkbox"` button named by its row's label, `${id}-label`.
   const checkbox = (scope, id) => scope.locator(`[role="checkbox"][aria-labelledby="${id}-label"]`);
   const tick = (id) => checkbox(dialog, id).click();
 
@@ -269,7 +258,6 @@ try {
   await page.getByRole("heading", { level: 1, name: "Clients", exact: true }).waitFor();
   await waitForIdle();
 
-  // A cancelled form hands focus back to the button that opened it.
   await openForm("register client");
   await button("cancel").click();
   await dialog.waitFor({ state: "detached" });
@@ -278,8 +266,6 @@ try {
     true,
   );
 
-  // A registration sends what the form holds, and every control is held while the listing
-  // is read again after it.
   const releaseList = Promise.withResolvers();
   listResponse = async () => {
     await releaseList.promise;
@@ -316,7 +302,6 @@ try {
   await stored.click();
   await credentials.waitFor({ state: "detached" });
 
-  // Revoking one authorization names its Resource; revoking all names none.
   await button(`Revoke ${resource.name}`).click();
   await confirmChange("revoke");
   await button(`revoke all ${automatic.client_name}`).click();
@@ -326,7 +311,6 @@ try {
     { client_id: automatic.client_id },
   ]);
 
-  // A Resource is sent as the owner wrote it, and a refusal is shown in the issuer's words.
   await showSection("resources", "Resources");
 
   const unservable =
@@ -362,7 +346,6 @@ try {
     },
   ]);
 
-  // An API key is sent with exactly the scopes ticked, and every edit sends only what changed.
   await showSection("api keys", "API keys");
   await openForm("create key");
   await dialog.locator("#form-name").fill("Automation key");
@@ -396,7 +379,6 @@ try {
     name: "Renamed automation",
   });
 
-  // Grants on a Resource that no longer exists are dropped once the key's grants are saved.
   await button("edit grants Renamed automation").click();
   await assertModalWithFocus();
   await submitForm("save grants");
@@ -407,7 +389,6 @@ try {
     permissions: { [resource.identifier]: ["fixture:read"] },
   });
 
-  // The page fits at every width, with signing out in the bar.
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(
@@ -425,20 +406,17 @@ try {
   await page.getByText("No API keys", { exact: true }).waitFor();
   assert.deepEqual(lastBody("POST /api/deleteApiKey"), { keyId: "fixture-key" });
 
-  // Every section is an address of its own, served by the issuer.
   await page.reload();
   await page.getByRole("heading", { level: 1, name: "API keys", exact: true }).waitFor();
   await page.goto(`${origin}/resources`);
   await page.getByRole("heading", { level: 1, name: "Resources", exact: true }).waitFor();
   await waitForIdle();
 
-  // Signing out ends at the sign-in page.
   await button("Sign out").click();
   await page.waitForURL(`${origin}/login`);
   await page.getByRole("heading", { name: "Sign in to clankerauth", exact: true }).waitFor();
   assert.equal(count("POST /api/auth/sign-out"), 1);
 
-  // Consent renders the actual identifier/callback and escapes client-supplied display names.
   const callback = "http://127.0.0.1:43129/callback";
   await page.goto(
     `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "offline_access fixture:read", sig: "fixture" })}`,
@@ -451,8 +429,7 @@ try {
   assert.ok(consent.includes("Client metadata host: client.fixture.invalid"));
   assert.ok(consent.includes(callback));
   assert.equal(await main.locator("em").count(), 0);
-  // Observe navigation attempts, including a second attempt that cancels the first.
-  // The auth client already follows its successful consent response.
+  // why: CDP sees every navigation attempt, including a second one that would cancel the first
   const protocol = await page.context().newCDPSession(page);
   await protocol.send("Page.enable");
   const navigations = [];
@@ -465,7 +442,6 @@ try {
 
     return route.fulfill(ok({ redirect: true, url: callback }));
   });
-  // A narrowed approval names only what stays ticked.
   await checkbox(main, "consent-scope-offline_access").click();
   await page.route(callback, (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Application callback</h1>" }),

@@ -53,6 +53,9 @@ export const Whoami = Action.make("whoami", {
   success: Principal,
 });
 
+/** The query parameter naming where the issuer sends the owner after signing in or out. */
+export const returnToParameter = "rd";
+
 /** Where the issuer signs the owner out and clears the forward cookie. */
 export const signOutPath = "/forward-auth/logout";
 
@@ -62,7 +65,7 @@ export const signOutPath = "/forward-auth/logout";
  */
 export const signOutUrl = (issuer: string, returnTo: string): string => {
   const url = new URL(signOutPath, issuer);
-  url.searchParams.set("rd", returnTo);
+  url.searchParams.set(returnToParameter, returnTo);
 
   return url.href;
 };

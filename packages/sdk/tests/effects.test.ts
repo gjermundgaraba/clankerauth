@@ -18,7 +18,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { CurrentPrincipal } from "../src/session.ts";
 import { json, Login, Notes, resourceOf, sent, signList, webHandler } from "./support.ts";
 
-/** What a key list test signs with and publishes, for one resource. */
 const listIssuer = Effect.promise(async () => {
   const { exportJWK, generateKeyPair } = await import("jose");
   const pair = await generateKeyPair("EdDSA");
@@ -51,7 +50,6 @@ it.effect("verification deadlines interrupt the supplied HTTP transport", () =>
       required: "notes:read",
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    // A token that names its key, so verification must read JWKS.
     const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "k", typ: "at+jwt" }));
     const token = `${header.toString("base64url")}.e30.AA`;
 
@@ -135,32 +133,26 @@ it.effect(
 
       const verify = resource.verifier.verifyToken;
 
-      // An unreachable issuer is an outage, and the cooldown holds off the next read.
       assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
       assert((yield* Effect.flip(verify(firstToken))) instanceof ProviderUnavailable);
       assert.equal(reads, 1);
       unavailable = false;
       yield* TestClock.adjust("5 seconds");
 
-      // Concurrent verifications share a single read.
       yield* Effect.all([verify(firstToken), verify(firstToken), verify(firstToken)], {
         concurrency: "unbounded",
       });
       assert.equal(reads, 2);
 
-      // An identifier the document does not publish is refused, never chased.
       key = secondKey;
       assert((yield* Effect.flip(verify(secondToken))) instanceof Unauthorized);
       assert.equal(reads, 2);
 
-      // The next read rotates the new key in and the old one out.
       yield* TestClock.adjust("1 minute");
       yield* verify(secondToken);
       assert((yield* Effect.flip(verify(firstToken))) instanceof Unauthorized);
       assert.equal(reads, 3);
 
-      // A read its only caller gave up on is dropped, not held: the next caller reads
-      // again, with a deadline of its own, and that read is held as any other.
       yield* TestClock.adjust("1 minute");
       paused = true;
       const abandoned = yield* verify(secondToken).pipe(Effect.forkChild);
@@ -178,129 +170,121 @@ it.effect(
     }),
 );
 
-it.effect("a key list refreshes every minute and outlasts an outage for its lifetime", () =>
-  Effect.gen(function* () {
-    const { pair, jwk, issuer, audience } = yield* listIssuer;
-    const key = `clankerauth_${"k".repeat(64)}`;
-    const reader = `clankerauth_${"r".repeat(64)}`;
+it.effect(
+  "a key list refreshes every minute, for verifications and watched sockets, and outlasts an outage or a stalled issuer for its lifetime",
+  () =>
+    Effect.gen(function* () {
+      const { pair, jwk, issuer, audience } = yield* listIssuer;
+      const key = `clankerauth_${"k".repeat(64)}`;
+      const reader = `clankerauth_${"r".repeat(64)}`;
 
-    const grant = (scopes: string[], expiresAt: number | null = null) => ({
-      keyId: "key",
-      ownerId: "owner",
-      scopes,
-      expiresAt,
-    });
+      const grant = (scopes: string[], expiresAt: number | null = null) => ({
+        keyId: "key",
+        ownerId: "owner",
+        scopes,
+        expiresAt,
+      });
 
-    let lists = 0;
-    let unavailable = false;
-    let stalled = false;
+      let lists = 0;
+      let unavailable = false;
+      let stalled = false;
 
-    const granted = new Map([
-      [key, grant(["read", "write"])],
-      [reader, grant(["read"])],
-    ]);
+      const granted = new Map([
+        [key, grant(["read", "write"])],
+        [reader, grant(["read"])],
+      ]);
 
-    const client = HttpClient.make((request) =>
-      Effect.gen(function* () {
-        if (stalled) return yield* Effect.never;
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (stalled) return yield* Effect.never;
 
-        if (unavailable)
-          return HttpClientResponse.fromWeb(request, new Response("{}", { status: 503 }));
+          if (unavailable)
+            return HttpClientResponse.fromWeb(request, new Response("{}", { status: 503 }));
 
-        if (request.url.endsWith("/jwks"))
-          return HttpClientResponse.fromWeb(request, Response.json({ keys: [jwk] }));
-        lists++;
-        const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+          if (request.url.endsWith("/jwks"))
+            return HttpClientResponse.fromWeb(request, Response.json({ keys: [jwk] }));
+          lists++;
+          const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
 
-        const list = yield* Effect.promise(() =>
-          signList(pair.privateKey, issuer, audience, new Map(granted), seconds),
-        );
+          const list = yield* Effect.promise(() =>
+            signList(pair.privateKey, issuer, audience, new Map(granted), seconds),
+          );
 
-        return HttpClientResponse.fromWeb(request, Response.json({ list }));
-      }),
-    );
+          return HttpClientResponse.fromWeb(request, Response.json({ list }));
+        }),
+      );
 
-    const resource = yield* resourceOf({
-      issuer,
-      publicUrl: new URL(audience),
-      scopes: ["read", "write"],
-      required: "read",
-    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      const resource = yield* resourceOf({
+        issuer,
+        publicUrl: new URL(audience),
+        scopes: ["read", "write"],
+        required: "read",
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    const verify = resource.verifier.verifyToken;
-    yield* TestClock.adjust("1 minute");
-    assert.deepEqual((yield* verify(key)).actor, { kind: "key", keyId: "key" });
+      const verify = resource.verifier.verifyToken;
+      yield* TestClock.adjust("1 minute");
+      assert.deepEqual((yield* verify(key)).actor, { kind: "key", keyId: "key" });
 
-    // A socket admitted for writing is held to its key's scope as later lists grant it.
-    const socket = yield* resource
-      .watch(`Bearer ${key}`, "write")
-      .pipe(Effect.flip, Effect.forkChild);
+      const socket = yield* resource
+        .watch(`Bearer ${key}`, "write")
+        .pipe(Effect.flip, Effect.forkChild);
 
-    // Its first check opens the key with real crypto; the clock must not move under it, or
-    // its own deadline passes first.
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
+      // why: its first check opens the key with real crypto, which must finish before time moves.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
 
-    // Within a minute the list already read decides, revoked or not.
-    granted.set(key, grant(["read"]));
-    yield* verify(key);
-    assert.equal(lists, 1);
+      granted.set(key, grant(["read"]));
+      yield* verify(key);
+      assert.equal(lists, 1);
 
-    // The next list reaches every verification, and every watched connection.
-    yield* TestClock.adjust("1 minute");
-    yield* verify(key);
-    // Refused as `admit` would refuse it now: a key cannot step up, so it names no scope.
-    const ended = yield* Fiber.join(socket);
-    assert(ended instanceof Action.Forbidden);
-    assert.deepEqual(sent(ended), sent(new Action.Forbidden({ message: "Requires write." })));
-    granted.delete(key);
-    yield* TestClock.adjust("1 minute");
-    assert((yield* Effect.flip(verify(key))) instanceof Unauthorized);
-    assert.equal(lists, 3);
+      yield* TestClock.adjust("1 minute");
+      yield* verify(key);
+      const ended = yield* Fiber.join(socket);
+      assert(ended instanceof Action.Forbidden);
+      assert.deepEqual(sent(ended), sent(new Action.Forbidden({ message: "Requires write." })));
+      granted.delete(key);
+      yield* TestClock.adjust("1 minute");
+      assert((yield* Effect.flip(verify(key))) instanceof Unauthorized);
+      assert.equal(lists, 3);
 
-    // An outage is no error while the held list is inside its window, JWKS or not.
-    const expiring = `clankerauth_${"e".repeat(64)}`;
-    yield* TestClock.adjust("1 minute");
-    const held = yield* Clock.currentTimeMillis;
-    granted.set(expiring, grant(["read"], held + 30_000));
-    yield* verify(reader);
-    yield* verify(expiring);
-    unavailable = true;
-    yield* TestClock.adjust("1 minute");
-    yield* verify(reader);
-    // A key's own expiry is enforced from the held list, with no issuer to ask.
-    assert((yield* Effect.flip(verify(expiring))) instanceof Unauthorized);
-    const window = KeyList.lifetime * 1000;
-    yield* TestClock.adjust(window - 60_001);
-    yield* verify(reader);
-    assert.equal(yield* Clock.currentTimeMillis, held + window - 1);
+      const expiring = `clankerauth_${"e".repeat(64)}`;
+      yield* TestClock.adjust("1 minute");
+      const held = yield* Clock.currentTimeMillis;
+      granted.set(expiring, grant(["read"], held + 30_000));
+      yield* verify(reader);
+      yield* verify(expiring);
+      unavailable = true;
+      yield* TestClock.adjust("1 minute");
+      yield* verify(reader);
+      assert((yield* Effect.flip(verify(expiring))) instanceof Unauthorized);
+      const window = KeyList.lifetime * 1000;
+      yield* TestClock.adjust(window - 60_001);
+      yield* verify(reader);
+      assert.equal(yield* Clock.currentTimeMillis, held + window - 1);
 
-    // Past it, the key is undecided until the issuer answers again.
-    yield* TestClock.adjust(1);
-    assert((yield* Effect.flip(verify(reader))) instanceof ProviderUnavailable);
-    unavailable = false;
-    yield* TestClock.adjust("5 seconds");
-    yield* verify(reader);
+      yield* TestClock.adjust(1);
+      assert((yield* Effect.flip(verify(reader))) instanceof ProviderUnavailable);
+      unavailable = false;
+      yield* TestClock.adjust("5 seconds");
+      yield* verify(reader);
 
-    // An issuer that stops answering fails the read, not the request: it gives up
-    // before the request's deadline, and the held list decides, for sockets too.
-    const watched = yield* resource.watch(`Bearer ${reader}`).pipe(Effect.flip, Effect.forkChild);
+      const watched = yield* resource.watch(`Bearer ${reader}`).pipe(Effect.flip, Effect.forkChild);
 
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    stalled = true;
-    yield* TestClock.adjust("1 minute");
-    const late = yield* verify(reader).pipe(Effect.forkChild);
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    yield* TestClock.adjust("3 seconds");
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    assert.notEqual(late.pollUnsafe(), undefined);
-    assert.deepEqual((yield* Fiber.join(late)).actor, { kind: "key", keyId: "key" });
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    assert.equal(watched.pollUnsafe(), undefined);
-  }),
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      stalled = true;
+      yield* TestClock.adjust("1 minute");
+      const late = yield* verify(reader).pipe(Effect.forkChild);
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      yield* TestClock.adjust("3 seconds");
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      assert.notEqual(late.pollUnsafe(), undefined);
+      assert.deepEqual((yield* Fiber.join(late)).actor, { kind: "key", keyId: "key" });
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      assert.equal(watched.pollUnsafe(), undefined);
+    }),
 );
 
 it.effect(
-  "a key the held list does not name has the list read again, five seconds apart at most",
+  "a key the held list does not name has the list read again, five seconds apart at most, even when the read fails",
   () =>
     Effect.gen(function* () {
       const { pair, jwk, issuer, audience } = yield* listIssuer;
@@ -342,31 +326,25 @@ it.effect(
       const refused = (key: string) => Effect.flip(verify(key));
       yield* verify(known);
 
-      // A list just read decides a key it does not name, created since or not.
       granted.set(created, grant);
       assert((yield* refused(created)) instanceof Unauthorized);
       assert.equal(lists, 1);
 
-      // Five seconds on it is read again, so a new key waits seconds, not the minute.
       yield* TestClock.adjust("5 seconds");
       yield* verify(created);
       assert.equal(lists, 2);
 
-      // Unknown keys reach the issuer once per five seconds, however many arrive.
       assert((yield* refused(unknown)) instanceof Unauthorized);
       yield* TestClock.adjust("5 seconds");
       assert((yield* refused(unknown)) instanceof Unauthorized);
       assert((yield* refused(unknown)) instanceof Unauthorized);
       assert.equal(lists, 3);
 
-      // A key the list names never does, inside the list's minute.
       yield* TestClock.adjust("59 seconds");
       yield* verify(known);
       yield* verify(created);
       assert.equal(lists, 3);
 
-      // A read that fails refuses the unknown key from the held list, holds off the next
-      // read like any other, and leaves that list answering the keys it names.
       unavailable = true;
       assert((yield* refused(unknown)) instanceof Unauthorized);
       assert((yield* refused(unknown)) instanceof Unauthorized);
@@ -381,7 +359,6 @@ it.effect("a list read shortly before it expires decides only until then", () =>
     const key = `clankerauth_${"k".repeat(64)}`;
     const grant = { keyId: "key", ownerId: "owner", scopes: ["read"], expiresAt: null };
 
-    // Signed long ago, as a delayed or replayed list is: five seconds of its window remain.
     const list = yield* Effect.promise(() =>
       signList(pair.privateKey, issuer, audience, [[key, grant]], 5 - KeyList.lifetime),
     );
@@ -403,8 +380,6 @@ it.effect("a list read shortly before it expires decides only until then", () =>
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
     yield* resource.verifier.verifyToken(key);
-    // Past the window it was signed with, it is read again; the same list, replayed, no
-    // longer verifies.
     yield* TestClock.adjust("5 seconds");
     const failure = yield* Effect.flip(resource.verifier.verifyToken(key));
     assert(failure instanceof ProviderUnavailable);
@@ -478,13 +453,12 @@ it.effect("a watched access token holds its connection until it expires, through
 
     const socket = yield* resource.watch(`Bearer ${token}`).pipe(Effect.flip, Effect.forkChild);
 
-    // Admission runs on real promises; let it finish before time moves.
+    // why: admission runs on real promises, which must settle before the test clock moves.
     yield* TestClock.withLive(Effect.sleep("100 millis"));
     yield* TestClock.adjust("14 minutes");
     assert.equal(reads, 1);
     assert.equal(socket.pollUnsafe(), undefined);
     yield* TestClock.adjust("1 minute");
-    // It ends as expired, not as an outage: an expired token is refused without the issuer.
     assert((yield* Fiber.join(socket)) instanceof Action.Unauthenticated);
   }),
 );
@@ -525,7 +499,6 @@ it.live(
 
       const PrivateHttp = ActionHttp.make([Private], { authentication: Login });
 
-      // An action route and a host route of its own answer the outage alike.
       const web = yield* webHandler(() =>
         HttpRouter.toWebHandler(
           Layer.mergeAll(

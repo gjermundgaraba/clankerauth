@@ -54,7 +54,6 @@ export const ClientMode = defineTaggedUnion({
   Access: { clientId: Schema.String, allowed: Schema.Array(Schema.String) },
 });
 
-/** The form in the dashboard's editor dialog: one kind of draft, in one of its modes. */
 export const Model = defineTaggedUnion({
   Resource: { mode: ResourceMode, draft: ResourceDraft },
   Key: { mode: KeyMode, draft: KeyDraft },
@@ -112,7 +111,6 @@ const grantEntry = (
 ): ReadonlyArray<readonly [string, ReadonlyArray<string>]> =>
   Array.isReadonlyArrayNonEmpty(scopes) ? [[resource, scopes]] : [];
 
-/** Grants as they apply now: on a Resource that exists, for scopes it still defines. */
 const grantsInForce = (permissions: Grants, resources: ReadonlyArray<ResourceView>): Grants =>
   Record.fromEntries(
     Array.flatMap(resources, ({ identifier, scopes }) =>
@@ -126,8 +124,6 @@ const grantsInForce = (permissions: Grants, resources: ReadonlyArray<ResourceVie
     ),
   );
 
-/** Saving replaces every grant with the scopes ticked, so one on a Resource or a scope that no
- *  longer exists goes. */
 export const editGrants = (
   { keyId, name, permissions }: KeyView,
   resources: ReadonlyArray<ResourceView>,
@@ -165,7 +161,6 @@ export const editAccess = (client: ClientView, allowed: ReadonlyArray<string>): 
 
 // UPDATE
 
-/** Applies an edit to a Resource draft, and leaves any other form as it is. */
 const editResourceDraft = (form: Model, edit: (draft: ResourceDraft) => ResourceDraft): Model =>
   Model.matchOrElse(
     form,
@@ -173,11 +168,9 @@ const editResourceDraft = (form: Model, edit: (draft: ResourceDraft) => Resource
     () => form,
   );
 
-/** Applies an edit to an API key draft, and leaves any other form as it is. */
 const editKeyDraft = (form: Model, edit: (draft: KeyDraft) => KeyDraft): Model =>
   Model.matchOrElse(form, { Key: (keyForm) => modifyFields(keyForm, { draft: edit }) }, () => form);
 
-/** Applies an edit to a Client draft, and leaves any other form as it is. */
 const editClientDraft = (form: Model, edit: (draft: ClientDraft) => ClientDraft): Model =>
   Model.matchOrElse(
     form,
@@ -185,7 +178,6 @@ const editClientDraft = (form: Model, edit: (draft: ClientDraft) => ClientDraft)
     () => form,
   );
 
-/** Ticks or unticks one value of a selection, keeping it once. */
 const toggleValue =
   (value: string, isChecked: boolean) =>
   (values: ReadonlyArray<string>): ReadonlyArray<string> => {
@@ -194,7 +186,6 @@ const toggleValue =
     return isChecked ? Array.append(others, value) : others;
   };
 
-/** Ticks or unticks one scope of one Resource; a Resource left with none is not granted. */
 const toggleGrant =
   (resource: string, scope: string, isChecked: boolean) =>
   (grants: Grants): Grants => {
@@ -209,8 +200,6 @@ const toggleGrant =
       : Record.remove(grants, resource);
   };
 
-/** The form after one edit. Editing only ever changes the draft, so there is nothing else to
- *  return. */
 export const update = (form: Model, message: Message): Model =>
   Message.match<Model>(message, {
     UpdatedResourceName: ({ value }) =>
@@ -253,7 +242,6 @@ const redirectUrisOf = (draft: ClientDraft): Result.Result<ReadonlyArray<string>
     onNonEmpty: Result.succeed,
   });
 
-/** A blank expiry is a key valid until revoked; anything else must read as a moment. */
 const expiryOf = (expiry: string): Result.Result<Option.Option<string>, string> =>
   pipe(
     Option.liftPredicate(expiry, String.isNonEmpty),
@@ -326,8 +314,6 @@ const clientChangeOf = (
       ),
   });
 
-/** The change a submitted form asks for, or why it cannot be sent. Every other rule is the
- *  contract's, which the issuer's client applies before anything is sent. */
 export const changeOf = (form: Model): Result.Result<Change, string> =>
   Model.match(form, {
     Resource: ({ mode, draft }) => Result.succeed(resourceChangeOf(mode, draft)),

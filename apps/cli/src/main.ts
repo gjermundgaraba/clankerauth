@@ -10,13 +10,11 @@ import { readCredentials, type CredentialsError } from "./credentials.ts";
 import { accessToken, administrationScope, login, logout } from "./login.ts";
 import type { OAuthError } from "./oauth.ts";
 
-/** A failure of this CLI's own, rendered as its message on stderr, exiting 1. */
 const refused = (error: OAuthError | CredentialsError) =>
   new CliError.UserError({ cause: error, userMessage: error.message });
 
 const json = (value: Schema.Json) => Console.log(JSON.stringify(value, null, 2));
 
-/** A resource identifier as the issuer keeps it: canonical, `https://notes.example/`. */
 const resourceFlag = (description: string) =>
   Flag.String("resource").pipe(
     Flag.withDescription(description),
@@ -27,7 +25,6 @@ const resourceFlag = (description: string) =>
     Flag.optional,
   );
 
-/** The scopes a sign-in asks for: `--scope`, which another resource than administration needs. */
 const scopeFor = Effect.fn("Cli.scopeFor")(function* (
   resource: Option.Option<string>,
   scope: Option.Option<string>,
@@ -74,7 +71,6 @@ const logoutCommand = Command.make(
   ({ resource }) => logout(resource).pipe(Effect.mapError(refused), Effect.flatMap(json)),
 ).pipe(Command.withDescription("Revoke the sign-ins, or the one to --resource, and forget them."));
 
-/** The kept sign-ins, or how to make one. */
 const signedIn = Effect.gen(function* () {
   const stored = yield* readCredentials().pipe(Effect.mapError(refused));
 
@@ -87,7 +83,6 @@ const signedIn = Effect.gen(function* () {
   return stored.value;
 });
 
-/** Prints the token alone, so a script takes the whole output as it. */
 const tokenCommand = Command.make(
   "token",
   { resource: resourceFlag("The resource whose token to print; administration by default") },
@@ -108,10 +103,6 @@ const tokenCommand = Command.make(
   ),
 );
 
-/**
- * The client every administration command calls through: the signed-in issuer's origin and
- * a current administration access token, refreshed and saved first when it has expired.
- */
 const administrationClient = Effect.gen(function* () {
   const credentials = yield* signedIn;
 
@@ -127,7 +118,6 @@ const administrationClient = Effect.gen(function* () {
   );
 });
 
-/** Every administration action, as a command of its own, called over `/api/owner`. */
 const administration = Administration.map((action) =>
   ActionCli.remoteCommand(OwnerHttp, action).pipe(
     Command.provideEffect(HttpClient.HttpClient, administrationClient),

@@ -1,4 +1,3 @@
-/** Forward auth: proxy subrequests turn the owner's session into resource access tokens. */
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -15,7 +14,6 @@ const page = "https://notes.home.example/docs?x=1";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-/** The issuer's own session cookie, as the dashboard holds it. */
 class Session extends Context.Service<Session, string>()("forward-auth.test/Session") {}
 
 const handled = (request: Request) =>
@@ -50,7 +48,6 @@ const continueTo = (rd: string, cookie?: string) =>
     cookie === undefined ? {} : { cookie },
   );
 
-/** What Caddy's forward_auth or Traefik's forwardAuth sends for a browser request. */
 const forward = (cookie: string, target = resource, original = page, mode = "navigate") => {
   const url = new URL(original);
 
@@ -81,7 +78,6 @@ const redirectTo = (response: Response, path: string, rd = page) => {
   expect(location.searchParams.get("rd")).toBe(rd);
 };
 
-/** Where login sends the browser afterwards: back through continue to the original page. */
 const continueURL = (original = page) =>
   `${origin}/forward-auth/continue?rd=${encodeURIComponent(original)}`;
 
@@ -91,7 +87,6 @@ const signedInOwner = Layer.effect(
     yield* (yield* OwnerAccount).create(owner);
     const login = yield* send("", "/api/auth/sign-in/email", owner);
     expect(login.status).toBe(200);
-    // The issuer session stays on the issuer host; only the forward cookie is shared.
     expect(login.headers.getSetCookie().join(";")).not.toContain("Domain=");
 
     const session = login.headers
@@ -136,7 +131,6 @@ it.live(
       expect(set).not.toContain("Max-Age");
       const forwarded = cookiePair(proceed, forwardCookie)!;
 
-      // The app never sees the session cookie value, and cannot derive it.
       for (const pair of session.split("; ")) expect(forwarded).not.toContain(pair.split("=")[1]!);
 
       const response = yield* forward(forwarded);
@@ -159,8 +153,6 @@ it.live(
       expect(payload.client_id).toBe(forwardClientId);
       expect(payload.scope).toBe("notes:read notes:write");
       expect(payload.exp! - payload.iat!).toBe(15 * 60);
-      // Bearer requests such as MCP clients and API keys bypass forward auth at the proxy;
-      // the issuer itself never accepts these tokens for administration.
       expect(
         (yield* call("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { authorization }))
           .status,
@@ -173,12 +165,10 @@ it.live(
   () =>
     Effect.gen(function* () {
       redirectTo(yield* forward(""), "/forward-auth/continue");
-      // The issuer session cookie alone does not count: apps only ever hold the forward cookie.
       redirectTo(yield* forward(yield* Session), "/forward-auth/continue");
       redirectTo(yield* forward(`${forwardCookie}=tampered`), "/forward-auth/continue");
       redirectTo(yield* continueTo(page, ""), "/login", continueURL());
 
-      // A script's request cannot follow the issuer across origins, so it is refused in place.
       const scripted = yield* forward("", resource, page, "cors");
       expect(scripted.status).toBe(401);
       expect((yield* json(scripted)).error).toBe("unauthenticated");
@@ -251,7 +241,6 @@ it.live(
           (cookie) => cookie.includes("session_token=") && /Max-Age=0|Expires=/u.test(cookie),
         ),
       ).toBe(true);
-      // The forward cookie resolved to the deleted session, so a copy an app kept is dead too.
       redirectTo(yield* forward(forwarded), "/forward-auth/continue");
 
       const anonymous = yield* call(

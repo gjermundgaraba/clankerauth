@@ -1,8 +1,3 @@
-/**
- * The dashboard's owner session: the provider's own session cookie, named as it names it for
- * the deployment, `__Secure-` prefixed over HTTPS, and the cookie owner actions authenticate
- * with, end to end from sign-in.
- */
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
@@ -11,7 +6,6 @@ import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-/** Signs the owner in to the issuer at `origin` and reads the session cookie it set. */
 const signIn = (origin: string) =>
   Effect.gen(function* () {
     const app = yield* WebApplication;
@@ -40,10 +34,8 @@ const signIn = (origin: string) =>
     const [pair = ""] = set!.split(";");
 
     return {
-      /** The `Set-Cookie` header the sign-in answered with. */
       set: set!,
       value: pair.slice(pair.indexOf("=") + 1),
-      /** An owner action, called with `cookie` alone. */
       listClients: (cookie: string) => post("/api/listClients", {}, cookie),
       openapi: Effect.promise(() => app(new Request(`${origin}/openapi.json`))),
     };
@@ -63,20 +55,17 @@ it.live.each([
     secure: false,
   },
 ] as const)(
-  "over $scheme, owner actions authenticate with the session cookie $name",
+  "over $scheme, owner actions authenticate with the session cookie $name, as OpenAPI declares",
   ({ origin, name, secure }) =>
     Effect.gen(function* () {
       const session = yield* signIn(origin);
 
-      // The session cookie is sent over HTTPS only when the deployment is served over HTTPS.
       expect(/;\s*Secure(;|$)/i.test(session.set)).toBe(secure);
 
-      // The provider's own name for the deployment, `__Secure-` prefixed over HTTPS.
       const listed = yield* session.listClients(`${name}=${session.value}`);
       expect(listed.status, yield* Effect.promise(() => listed.clone().text())).toBe(200);
       expect((yield* Effect.promise(() => listed.json())).email).toBe(owner.email);
 
-      // The server's binding names the cookie it reads, in its OpenAPI document too.
       const openapi = yield* session.openapi;
       const document = yield* Effect.promise(() => openapi.json());
       expect(Object.values(document.components.securitySchemes)).toContainEqual(

@@ -41,7 +41,6 @@ const corsPaths = new Set([
   "/.well-known/oauth-authorization-server/api/auth",
 ]);
 
-/** Public, unauthenticated documents resource servers and clients may cache briefly. */
 const cacheablePaths = new Set([
   "/jwks",
   "/.well-known/oauth-protected-resource",
@@ -58,7 +57,7 @@ const json = (body: typeof Schema.Json.Type, status = 200) =>
 
 const notFound = json({ error: "Not found" }, 404);
 
-/** Stateless 2026-07-28 MCP is POST only, with no session or stream-resumption headers. */
+// why: stateless 2026-07-28 MCP is POST only, with no session or resumption headers
 const mcpRequestHeaders = [
   "Authorization",
   "Content-Type",
@@ -70,7 +69,6 @@ const mcpRequestHeaders = [
 
 const mcpRequestHeaderNames = new Set(mcpRequestHeaders.map((header) => header.toLowerCase()));
 
-/** All routes remain native Effect HTTP, except the Better Auth adapter. */
 export const application = (
   staticRoot = fileURLToPath(
     new URL("dist/", import.meta.resolve("@clankerauth/web/package.json")),
@@ -92,8 +90,7 @@ export const application = (
         if (!publicPaths.has(path) && path !== "/.well-known/oauth-authorization-server/api/auth")
           return notFound;
 
-        // Application policy: every authorization targets exactly one configured resource.
-        // The provider validates the resource on token requests itself.
+        // why: the provider validates the resource itself on token requests
         if (path === "/oauth2/authorize") {
           const resources =
             request.method === "GET"
@@ -124,7 +121,6 @@ export const application = (
         return HttpServerResponse.fromWeb(response);
       }).pipe(Effect.catch(respond));
 
-      // The built dashboard: one HTML document and its hashed script and stylesheet.
       const staticRoutes = HttpRouter.use((router) =>
         Effect.gen(function* () {
           const platform = yield* HttpPlatform.HttpPlatform;
@@ -270,10 +266,7 @@ export const application = (
         { global: true },
       );
 
-      // Nothing the provider does can be cancelled, so no handler is: a disconnect or
-      // shutdown interrupts a request only once its work is done, and the request fiber
-      // owns every provider call it made, which is what lets shutdown wait for them all.
-      // Route middleware, because the router re-enters interruptibility per route.
+      // why: provider calls cannot be cancelled, and each route restores interruptibility
       const uninterruptible = HttpRouter.middleware((handler) => Effect.uninterruptible(handler));
 
       return Layer.mergeAll(
@@ -291,15 +284,12 @@ export const application = (
         staticRoutes,
       ).pipe(
         Layer.provide(uninterruptible.layer),
-        // Register the outer policy first: discovery is itself short-circuiting global
-        // middleware and must not bypass input limits, CORS, or security headers.
         Layer.provide(policy),
         Layer.provide(NodeHttpServer.layerHttpServices),
       );
     }),
   );
 
-/** Attach the same native routes to an already-bound development/test server. */
 export const nodeHandler = Effect.fn("Http.nodeHandler")(function* (staticRoot?: string) {
   const handler = yield* HttpRouter.toHttpEffect(application(staticRoot));
 

@@ -172,14 +172,12 @@ export const middleware = (options: EdgeOptions) => {
     void ask(request).then(
       (decision) => {
         if (decision.status === 204) {
-          // Only ever the credential the issuer just minted; `check` rejects a 204 without one.
           request.headers.authorization = decision.authorization;
           next();
 
           return;
         }
 
-        // The issuer's own refusal, relayed verbatim: a browser reads what it wrote.
         const headers: Record<string, string> = {};
 
         if (decision.location !== undefined) headers.location = decision.location;
@@ -223,12 +221,10 @@ export const upgrade = (options: EdgeOptions) => {
 
     const fail = (status: number, reason: string, error?: Error) => {
       if (error) options.onError?.(error);
-      // A refusal is a complete HTTP response: end it, do not abort the connection.
       socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     };
 
-    // A reset on either half is routine for a closing socket; unhandled it takes the
-    // whole development server down with it.
+    // why: a reset is routine for a closing socket, and unhandled it crashes the dev server.
     socket.on("error", (error: Error) => {
       options.onError?.(error);
       socket.destroy();
@@ -239,8 +235,7 @@ export const upgrade = (options: EdgeOptions) => {
         hostname: backend.hostname,
         port: backend.port,
         path: request.url ?? "/",
-        // The browser's Host goes upstream unchanged: the app's request policy answers only
-        // for its public host, exactly as it does behind a deployment proxy.
+        // why: Host goes upstream unchanged; the app's request policy answers only its public host.
         headers: { ...copyHeaders(request.headers), authorization },
       });
 
@@ -254,7 +249,6 @@ export const upgrade = (options: EdgeOptions) => {
         if (peerHead.length) socket.write(peerHead);
 
         if (head.length) peer.write(head);
-        // A half closing normally closes the other half the same way; only an error destroys.
         peer.on("error", (error: Error) => {
           options.onError?.(error);
           socket.destroy();
@@ -264,7 +258,6 @@ export const upgrade = (options: EdgeOptions) => {
         socket.pipe(peer);
         peer.pipe(socket);
       });
-      // A backend that answers instead of upgrading refused the socket; relay its status.
       upstream.on("response", (answer: IncomingMessage) => {
         answer.resume();
         fail(answer.statusCode ?? 502, "Upgrade refused");
@@ -275,8 +268,7 @@ export const upgrade = (options: EdgeOptions) => {
 
     void ask(request).then(
       (decision) => {
-        // The client can give up while the issuer is deciding. Opening a backend socket
-        // for a connection that is already gone would leak both halves of the handshake.
+        // why: proxying a socket its client left during the check leaks both handshake halves.
         if (socket.destroyed) return;
 
         if (decision.status !== 204 || decision.authorization === undefined) {
@@ -340,8 +332,7 @@ export const forwardAuth = (options: EdgeOptions) => {
     apply: "serve" as const,
     configureServer: (server: DevServerLike) => {
       server.middlewares.use(handle);
-      // Vite's proxy claims `upgrade` before an asynchronous decision can be made, so
-      // this listener runs first and returns the sockets it does not own.
+      // why: Vite's proxy claims `upgrade` before an async check ends, so this listener goes first.
       server.httpServer?.on("upgrade", (request, socket, head) => {
         take(request, socket, head);
       });

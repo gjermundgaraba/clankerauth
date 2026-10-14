@@ -49,8 +49,8 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
 - `packages/admin-api`: the administration contract every surface is derived from: actions,
   schemas, errors, and the administration resource's identifier and scopes.
 - `packages/sdk`: the published SDK, one folder-less module per entry. It owns the protocol
-  constants resource servers share with the issuer, such as the API-key prefix and the sign-out
-  path.
+  constants resource servers share with the issuer, such as the API-key prefix, the sign-out
+  path and the return-to query parameter, which the web app's login page reads too.
 - `packages/dev`: the published development issuer, built from `@clankerauth/server/embed`.
 - `apps/cli`: the published CLI; `oauth.ts` is its only OAuth adapter.
 
@@ -71,3 +71,10 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
   transaction, a Node event, `expect.poll`), with the test's own services. Exempt: suites that
   drive a real process (`main.test.ts`, the CLI's, the development package's lifecycle) and the
   web app's, which use Foldkit's test harness.
+- **No prose comments**: a reason goes where the code can enforce or reveal it: a type, a test,
+  or the commit message. What remains: tool directives with their reason inline; a one-line
+  `// SAFETY:` above a type assertion; `/** */` documentation of types and their members; the
+  published API's documentation in `packages/sdk/src` and `packages/dev/src`; Foldkit's section
+  headers in `apps/web/src`; and one-line `// why:` comments for a reason no type or test can
+  carry, such as a provider workaround or a shutdown order. `clankerauth/no-prose-comments`
+  (`tools/oxlint/clankerauth`) enforces it.

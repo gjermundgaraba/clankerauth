@@ -3,9 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export default defineConfig({
-  // Declared here rather than as a package script so it can opt out of the task cache:
-  // `vp pack` clears dist before every build, and a replayed cache writes no files, so a
-  // cached declaration emit would leave the package without `edge.d.ts`.
+  // why: `vp pack` clears dist, and a replayed cache writes nothing, so `edge.d.ts` would vanish.
   run: {
     tasks: {
       build: {
@@ -38,7 +36,7 @@ export default defineConfig({
               );
 
               if (metadata) {
-                // SAFETY: npm package.json declares string name/version; missing fields are rejected below.
+                // SAFETY: npm declares name and version as strings; missing ones are skipped below.
                 const { name, version } = JSON.parse(metadata) as {
                   name: string;
                   version: string;

@@ -24,7 +24,6 @@ import { codesView } from "./codes.ts";
 
 // MODEL
 
-/** What a signed authorization request asks, as the provider wrote it into this page's query. */
 const ConsentRequest = Schema.Struct({
   clientId: Schema.String,
   scopes: Schema.Array(Schema.String),
@@ -39,8 +38,6 @@ const Decision = Schema.Literals(["Undecided", "Allowing", "Denying"]);
 
 type Decision = typeof Decision.Type;
 
-/** The page stops on an incomplete request or a client it cannot name, waits for the client's
- *  name, and then asks. */
 export const Model = defineTaggedUnion({
   Stopped: { reason: Schema.String },
   Loading: { request: ConsentRequest },
@@ -105,7 +102,6 @@ export const DecideConsent = Command.define("DecideConsent", {
 
 const INCOMPLETE = "Start authorization from your application; this consent link is incomplete.";
 
-/** The request the provider signed into the query, or none when the link is incomplete. */
 const requestOf = (search: string): Option.Option<ConsentRequest> => {
   const query = new URLSearchParams(search);
 
@@ -123,8 +119,6 @@ const requestOf = (search: string): Option.Option<ConsentRequest> => {
   );
 };
 
-/** The consent page for the address's query, fetching the asking client's name when the
- *  request is one the provider signed. */
 export const init = (search: string): UpdateReturn =>
   Option.match(requestOf(search), {
     onNone: () => ({ model: Model.Stopped({ reason: INCOMPLETE }) }),
@@ -138,7 +132,6 @@ export const init = (search: string): UpdateReturn =>
 
 const NOTHING_GRANTED = "Tick at least one permission, or deny the request.";
 
-/** Applies a step to a page that is asking, and leaves any other page as it is. */
 const whileAsking = (model: Model, step: (asking: Asking) => UpdateReturn): UpdateReturn =>
   Model.matchOrElse(model, { Asking: step }, () => ({ model }));
 
@@ -154,7 +147,7 @@ const decided = (
   commands: [DecideConsent({ accept: decision === "Allowing", maybeScope })],
 });
 
-// The provider refuses an empty scope, and leaving the scope out approves what was requested.
+// why: the provider refuses an empty scope, and an omitted scope approves everything requested
 const allowed = (asking: Asking): UpdateReturn =>
   Array.match(asking.granted, {
     onEmpty: () =>
@@ -208,8 +201,6 @@ export const update = (model: Model, message: Message) =>
       whileAsking(model, (asking) =>
         whenUndecided(asking, (undecided) => decided(undecided, "Denying", Option.none())),
       ),
-    // NOTE: the provider client follows the redirect to the client's callback itself, and a
-    // second navigation would cancel it, so the decision stays in force until the page goes.
     SucceededDecideConsent: () => ({ model }),
     FailedDecideConsent: ({ reason }) =>
       whileAsking(model, (asking) => ({
@@ -224,8 +215,6 @@ export const update = (model: Model, message: Message) =>
 
 const HEADING = "Allow this connection?";
 
-/** A client identified by its metadata document's https address names the host it lives on,
- *  which the client cannot choose the way it chooses its display name. */
 const metadataHostOf = (clientId: string): Option.Option<string> =>
   pipe(
     clientId,
@@ -305,7 +294,6 @@ const decisionActionsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyA
   ),
 ];
 
-/** Who asks and where the answer goes, in the provider's words rather than the client's. */
 const requestDetailsView = (
   { clientId, maybeRedirect, resources }: ConsentRequest,
   name: string,

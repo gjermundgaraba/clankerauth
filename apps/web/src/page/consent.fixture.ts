@@ -12,7 +12,6 @@ export const request = {
   maybeClaims: Option.none(),
 };
 
-/** The provider signed the request and the asking client's name has come back. */
 export const asking = Model.Asking({
   request,
   maybeName: Option.some("Fixture client"),

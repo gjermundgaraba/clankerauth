@@ -61,17 +61,14 @@ it.effect(
   "a route's own failures keep their bodies, and a provider refusal is the built-in 403",
   () =>
     Effect.gen(function* () {
-      // What `/forward-auth*` and `/healthz` answer a failure with: `respond`.
       const answered = (cause: unknown) =>
         Effect.gen(function* () {
-          // A provider call fails as `provider` turns what the provider threw.
           const failure = yield* Effect.flip(provider(() => Promise.reject(cause)));
           const response = HttpServerResponse.toWeb(yield* respond(failure));
 
           return { status: response.status, body: yield* Effect.promise(() => response.json()) };
         });
 
-      // The issuer's own failures carry `message` under their tag.
       expect(yield* answered(new Error("SQLITE_BUSY"))).toEqual({
         status: 500,
         body: Schema.encodeSync(InternalServerError)(
@@ -83,7 +80,6 @@ it.effect(
         body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
       });
 
-      // A provider 401 or 403 is effect-actions' `Forbidden`, which carries `message`.
       for (const status of ["UNAUTHORIZED", "FORBIDDEN"] as const) {
         expect(yield* answered(new APIError(status, { message: "Not the owner" }))).toEqual({
           status: 403,

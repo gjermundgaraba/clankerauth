@@ -9,7 +9,6 @@ import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";
 import { type AppRoute, urlToAppRoute } from "./route.ts";
 
-/** Whether the issuer still needs its owner, and otherwise whether this browser is signed in. */
 export const Access = defineTaggedUnion({
   SetupRequired: {},
   SignedIn: {},
@@ -18,8 +17,6 @@ export const Access = defineTaggedUnion({
 
 export type Access = typeof Access.Type;
 
-/** What the document shows. `Starting` waits on whether the issuer has an owner and whether
- *  this browser is signed in, which decide every other page. */
 export const Page = defineTaggedUnion({
   Starting: {},
   Failed: { reason: Schema.String },
@@ -40,5 +37,4 @@ export const Model = Schema.Struct({
 
 export type Model = typeof Model.Type;
 
-/** The route the address names. */
 export const routeOf = (model: Model): AppRoute => urlToAppRoute(model.url);

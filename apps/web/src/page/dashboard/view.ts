@@ -320,7 +320,6 @@ const sectionViews = (
 
 const liveRegionView = (h: HtmlBuilder<Message>) => (): Html => Announcer.view(h);
 
-/** The editor dialog's card: the open form, its refusal, and its cancel and submit. */
 const editorCardView = (
   model: Model,
   form: Form.Model,
@@ -400,8 +399,6 @@ const editorView = (model: Model, context: SectionContext, h: HtmlBuilder<Messag
     toParentMessage: (message) => Message.GotEditorMessage({ message }),
   });
 
-/** What the confirmation shows before any change has been asked about: it is never opened
- *  this way, but the dialog is always on the page. */
 const NO_CONFIRMATION = { title: "", question: "", body: "", label: "", isDanger: false };
 
 const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {

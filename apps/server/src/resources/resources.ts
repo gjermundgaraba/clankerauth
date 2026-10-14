@@ -40,11 +40,7 @@ const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
 });
 
-// An identifier must already be the string a client sends back. A client asks for
-// `new URL(metadata.resource).href`, and the access token's audience is that string,
-// so `https://notes.example` (no slash) would be rewritten and stop matching what is
-// registered here. Refuse it rather than let a resource server fail at verification.
-// RFC 8707 forbids a fragment; in canonical form a `#` can only begin one.
+// why: clients send `new URL(resource).href`, the token audience, so only that form matches
 const canonical = (identifier: string) => {
   try {
     return new URL(identifier).href === identifier && !identifier.includes("#");
@@ -53,8 +49,6 @@ const canonical = (identifier: string) => {
   }
 };
 
-// The provider validates identifiers (RFC 8707) and rejects duplicates. The contract's
-// schema checks the name and each scope's form.
 const validateInput = Effect.fn("Resources.validateInput")(function* (input: ResourceValue) {
   const identifier = input.identifier.trim();
   const name = input.name.trim();
@@ -66,7 +60,6 @@ const validateInput = Effect.fn("Resources.validateInput")(function* (input: Res
       "Resource identifiers must be absolute URIs in canonical form, without a fragment",
     );
 
-  // A protocol scope is the provider's, which no resource may declare: name it as sent.
   const reserved = input.scopes.findIndex((scope) => protocolScopes.includes(scope.trim()));
 
   if (reserved !== -1)
@@ -77,14 +70,7 @@ const validateInput = Effect.fn("Resources.validateInput")(function* (input: Res
 
 type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
-// Provider APIs own their writes and transaction boundaries. Do not hold a separate
-// transaction while calling them on the shared connection. Mutations take one permit,
-// so their read-diff-write sequences never interleave.
-//
-// Client access applies to managed clients only: they skip consent, so their links are
-// the whole of what they may obtain. An automatic client may ask for any resource, and
-// consent decides; the provider's own per-client enforcement is off, so its links are
-// neither written nor read.
+// why: provider APIs own their transactions; never hold one around them on the shared connection
 export class Resources extends Context.Service<
   Resources,
   {
@@ -112,7 +98,6 @@ export class Resources extends Context.Service<
     readonly synchronize: () => Effect.Effect<void, InternalServerError>;
   }
 >()("clankerauth/Resources") {
-  /** Publishes the catalog once the provider has seeded the administration resource. */
   static readonly layer = Layer.effect(
     Resources,
     Effect.gen(function* () {
@@ -123,11 +108,7 @@ export class Resources extends Context.Service<
       const mutating = yield* Semaphore.make(1);
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => mutating.withPermit(effect);
 
-      // A client's scope ceiling is a copy the provider reads on every request: the whole
-      // catalog for an automatic client, which the provider itself writes at registration
-      // and on every CIMD refresh, and the union of its resources' scopes for a managed one.
-      // Copies are written directly, so they can be rebuilt without an owner session, and only
-      // when they change.
+      // why: the provider reads each client's stored scopes; SQL rebuilds them without a session
       const syncClient = Effect.fn("Resources.syncClient")(function* (
         query: Sql,
         resources: readonly ResourceValue[],
@@ -145,8 +126,7 @@ export class Resources extends Context.Service<
         yield* query`UPDATE oauthClient SET scopes = ${scopes}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId} AND scopes IS NOT ${scopes}`;
       });
 
-      // A resource change and its client copies are separate writes, so a failure between
-      // them heals here.
+      // why: resource and client-scope writes are separate; resync heals a failure between them
       const synchronize = Effect.fn("Resources.synchronize")(function* () {
         const resources = yield* catalog.list();
 
@@ -164,7 +144,6 @@ export class Resources extends Context.Service<
           yield* syncClient(sql, resources, client.clientId);
       });
 
-      // The caller named it: input this issuer decodes but will not serve.
       const reserved = (identifier: string) =>
         identifier === reservedIdentifier
           ? Effect.fail(invalidInput(["identifier"], "The administration Resource is fixed"))
@@ -180,8 +159,6 @@ export class Resources extends Context.Service<
           const resource = yield* validateInput(input);
           const headers = yield* providerHeaders;
 
-          // Recreating a resource revives nothing, even if its deletion never cleared its authorization.
-          // Nothing is granted for an unknown resource, so none can appear before it exists.
           if (!(yield* catalog.get(resource.identifier)))
             yield* transaction((query) =>
               clearAuthorization(query, { resource: resource.identifier }),
@@ -232,16 +209,11 @@ export class Resources extends Context.Service<
               auth.api.adminDeleteOAuthResource({ headers, params: resourceParams(identifier) }),
             ),
           );
-          // The provider removes the resource and foreign keys remove its links; the
-          // authorization clients were given for it goes with it. Should this clear fail,
-          // create clears it before the identifier can be used again.
           yield* transaction((query) => clearAuthorization(query, { resource: identifier }));
           yield* synchronize();
 
           return { deleted: true };
         }, serialized),
-        // Links and the authorization they allowed change in one local transaction, so
-        // restoring access asks again rather than reviving a grant that removal missed.
         setAccess: Effect.fn("Resources.setAccess")(function* ({
           client_id: clientId,
           resources: identifiers,

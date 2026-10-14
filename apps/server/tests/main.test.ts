@@ -94,7 +94,7 @@ test.each(["SIGINT", "SIGTERM"] as const)(
     expect(await health.json()).toEqual({ status: "ok" });
     expect(existsSync(`${server.database}-wal`)).toBe(true);
 
-    // The continue handshake proves the request was admitted before shutdown.
+    // why: the 100-continue handshake proves the server admitted the request before the signal
     const pending = request(`${server.url}/healthz`, {
       method: "GET",
       headers: { Expect: "100-continue", "Content-Length": "1", Connection: "close" },
@@ -116,9 +116,9 @@ test.each(["SIGINT", "SIGTERM"] as const)(
 
     await server.waitForExit();
     await disconnected;
-    // NodeRuntime uses Effect's interruption exit code for either signal.
+    // why: NodeRuntime exits with Effect's interruption code for either signal
     expect(server.child.exitCode).toBe(130);
-    // SQLite removes the WAL on connection close, not on abrupt process termination.
+    // why: SQLite removes the WAL when the connection closes, not when the process dies
     expect(existsSync(`${server.database}-wal`)).toBe(false);
   },
 );

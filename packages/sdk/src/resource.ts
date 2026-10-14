@@ -100,12 +100,8 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
   { scopes, required }: Declaration<Scope>,
   options: Options,
 ) {
-  // One resource per application, at the public origin root, trailing slash and all.
-  // An MCP client sends `new URL(metadata.resource).href`, and the token's audience is
-  // that string, so deriving it here is what keeps the two in agreement.
   const identifier = new URL("/", options.publicUrl).href;
 
-  // effect-actions checks every scope here is an OAuth scope token, when the provider builds.
   const metadata = {
     resource: identifier,
     authorizationServers: [options.issuer],
@@ -122,9 +118,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     apiKeys: options.apiKeys,
   });
 
-  // A request must not wait on an issuer that does not answer: the credential is refused
-  // as unavailable, and a read no other request waits on is interrupted. A key list read
-  // gives up sooner, so a held list still decides a key.
   const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.timeoutOrElse(effect, {
       duration: "5 seconds",
@@ -146,7 +139,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
   ) {
     const token = Authentication.bearerTokenOf(authorization);
 
-    // As a protected route refuses a request without one, before its verifier runs.
     if (Option.isNone(token))
       return yield* new Action.Unauthenticated({ message: "A bearer token is required." });
 
@@ -171,7 +163,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     if (Result.isSuccess(verified))
       return { ok: true, principal: verified.success } satisfies Admission;
 
-    // A refusal, or the `ProviderUnavailable` the descriptor declares, as its routes send it.
     const web = HttpServerResponse.toWeb(
       Authentication.refusalResponse(verified.failure, {
         authentication,
@@ -202,13 +193,9 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
         const now = yield* Clock.currentTimeMillis;
         const remaining = Math.max(0, (principal.expiresAt ?? Infinity) - now);
 
-        // A key is checked again against each refreshed list, until it expires.
         if (principal.actor.kind === "key")
           return yield* Effect.sleep(Math.min(remaining, Duration.toMillis(keyListRefresh)));
 
-        // An access token cannot be revoked and never becomes valid again, so its expiry is
-        // all that ends it: no second JWKS read that an issuer outage could fail. It ends as
-        // the verifier refuses an expired token.
         yield* Effect.sleep(remaining);
 
         return yield* refusalOf(new Unauthorized());
@@ -380,11 +367,8 @@ export const make = <
   const layer = (options: Options) =>
     Layer.effect(service, build(authentication, declaration, options));
 
-  // The descriptor as the verifier fails: `DeclaresUnavailable` holds that every alternative of
-  // `E` declares `ProviderUnavailable`, which a generic `E` cannot show the types by itself.
   const declaring: Login<Name, E | Unavailable> = authentication;
 
-  // The descriptor's verifier: a token to its principal, a refusal, or `ProviderUnavailable`.
   const provider = Authentication.layer(
     declaring,
     Effect.gen(function* () {
@@ -392,9 +376,6 @@ export const make = <
       const host = new URL(resource).host;
       const warned = yield* Ref.make(protectedResource === undefined);
 
-      // RFC 9728 has a client refuse metadata naming another resource than the one it
-      // reached, so a listener publishing discovery at another host fails every OAuth login
-      // while keys keep working. A proxy may rewrite the host, so this warns and refuses nothing.
       const noteHost = Effect.gen(function* () {
         if (yield* Ref.get(warned)) return;
 

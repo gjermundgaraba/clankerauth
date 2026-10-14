@@ -50,8 +50,6 @@ const summary = Effect.fnUntraced(function* (key: {
     keyId: key.id,
     name: key.name ?? "",
     enabled: key.enabled,
-    // Permissions that no longer decode grant nothing: key lists already leave the key
-    // out, and it is listed with none, so the owner can still see and delete it.
     permissions: yield* permissions(key.permissions ?? {}).pipe(
       Effect.catch(() =>
         Effect.as(
@@ -74,7 +72,6 @@ type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
 type Summary = typeof ApiKey.Type;
 
-/** The owner's API keys, and the signed key lists resource servers verify them against. */
 export class ApiKeys extends Context.Service<
   ApiKeys,
   {
@@ -113,8 +110,6 @@ export class ApiKeys extends Context.Service<
       const { sql } = yield* Database;
       const catalog = yield* ResourceCatalog;
 
-      // The contract's schemas check the name and that each grant names scopes, once each; what
-      // remains depends on the stored resources.
       const validate = Effect.fn("ApiKeys.validate")(function* (
         grants: typeof KeyPermissions.Type | undefined,
       ) {
@@ -141,7 +136,6 @@ export class ApiKeys extends Context.Service<
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          // The plugin pages in memory over one database read, so listings stop at its page size.
           const result = yield* internal(
             provider(() =>
               auth.api.listApiKeys({
@@ -234,9 +228,7 @@ export class ApiKeys extends Context.Service<
           `
             : [];
 
-          // A row that does not decode or seal fails closed on its own: that key is left out,
-          // and every other key, on every resource, is listed as before. Its digest is the
-          // entry's secret, so only the key's ID reaches the log.
+          // why: a key's digest is its entry's secret, so only the key ID may reach the log
           const entries = yield* Effect.forEach(rows, (row) =>
             Effect.gen(function* () {
               const key = yield* storedKey(row);

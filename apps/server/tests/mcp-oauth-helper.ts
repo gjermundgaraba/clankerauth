@@ -16,7 +16,6 @@ type GrantOptions = { resource?: string; scope?: string; granted?: string; clien
 /** The consent page's submission; without `scope`, the owner approves everything requested. */
 type ConsentDecision = { accept: boolean; oauth_query: string; scope?: string };
 
-/** A native MCP client registers anonymously; the owner grants access through consent. */
 export async function mcpOAuthCode(
   handle: TestHandler,
   baseURL: string,

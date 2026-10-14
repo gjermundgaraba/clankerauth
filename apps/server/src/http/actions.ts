@@ -54,7 +54,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         { authorize: authorizeOwner },
       );
 
-      // Public: their handlers hold their own access rules, and no identity reaches them.
+      // why: public, so each handler enforces its own access rules
       const issuer = Action.implement(IssuerActions, {
         setupStatus: setup.setupStatus,
         setupOwner: setup.setupOwner,
@@ -63,13 +63,9 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
 
       const adminResource = yield* administrationResource();
 
-      // The session cookie as this deployment names it, `__Secure-` prefixed over HTTPS, which
-      // the binding's routes read and its OpenAPI document names.
       const session = ownerSession(context.authCookies.sessionToken.name);
       const Http = binding(session);
 
-      // Owner administration needs the dashboard session; issuer actions are public, with
-      // their own access rules, and must work before anyone has signed in.
       const httpRoutes = Layer.mergeAll(
         ActionHttp.layer(Http, owner).pipe(Layer.provide(sessionOwner(session))),
         HttpRouter.add(
@@ -80,14 +76,11 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
         ActionHttp.layer(Http, issuer).pipe(Layer.provide(responseCookies.layer)),
       );
 
-      // A token client's administration, over MCP or HTTP, under one provider, which also
-      // publishes the resource's discovery. Tools are listed to every caller; a read-only
-      // token is refused per call, as it is per request over HTTP.
       const tokenRoutes = Layer.mergeAll(
         ActionMcp.layerHttp(owner, {
           name: "clankerauth-admin",
           version: manifest.version,
-          // Native MCP admission needs this allowlist even after owner authentication.
+          // why: native MCP admission checks this allowlist even after authentication
           allowedOrigins: mcpAllowedOrigins,
           instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
           authentication: OwnerToken,

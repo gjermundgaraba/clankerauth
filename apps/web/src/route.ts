@@ -14,7 +14,6 @@ export const AppRoute = defineRouteUnion({
 
 export type AppRoute = typeof AppRoute.Type;
 
-/** The dashboard's three screens, which share its listing. */
 const dashboardScreens = ["Clients", "Resources", "Keys"] as const;
 
 export const DashboardRoute = AppRoute.subset(dashboardScreens);

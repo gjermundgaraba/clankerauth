@@ -22,7 +22,6 @@ type ResourceView = typeof ResourceSummary.Type;
 const INTRO =
   "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours.";
 
-/** API keys can be granted on any Resource but the issuer's own administration. */
 export const grantableResources = ({ listing }: SectionContext): ReadonlyArray<ResourceView> =>
   Array.filter(listing.overview.resources, ({ builtIn }) => !builtIn);
 
