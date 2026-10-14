@@ -1,8 +1,11 @@
+import { fileURLToPath } from "node:url";
 import { defineRule } from "vite-plus/lint/plugins";
 
 import type { ESTree } from "vite-plus/lint/plugins";
 
 type Options = { readonly allow?: ReadonlyArray<string>; readonly deny?: ReadonlyArray<string> };
+
+const repositoryRoot = fileURLToPath(new URL("../../../../", import.meta.url)).replace(/\/$/u, "");
 
 const isRelative = (specifier: string) => specifier.startsWith("./") || specifier.startsWith("../");
 
@@ -32,7 +35,7 @@ export const importFenceRule = defineRule({
     },
     messages: {
       fenced:
-        "`{{specifier}}` is outside this folder's import fence. AGENTS.md records what each folder may import.",
+        "`{{specifier}}` is outside this folder's import fence, which the root vite.config.ts lists.",
       dynamic:
         "An import whose specifier is not a string literal cannot be checked against this folder's fence.",
     },
@@ -53,7 +56,7 @@ export const importFenceRule = defineRule({
 
     const check = (node: ESTree.Node, specifier: string) => {
       const target = isRelative(specifier)
-        ? fromRoot(context.cwd, context.filename, specifier)
+        ? fromRoot(repositoryRoot, context.filename, specifier)
         : specifier;
 
       const refused =

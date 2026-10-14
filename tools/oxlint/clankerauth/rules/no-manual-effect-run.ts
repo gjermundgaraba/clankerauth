@@ -19,7 +19,7 @@ export const noManualEffectRunRule = defineRule({
     },
     messages: {
       manual:
-        "`{{runner}}` runs an Effect by hand. Return the Effect, or run it in an entry or a bridge that AGENTS.md lists.",
+        "`{{runner}}` runs an Effect by hand. Return the Effect, or run it in an entry or a bridge that the root vite.config.ts allows.",
     },
     schema: [
       {
