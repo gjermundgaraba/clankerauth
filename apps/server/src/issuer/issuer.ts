@@ -13,7 +13,6 @@ import { signer } from "./signing.ts";
 import { fetchClientMetadataResource } from "../platform/cimd-transport.ts";
 import { clientStore } from "../clients/clients.ts";
 import { resourceReference } from "../authorization/authorization.ts";
-import { upgrade } from "./upgrades.ts";
 import {
   getOAuthProviderState,
   oauthProvider,
@@ -246,7 +245,6 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     if (plan.schemaProblems.length)
       return yield* Effect.fail(new Error("Database schema requires manual repair"));
     yield* Effect.tryPromise(() => plan.runMigrations());
-    yield* upgrade(database.kysely, sql, settings.baseURL);
     const auth = betterAuth(options);
     // Provider initialization seeds the administration resource; publish the catalog after it.
     const context = yield* Effect.tryPromise(() => auth.$context);

@@ -181,8 +181,7 @@ This setting does not grant OAuth access or relax the dashboard's cookie policy.
 The built-in **clankerauth administration** resource is created at startup, identified by
 the issuer's origin root with its trailing slash, `<CLANKERAUTH_BASE_URL>/`, as an
 application's resource is. Its tokens are taken at `/mcp` and `/api/owner/<action>`; the
-dashboard at `/` takes the owner's session cookie alone. Before 0.16.0 it was
-`<CLANKERAUTH_BASE_URL>/mcp`.
+dashboard at `/` takes the owner's session cookie alone.
 It is fixed: every start restores its name and scopes, and it cannot be edited or deleted. Protected-resource metadata
 is public at `/.well-known/oauth-protected-resource` and advertises `clankerauth:read`,
 `clankerauth:write` and `offline_access`. Clients must send the resource parameter during authorization
