@@ -25,11 +25,6 @@ const options = {
   },
 };
 
-/**
- * The entries of the key list a resource server reads for `asked`, or the status of a
- * failed read. Entries are sealed to their keys; what they grant is the SDK's to open,
- * and its tests and the server's do. Here, what matters is which keys are listed.
- */
 const listed = async (issuer, asked) => {
   const response = await fetch(new URL("/api/keyList", issuer), {
     method: "POST",
@@ -63,7 +58,7 @@ const login = (issuer, owner = issuer.owner) =>
     body: JSON.stringify(owner),
   });
 
-await test("real HTTP issuer provisions resources and a confidential native client, and closes idempotently", async () => {
+await test("real HTTP issuer provisions resources and a confidential native client, drops oversized bodies, and closes idempotently", async () => {
   const issuer = await startDisposableIssuer(options);
 
   try {
@@ -129,7 +124,6 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.equal(state.clients[0].token_endpoint_auth_method, "client_secret_basic");
     assert.deepEqual(state.clients[0].redirect_uris, [options.client.redirect]);
     assert.ok(issuer.clientSecret);
-    // Oversized bodies are disconnected by the body limit rather than answered.
     await assert.rejects(
       fetch(`${issuer.url}/api/setupOwner`, {
         method: "POST",
@@ -169,7 +163,7 @@ await test("a cookie domain serves forward auth: the signed-in owner gets a reso
   try {
     assert.equal(new URL(issuer.url).hostname, "clankerauth.notes.localhost");
     assert.equal(issuer.issuer, `${issuer.url}/api/auth`);
-    // Node's fetch is a script's request, not a navigation, so no session is refused in place.
+    // why: Node's fetch is a script's request, not a navigation, so it is refused in place.
     const anonymous = await forward(issuer, "");
     assert.equal(anonymous.status, 401);
     await anonymous.body.cancel();
@@ -238,7 +232,6 @@ await test("new runs have independent credentials and identity databases", async
 const directories = async () =>
   (await readdir(tmpdir())).filter((name) => name.startsWith("clankerauth-disposable-")).sort();
 
-/** Whether nothing listens on the loopback port any more. */
 const portFree = (port) =>
   new Promise((resolve) => {
     const probe = createServer();
@@ -266,7 +259,6 @@ await test("a start refused after binding, by an invalid cookieDomain, frees its
   const before = await directories();
   const port = await reserveLoopbackPort();
 
-  // Settings are validated only once the listener has chosen the port the issuer's URL needs.
   await assert.rejects(
     startDisposableIssuer({ ...options, port, cookieDomain: "localhost" }),
     /CLANKERAUTH_COOKIE_DOMAIN/,
@@ -280,7 +272,7 @@ await test("close() does not wait for a request whose body never arrives", async
   const { port } = new URL(issuer.url);
   const socket = connect(Number(port), "127.0.0.1");
   await once(socket, "connect");
-  // A sign-in whose body the client never sends: the handler waits on it uninterruptibly.
+  // why: a sign-in handler waits uninterruptibly on a body the client never sends.
   socket.write(
     `POST /api/auth/sign-in/email HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: ${issuer.url}\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n`,
   );
@@ -355,7 +347,7 @@ await test("bundled provider lists key metadata without plaintext and keys for o
   }
 });
 
-await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests", async () => {
+await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests, none of them provisioning", async () => {
   const requests = [];
   const metadataRequests = [];
   const clientId = "https://fixture.example/oauth/client.json";
@@ -383,7 +375,6 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   });
 
   try {
-    // Provisioning is in-process; only the test's own traffic reaches the listener.
     assert.deepEqual(requests, []);
     const discoveryURL = `${issuer.issuer}/.well-known/oauth-authorization-server`;
     const discoveryResponse = await fetch(discoveryURL);
@@ -481,7 +472,7 @@ await test(
   },
 );
 
-await test("a data directory keeps the owner, the secret and the client across restarts", async () => {
+await test("a data directory keeps the owner, the secret, the client and the keys across restarts, provisioning once", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-workspace-"));
   const port = await reserveLoopbackPort();
   const workspace = { ...options, dataDir: directory, port };
@@ -494,7 +485,6 @@ await test("a data directory keeps the owner, the secret and the client across r
     const key = await first.apiKey({ permissions: { [resource.identifier]: ["example:read"] } });
     assert.match(key, /^clankerauth_/);
     await first.close();
-    // The directory is the caller's, so closing leaves it alone.
     await access(join(directory, "credentials.json"));
 
     const second = await startDisposableIssuer(workspace);
@@ -520,11 +510,9 @@ await test("a data directory keeps the owner, the secret and the client across r
         })
       ).json();
 
-      // Provisioning is idempotent: no second copy of the resource or the client.
       assert.equal(state.clients.length, 1);
       assert.equal(state.resources.length, 2);
 
-      // The database survived, so the key minted before the restart is still listed.
       assert.equal((await listed(`${second.url}/api/auth`, resource.identifier)).length, 1);
     } finally {
       await second.close();
@@ -572,13 +560,12 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
 
   const seen = [];
   const errors = [];
-  // An upgraded socket is no longer the server's to close, so the test owns every one.
+  // why: an upgraded socket is no longer its server's to close, so the test destroys each one.
   const sockets = new Set();
   const track = (socket) => sockets.add(socket.once("close", () => sockets.delete(socket)));
 
   const upgradeHosts = [];
 
-  // The app behind the edge: it answers HTTP and accepts one upgraded socket.
   const backend = createServer((incoming, outgoing) => {
     seen.push(incoming.headers.authorization ?? null);
     outgoing.writeHead(200, { "content-type": "text/plain" }).end("app");
@@ -622,8 +609,6 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     }),
   );
 
-  // The edge returns the upgrades it does not own, the way it leaves Vite's HMR socket
-  // alone; whoever else listens answers them.
   edge.on("upgrade", (incoming, socket) => {
     const path = incoming.url.split("?")[0];
 
@@ -634,8 +619,7 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
 
   await new Promise((done) => edge.listen(port, "127.0.0.1", done));
 
-  // node:http, not fetch: `fetch` owns Sec-Fetch-Mode, and that header is what decides
-  // whether the issuer may redirect a request through sign-in.
+  // why: `fetch` owns Sec-Fetch-Mode, the header that decides whether sign-in may redirect.
   const get = (path, headers = {}) =>
     new Promise((resolve, reject) => {
       const attempt = request(`http://127.0.0.1:${port}${path}`, { headers }, (answer) => {
@@ -653,15 +637,12 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     });
 
   try {
-    // A script's request without a session is refused in place, never redirected, and
-    // the issuer's own explanation is relayed rather than replaced by an empty body.
     const anonymous = await get("/docs");
     assert.equal(anonymous.status, 401);
     assert.match(anonymous.headers["content-type"], /application\/json/);
     assert.deepEqual(JSON.parse(anonymous.body), { error: "unauthenticated" });
     assert.deepEqual(seen, []);
 
-    // Public paths never reach the issuer at all.
     const probe = await get("/healthz");
     assert.equal(probe.status, 200);
     assert.deepEqual(seen, [null]);
@@ -672,7 +653,6 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     assert.equal(admitted.body, "app");
     assert.match(seen.at(-1), /^Bearer /);
 
-    // A navigation without a session goes through sign-in instead.
     const navigation = await get("/docs", { "sec-fetch-mode": "navigate" });
     assert.equal(navigation.status, 302);
     assert.match(navigation.headers.location, /\/forward-auth\/continue/);
@@ -709,15 +689,12 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
 
     assert.equal(greeting, "hello");
     assert.match(seen.at(-1), /^Bearer /);
-    // The app's request policy answers only for its public host, so the edge must not rewrite it.
     assert.equal(upgradeHosts.at(-1), `127.0.0.1:${port}`);
     proxied.socket.destroy();
 
-    // An upgrade on a path the edge does not own is left to whoever else listens.
     const untouched = await openSocket("/hmr", { cookie });
     assert.equal(untouched.status, 200);
 
-    // An unreachable issuer is a 502 the caller sees, not a crash.
     await issuer.close();
     const broken = await get("/docs", { cookie });
     assert.equal(broken.status, 502);

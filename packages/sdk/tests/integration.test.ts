@@ -29,7 +29,6 @@ import {
   webHandler,
 } from "./support.ts";
 
-// One resource per app, at the origin root, so /api, /mcp and a socket share it.
 const resourceId = `${publicUrl}/`;
 
 const Identity = Action.make("identity", {
@@ -46,8 +45,6 @@ const Write = Action.make("write", {
   success: Schema.String,
 });
 
-// Refusals are built in on every endpoint; the descriptor declares the one answer that is the
-// verifier's own, so every protected endpoint declares it and a typed client decodes it too.
 const Http = ActionHttp.make([Identity, Write, Whoami], { authentication: Login });
 
 const identity = Effect.map(CurrentPrincipal, ({ actor }) => {
@@ -71,7 +68,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
       { authorize },
     );
 
-    // The resource's layer also publishes discovery: no route of its own.
     const web = yield* webHandler(() =>
       HttpRouter.toWebHandler(
         Layer.mergeAll(
@@ -105,7 +101,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
 
     const missing = yield* call("identity");
     assert.equal(missing.status, 401);
-    // The scope every credential must carry, which a first login requests.
     assert.match(missing.headers.get("www-authenticate") ?? "", /scope="notes:read"/u);
 
     const identities = yield* Effect.forEach(
@@ -117,14 +112,12 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
     assert.deepEqual(identities, ["key-1", "key-2"]);
     assert.equal(yield* json(yield* call("write", issuer.key)), "written");
 
-    // `whoami` is the SDK's own, answered from the verified credential.
     assert.deepEqual(yield* json(yield* call("whoami", issuer.readOnlyKey)), {
       subject: "owner",
       issuer: issuer.issuer,
       scopes: ["notes:read"],
     });
 
-    // The application's rule refuses the write. A key cannot step up, so its refusal is a plain 403.
     const refused = yield* call("write", issuer.readOnlyKey);
     assert.equal(refused.status, 403);
     assert.deepEqual(
@@ -132,7 +125,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
       sent(new Action.Forbidden({ message: "Requires notes:write." })),
     );
 
-    // An access token can: its 403 names only the scope it lacks.
     const stepUp = yield* call(
       "write",
       yield* Effect.promise(() => issuer.sign({ scope: "notes:read" })),
@@ -144,7 +136,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
       sent(new Action.Forbidden({ message: "Requires notes:write.", scopes: ["notes:write"] })),
     );
 
-    // RFC 9728: one resource with no path, one discovery document, for every surface.
     const metadata = yield* Effect.promise(() =>
       web.handler(new Request(`${publicUrl}/.well-known/oauth-protected-resource`)),
     );
@@ -160,7 +151,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
       },
     );
 
-    // A `tools/list` as a web `Request`, answered by the handler under test.
     const mcp = (headers: Record<string, string>) =>
       Effect.promise(() =>
         web.handler(
@@ -178,7 +168,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
       200,
     );
 
-    // The same hook runs on MCP. A key's refusal is the tool's failure, as typed as HTTP's.
     const asKey = HttpClient.mapRequest(HttpClientRequest.bearerToken(issuer.readOnlyKey));
 
     const refusedTool = yield* Effect.gen(function* () {
@@ -193,7 +182,6 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
     assert(refusedTool instanceof Action.Forbidden);
     assert.equal(refusedTool.scopes, undefined);
 
-    // An outage after the key list was read changes nothing for a key.
     issuer.fail(503);
     assert.equal((yield* call("identity", issuer.key)).status, 200);
   }),
@@ -237,7 +225,6 @@ it.live("a surface without discovery authenticates and publishes nothing", () =>
 
     assert.equal((yield* call(`Bearer ${issuer.key}`)).status, 200);
 
-    // No metadata is published.
     const missing = yield* call();
     assert.equal(missing.status, 401);
 
@@ -298,13 +285,11 @@ it.live("a listener publishing discovery warns once when reached at another host
     assert.equal((yield* call(publishing, new URL(publicUrl).host)).status, 200);
     assert.deepEqual(warnings, []);
 
-    // Keys keep working at any host; only discovery there is broken, so it is said once.
     assert.equal((yield* call(publishing, "notes.elsewhere.example")).status, 200);
     assert.equal((yield* call(publishing, "notes.elsewhere.example")).status, 200);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /notes\.elsewhere\.example/u);
 
-    // A listener beside it publishes nothing, so its own host is not the resource's.
     assert.equal((yield* call(beside, "notes.elsewhere.example")).status, 200);
     assert.equal(warnings.length, 1);
   }),
@@ -315,7 +300,6 @@ const Admin = Resource.make(
   { scopes: ["notes:read", "notes:write"], required: "notes:read" },
 );
 
-// A single-scope resource: verification is its whole policy.
 const Machine = Resource.make(
   Authentication.make("fixture.machine", CurrentPrincipal, { error: ProviderUnavailable }),
   { scopes: ["notes:machine"], required: "notes:machine" },
@@ -330,7 +314,6 @@ const MachineHttp = ActionHttp.make([Identity], {
   authentication: Machine.authentication,
 });
 
-// Module-level implementations, each behind its own application rule.
 const admin = Action.implement(
   [Identity, Write],
   { identity: () => identity, write: () => Effect.succeed("written") },
@@ -342,7 +325,7 @@ const admin = Action.implement(
 const machine = Action.implement(Identity, () => identity, { authorize: Action.allowAll });
 
 it.live.each(["admin first", "machine first"] as const)(
-  "two resources in one layer graph each guard their own surface, built %s",
+  "two resources in one layer graph, without Layer.fresh, each guard their own surface, built %s",
   (order) =>
     Effect.gen(function* () {
       const issuer = yield* fakeIssuer({
@@ -362,7 +345,6 @@ it.live.each(["admin first", "machine first"] as const)(
         Layer.provide(Machine.layer({ ...options, discovery: false })),
       );
 
-      // One handler, one layer graph, no `Layer.fresh`: each surface still reads its own.
       const web = yield* webHandler(() =>
         HttpRouter.toWebHandler(
           (order === "admin first"
@@ -386,7 +368,6 @@ it.live.each(["admin first", "machine first"] as const)(
       const reader = yield* Effect.promise(() => issuer.sign({ scope: "notes:read" }));
       const machineToken = yield* Effect.promise(() => issuer.sign({ scope: "notes:machine" }));
 
-      // Each surface verifies against its own resource's scopes and enforces its own rule.
       assert.equal((yield* call("/api/identity", reader)).status, 200);
       assert.equal((yield* call("/api/identity", machineToken)).status, 403);
       assert.equal((yield* call("/api/write", reader)).status, 403);
@@ -394,7 +375,6 @@ it.live.each(["admin first", "machine first"] as const)(
       assert.equal((yield* call("/machine/identity", machineToken)).status, 200);
       assert.equal((yield* call("/machine/identity", reader)).status, 403);
 
-      // Only the resource that publishes answers discovery.
       const discovery = yield* Effect.promise(() =>
         web.handler(new Request(`${publicUrl}/.well-known/oauth-protected-resource`)),
       );
@@ -416,7 +396,6 @@ it.live(
         { authorize },
       );
 
-      // A route of the host's own reads its caller as a handler does.
       const subject = Effect.map(CurrentPrincipal, (principal) =>
         HttpServerResponse.text(principal.subject),
       );
@@ -429,7 +408,6 @@ it.live(
               Layer.provide(Notes.admitted("notes:write").layer),
             ),
           ).pipe(
-            // One provider for actions and routes alike: `admitted` authenticates with it.
             Layer.provide(Notes.provider),
             Layer.provide(Notes.layer({ issuer: issuer.issuer, publicUrl: new URL(publicUrl) })),
             Layer.provide(FetchHttpClient.layer),
@@ -468,7 +446,6 @@ it.live(
 
       const stepUpToken = yield* Effect.promise(() => issuer.sign({ scope: "notes:read" }));
 
-      // No credential, a key without the scope, and a client that can step up to it.
       for (const authorization of [
         undefined,
         `Bearer ${issuer.readOnlyKey}`,
@@ -480,7 +457,6 @@ it.live(
         assert.deepEqual(yield* seen(yield* upload(authorization)), expected, `${authorization}`);
       }
 
-      // A caller holding the scope reaches the route, as itself.
       const written = yield* upload(`Bearer ${issuer.key}`);
       assert.equal(written.status, 200);
       assert.equal(yield* Effect.promise(() => written.text()), "owner");

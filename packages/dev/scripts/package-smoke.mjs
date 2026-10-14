@@ -41,8 +41,6 @@ try {
   assert.equal(manifest.version, version);
   assert.deepEqual(manifest.dependencies ?? {}, {});
 
-  // Every entry point ships declarations; a build that emits only some of them is
-  // invisible until a consumer imports the one that is missing.
   for (const [entry, target] of Object.entries(manifest.exports))
     assert.ok(
       (await readFile(join(installed, target.types), "utf8")).length > 0,
@@ -53,7 +51,7 @@ try {
   const headings = new Set(notices.split("\n---\n\n").map((section) => section.split("\n")[0]));
 
   for (const provider of ["@better-auth/api-key", "@better-auth/oauth-provider"]) {
-    // Providers export their dist entry, but not their package manifest.
+    // why: providers export their dist entry but not their package.json.
     const manifestPath = join(dirname(serverRequire.resolve(provider)), "../package.json");
     const { version } = JSON.parse(await readFile(manifestPath, "utf8"));
     const heading = `${provider}@${version}`;

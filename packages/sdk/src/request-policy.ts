@@ -64,7 +64,6 @@ export const make = (options: Options) => {
   const allows = (request: Request): boolean => {
     if (pathOf(request.target) === probePath) return true;
 
-    // A request with no Host is not a browser request for this app's origin.
     if (request.host !== host) return false;
 
     return request.origin === undefined || origins.has(request.origin);
@@ -72,7 +71,7 @@ export const make = (options: Options) => {
 
   return {
     allows,
-    /** Refuse anything `allows` rejects with an empty-bodied 403, before any handler. */
+    /** Refuse anything `allows` rejects with a 403 (body `Forbidden`) before any handler. */
     middleware: HttpRouter.middleware((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;

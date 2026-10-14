@@ -23,7 +23,6 @@ import {
   urlToAppRoute,
 } from "./route.ts";
 
-// The dashboard's copy buttons write through the application's `Clipboard` service.
 type UpdateReturn = Update.Return<Model, Message, Clipboard.Clipboard>;
 
 // COMMAND
@@ -64,15 +63,12 @@ export const LoadUrl = Command.define("LoadUrl", {
   execute: ({ href }) => load(href).pipe(Effect.as(Message.CompletedLoadUrl())),
 });
 
-/** Loads the address on show afresh: the browser has already moved to it, and assigning it
- *  again would only jump to its fragment. */
+// why: the browser is already at the address, and assigning it again only jumps to its fragment
 export const ReloadPage = Command.define("ReloadPage", {
   messages: [Message.CompletedReloadPage],
   execute: Effect.sync(() => location.reload()).pipe(Effect.as(Message.CompletedReloadPage())),
 });
 
-/** Moves focus to the fragment an address names, such as the skip link's, or to the top of a
- *  page without one. */
 export const FocusFragment = Command.define("FocusFragment", {
   args: { maybeFragment: Schema.Option(Schema.String) },
   messages: [Message.CompletedFocusFragment],
@@ -103,13 +99,10 @@ const setupPage = (model: Model): UpdateReturn => ({
   model: withPage(model, Page.Setup({ setup: Setup.init() })),
 });
 
-/** The sign-in, which goes on to `destination` unless its query names another. */
 const loginPage = (model: Model, search: string, destination: string): UpdateReturn => ({
   model: withPage(model, Page.Login({ login: Login.init(search, destination) })),
 });
 
-/** An owner already signed in goes on where the sign-in would have sent them; only a sign-in
- *  that continues an authorization still shows the form. */
 const signedInLoginPage = (model: Model, search: string): UpdateReturn => {
   const login = Login.init(search, clientsRouter());
 
@@ -138,17 +131,11 @@ const notFoundPage = (model: Model): UpdateReturn => ({
   model: withPage(model, Page.NotFound()),
 });
 
-/** Moves to another address in place of this one, and shows `page` there. */
 const redirected = (page: UpdateReturn, url: string): UpdateReturn => ({
   model: page.model,
   commands: [...(page.commands ?? []), ReplaceUrl({ url })],
 });
 
-/**
- * The page an address shows, once access is known. Until the owner exists every address is
- * setup's. A signed-out browser signs in where it stands, except at consent, which the
- * provider signed.
- */
 const pageFor = (model: Model, access: Access): UpdateReturn => {
   const route = routeOf(model);
 
@@ -180,8 +167,6 @@ const pageFor = (model: Model, access: Access): UpdateReturn => {
   });
 };
 
-/** Whether the page on show answers `route` in place, keeping its state; any other route gets
- *  its page afresh. */
 const isServedBy = (page: Page, route: AppRoute): boolean =>
   Page.match(page, {
     Starting: () => true,
@@ -266,14 +251,11 @@ const foldTips = Update.foldChild({
 
 const isSameSearch = Option.makeEquivalence(String.Equivalence);
 
-/** The fragment a link names in the document on show, such as the skip link's. */
 const fragmentOf = (model: Model, url: Url): Option.Option<string> =>
   url.pathname === model.url.pathname && isSameSearch(url.search, model.url.search)
     ? url.hash
     : Option.none();
 
-/** A fragment of the document on show only moves focus. Otherwise a link the page on show
- *  answers moves in place, and any other is loaded afresh. */
 const internalLinkClicked = (model: Model, url: Url): UpdateReturn =>
   Option.match(fragmentOf(model, url), {
     onSome: (fragment) => ({
@@ -292,10 +274,6 @@ const linkClicked = (model: Model, request: UrlRequest): UpdateReturn =>
     External: ({ href }) => ({ model, commands: [LoadUrl({ href })] }),
   });
 
-/** A new address, from a link or the browser's back and forward, keeps the page on show when
- *  it answers it, and focus follows the address's fragment, such as the skip link's. Any other
- *  address is loaded afresh, which asks again whether the issuer has an owner and this browser
- *  a session. */
 const urlChanged = (model: Model, url: Url): UpdateReturn =>
   isServedBy(model.page, urlToAppRoute(url))
     ? {

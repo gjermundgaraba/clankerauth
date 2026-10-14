@@ -13,7 +13,6 @@ import { providerSessionFor } from "./provider-session.ts";
 
 const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
 
-/** The sole account: who it is, how setup creates it, and how administration acts as it. */
 export class OwnerAccount extends Context.Service<
   OwnerAccount,
   {

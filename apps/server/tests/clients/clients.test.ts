@@ -58,7 +58,6 @@ beforeEach(() => {
   };
 });
 
-/** The signed-in owner's provider session cookie. */
 class OwnerCookie extends Context.Service<OwnerCookie, string>()("clients.test/OwnerCookie") {}
 
 const ownerHeaders = Effect.map(OwnerCookie, (cookie) => new Headers({ cookie, origin: baseURL }));
@@ -102,7 +101,6 @@ const request = (path: string, body?: AuthRequestBody, cookie?: string) =>
     );
   });
 
-/** `request` as the signed-in owner. */
 const ownerRequest = (path: string, body?: AuthRequestBody) =>
   Effect.flatMap(OwnerCookie, (cookie) => request(path, body, cookie));
 
@@ -203,7 +201,6 @@ const second = "https://second.example/mcp";
 
 const addSecond = createResource(second, "Second", ["second:read"]);
 
-/** A first-party public client with access to the test resource, which skips consent. */
 const managed = Effect.gen(function* () {
   const { auth } = yield* Issuer;
   const headers = yield* ownerHeaders;
@@ -228,7 +225,6 @@ const managed = Effect.gen(function* () {
   return client.client_id;
 });
 
-/** The owner, signed in, with the test resource. */
 const ownerWithResource = Layer.effect(
   OwnerCookie,
   Effect.gen(function* () {
@@ -332,7 +328,7 @@ it.live("blocking uses the provider's disabled flag and survives CIMD metadata r
     });
     expect(yield* blocked(clientId)).toEqual([{ disabled: 1 }]);
     expect((yield* refresh(clientId, tokens.refresh_token)).status).toBe(400);
-    // Let the metadata cache expire so the next authorization rediscovers the document.
+    // why: outlasts the metadata cache, so the next authorization fetches the document again
     yield* Effect.sleep("1100 millis");
     expect(yield* consentRequired(clientId)).not.toContain("/consent");
     expect(fetches).toBe(2);
@@ -424,7 +420,6 @@ it.live("revoking one resource leaves the client's other authorization", () =>
     ]);
     expect(listed[0]?.approvedAt).not.toBeNull();
     expect(listed[0]?.refreshedAt).not.toBeNull();
-    // Approved but the code was never exchanged, so no refresh token exists.
     expect(listed[1]?.refreshedAt).toBeNull();
 
     yield* clients.revoke({ client_id: client.client_id, resource: second });

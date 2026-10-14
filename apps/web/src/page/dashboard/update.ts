@@ -32,8 +32,6 @@ import {
 
 // LISTING
 
-/** The listing, read on opening and read again on request and after a saved change. A read
- *  already running is left to finish. */
 const listing = listingQuery.lift<Model, Message>({
   parentField: "listing",
   toParentMessage: (message) => Message.GotListingMessage({ message }),
@@ -65,13 +63,11 @@ const editorFold = Dialog.foldDialog(Dialog, {
   toParentMessage: (message: Dialog.Message) => Message.GotEditorMessage({ message }),
 });
 
-/** Drops a refusal shown at `place`, which a fresh start there makes old news. */
 const withoutRefusalAt = (model: Model, place: Place): Model =>
   modifyFields(model, {
     maybeRefusal: Option.filter((refusal: Refusal) => refusal.place !== place),
   });
 
-/** Saves a change; whatever was refused before no longer applies. */
 const saving = (model: Model, change: Change): UpdateReturn => ({
   model: modifyFields(model, {
     activity: () => Activity.Saving(),
@@ -129,7 +125,6 @@ const foldCredentialCopy = Update.foldChildAt({
     Message.GotCredentialCopyMessage({ credentialId: id, message }),
 });
 
-/** A change is saved at once, or asked about first when it revokes or destroys something. */
 const requested = (model: Model, change: Change): UpdateReturn => {
   if (isHeld(model)) {
     return { model };
@@ -149,8 +144,6 @@ const requested = (model: Model, change: Change): UpdateReturn => {
 
 const copyIdOf = (credential: Credential): string => `copy-${credentialId(credential)}`;
 
-/** The credentials after a saved change: what it voided goes, and what it shows replaces any
- *  shown before for the same thing. */
 const credentialsAfter = (
   credentials: ReadonlyArray<PendingCredential>,
   change: Change,
@@ -206,8 +199,6 @@ const saved = (
     ],
   );
 
-/** Where a saving change was asked for: the dialog it was asked in, which stays open while it
- *  saves, or else the page. */
 const placeOf = (model: Model): Place => {
   if (ConfirmDialog.isOpen(model.confirm)) {
     return "Confirm";
@@ -220,8 +211,6 @@ const placeOf = (model: Model): Place => {
   return "Page";
 };
 
-/** A refusal lands where the change was asked for: in its dialog, or on the page, where the
- *  notice takes focus so it is read. */
 const refused = (model: Model, reason: string): UpdateReturn => {
   const place = placeOf(model);
 
@@ -257,7 +246,6 @@ const formOpened = (model: Model, form: Form.Model): UpdateReturn =>
         withoutRefusalAt(modifyFields(model, { maybeForm: () => Option.some(form) }), "Editor"),
       );
 
-// The copy buttons write through the application's `Clipboard` service.
 export const update = (model: Model, message: Message) =>
   Message.match<Update.Return<Model, Message, Clipboard.Clipboard>>(message, {
     GotListingMessage: ({ message: listingMessage }) => {
@@ -289,7 +277,6 @@ export const update = (model: Model, message: Message) =>
             commands: [SignOut()],
           }
         : { model },
-    // The page is on its way to the sign-in, which reads the session again.
     SucceededSignOut: () => ({ model }),
     FailedSignOut: ({ reason }) => ({
       model: modifyFields(model, {
@@ -299,8 +286,6 @@ export const update = (model: Model, message: Message) =>
       }),
       commands: [Focus.Focus({ id: REFUSAL_ID })],
     }),
-    // NOTE: while a change saves, its dialog stays open so the result lands where it was
-    // asked for: Escape, the veil and the close glyph all ask to close it.
     GotEditorMessage: ({ message: editorMessage }) =>
       isSaving(model) && Dialog.isCloseRequest(editorMessage)
         ? { model }

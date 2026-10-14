@@ -2,8 +2,6 @@ import { Context, Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ProviderUnavailable } from "./errors.ts";
 
-// Node transports do not follow redirects by default. Also pin FetchHttpClient's policy;
-// forwarding credentials through a redirect is not an authentication fallback.
 export const execute = (
   client: HttpClient.HttpClient,
   request: HttpClientRequest.HttpClientRequest,

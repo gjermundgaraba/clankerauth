@@ -17,11 +17,9 @@ export interface IssuerSettings {
   cookieDomain: string | undefined;
 }
 
-/** `hostname` is `domain` or one of its subdomains. */
 export const withinDomain = (hostname: string, domain: string) =>
   hostname === domain || hostname.endsWith(`.${domain}`);
 
-/** Browsers silently drop cookies scoped to a bare TLD or an IP address. */
 const cookieDomainValid = (domain: string) => {
   try {
     return (
@@ -32,7 +30,6 @@ const cookieDomainValid = (domain: string) => {
   }
 };
 
-/** HTTPS, or HTTP on loopback or anywhere with CLANKERAUTH_ALLOW_INSECURE_HTTP. */
 export const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
   url.protocol === "https:" ||
   (url.protocol === "http:" &&
@@ -41,20 +38,17 @@ export const allowedScheme = (url: URL, allowInsecureHttp: boolean) =>
 const originHelp =
   "HTTPS origins (HTTP allowed on loopback, or anywhere with CLANKERAUTH_ALLOW_INSECURE_HTTP=true)";
 
-/** A bare origin: any path, query, fragment or credentials would stop matching what clients send. */
 const validOrigin = (value: string, allowInsecureHttp: boolean) =>
   URL.canParse(value) &&
   new URL(value).origin === value &&
   allowedScheme(new URL(value), allowInsecureHttp);
 
-/** The rules between settings, for the environment and for embedders that build them directly. */
 export const validateSettings = Effect.fnUntraced(function* (settings: IssuerSettings) {
   const { allowInsecureHttp, baseURL, cookieDomain } = settings;
 
   if (!validOrigin(baseURL, allowInsecureHttp))
     return yield* Effect.fail(new Error(`CLANKERAUTH_BASE_URL must be one of: ${originHelp}`));
 
-  // Signing keys and session cookies are only as strong as this value.
   if (Redacted.value(settings.secret).length < 32)
     return yield* Effect.fail(
       new Error("CLANKERAUTH_BETTER_AUTH_SECRET must have at least 32 characters"),
@@ -102,8 +96,6 @@ export const loadSettings = Effect.gen(function* () {
   return yield* validateSettings(settings);
 });
 
-/** The issuer's configuration, read once where the process starts. */
 export class Settings extends Context.Service<Settings, IssuerSettings>()("clankerauth/Settings") {
-  /** `CLANKERAUTH_*` from the environment, validated. */
   static readonly layer = Layer.effect(Settings, loadSettings);
 }

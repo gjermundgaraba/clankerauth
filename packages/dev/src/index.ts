@@ -61,7 +61,6 @@ const loadIdentity = Effect.fn("Dev.identity")(function* (directory: string, per
   const fs = yield* FileSystem.FileSystem;
   const path = join(directory, credentialsFile);
 
-  // A hand-edited file is refused by the schema rather than half-read.
   if (yield* fs.exists(path)) return yield* decodeIdentity(yield* fs.readFileString(path));
   yield* saveIdentity(directory, fresh);
 
@@ -90,12 +89,11 @@ const ownerSession = Effect.fn("Dev.ownerSession")(function* (
     }).pipe(HttpClientRequest.bodyJsonUnsafe(owner)),
   );
 
-  // Every response body is read to completion, so no connection is left half-consumed.
+  // why: every response body is read to completion, so no connection is left half-consumed.
   yield* signIn.text;
 
   if (signIn.status !== 200)
     return yield* Effect.fail(new Error(`Owner sign-in failed with HTTP ${signIn.status}`));
-  // `/forward-auth/continue` seals the session into the cookie the domain shares.
   const destination = new URL("/", appOrigin).href;
 
   const sealed = yield* client.get(
@@ -136,7 +134,6 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     );
   const dataDir = options.dataDir;
 
-  // A workspace directory belongs to its caller; only a temporary one is removed.
   const directory =
     dataDir === undefined
       ? yield* fs.makeTempDirectoryScoped({ prefix: "clankerauth-disposable-" })
@@ -145,11 +142,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
           resolve(dataDir),
         );
 
-  // Listen first, since the issuer's URL needs the port; requests get 503 until it is up.
-  // The listen's release frees the port if startup fails after binding. Once up, a second
-  // finalizer closes sockets before request fibers are awaited (a handler blocked on an
-  // incomplete body needs that) and before SQLite closes. Closing twice is fine: close's
-  // callback fires on a stopped server too.
+  // why: listen first, as the issuer's URL needs the port; requests get 503 until it is up.
   let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
     outgoing.writeHead(503).end();
   };
@@ -190,8 +183,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     return yield* Effect.fail(new Error("Disposable issuer failed to bind a TCP port"));
   const { port } = address;
 
-  // Forward auth shares a cookie across hosts, which an IP address cannot do. A `.localhost`
-  // name resolves to this loopback listener and gives the issuer and the apps a common parent.
+  // why: a cookie shared across hosts needs a common parent domain, which an IP address lacks.
   const url =
     options.cookieDomain === undefined
       ? `http://127.0.0.1:${port}`
@@ -234,7 +226,6 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
 
   const owner = { email: identity.email, password: identity.password };
 
-  // Seed in-process: the owner's provider session authorizes administration directly.
   const clients = Context.get(issuer, Clients);
   const resources = Context.get(issuer, Resources);
   const keys = Context.get(issuer, ApiKeys);
@@ -261,7 +252,6 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
       ),
     ).pipe(Effect.mapError(provisioningFailed));
 
-  // Every step is idempotent, so a persistent workspace restarts onto its own state.
   if (!(yield* account.find()))
     yield* account.create(owner).pipe(Effect.mapError(provisioningFailed));
 
@@ -366,15 +356,13 @@ export async function startDisposableIssuer(
 ): Promise<DisposableIssuer> {
   const scope = Scope.makeUnsafe();
 
-  // Fibers run in the workspace's scope, after its finalizers: `close()` interrupts a
-  // call still in flight and awaits its cleanup before SQLite closes.
+  // why: fibers join the scope, so `close()` interrupts a call in flight before SQLite closes.
   const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof platform> | Scope.Scope>) =>
     Effect.runPromise(
       effect.pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(platform)),
       { onFiberStart: Fiber.runIn(scope) },
     );
 
-  // `close()` is documented idempotent: repeated calls observe the one disposal.
   const dispose = Effect.runSync(Effect.cached(Scope.close(scope, Exit.void)));
 
   try {

@@ -13,11 +13,6 @@ import { issuerServices, type IssuerServices } from "../src/services.ts";
 
 type SettingsOverrides = Partial<IssuerSettings> & Pick<IssuerSettings, "baseURL">;
 
-/**
- * Validated-shape settings on a fresh temporary database with one secret, so every generation
- * built on them opens the same issuer. The port follows the base URL unless overridden; the
- * directory is removed when the scope closes.
- */
 export const testSettings = (overrides: SettingsOverrides) =>
   Layer.effect(
     Settings,
@@ -44,7 +39,6 @@ const cimdLayer = (transport: ClientMetadataResourceFetch | undefined) =>
     ? CimdTransport.layer
     : Layer.succeed(CimdTransport, { fetch: transport });
 
-/** One generation of the issuer's services on the settings in context. */
 export const issuerGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
   Layer.unwrap(
     Effect.map(Settings, (settings) =>
@@ -52,30 +46,20 @@ export const issuerGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
     ),
   );
 
-/** The issuer on a fresh temporary database, closed and removed with the test. */
 export const testIssuer = (
   overrides: SettingsOverrides,
   cimdTransport?: ClientMetadataResourceFetch,
 ) => issuerGeneration(cimdTransport).pipe(Layer.provideMerge(testSettings(overrides)));
 
-/**
- * A generation the test stops itself by closing `scope`. Fibers forked into `scope` start
- * after the services, so closing it interrupts and awaits them before the database closes,
- * in the order the server's own shutdown uses. The test's scope closes it otherwise.
- */
 export const startGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
   Effect.gen(function* () {
+    // why: fibers forked into this scope start after the services, so closing it stops them first
     const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
     const context = yield* Layer.buildWithScope(issuerGeneration(cimdTransport), scope);
 
     return { context, scope };
   });
 
-/**
- * The issuer's web application as a fetch handler, disposed before the services it runs on.
- * Test boundary: the `x-clankerauth-peer` header simulates the socket peer, which production
- * never trusts.
- */
 export class WebApplication extends Context.Service<
   WebApplication,
   (request: Request) => Promise<Response>
@@ -96,6 +80,7 @@ export class WebApplication extends Context.Service<
                   Effect.provideService(
                     effect,
                     HttpServerRequest.HttpServerRequest,
+                    // why: node-http sets the peer header from the socket; tests bypass node-http
                     request.modify({
                       remoteAddress: Option.fromNullishOr(request.headers["x-clankerauth-peer"]),
                     }),
@@ -112,13 +97,11 @@ export class WebApplication extends Context.Service<
   );
 }
 
-/** `testIssuer` with its web application. */
 export const testWebApplication = (
   overrides: SettingsOverrides,
   cimdTransport?: ClientMetadataResourceFetch,
 ) => WebApplication.layer.pipe(Layer.provideMerge(testIssuer(overrides, cimdTransport)));
 
-/** Act as the owner whose provider session these headers carry, as the dashboard does. */
 export const withOwnerHeaders =
   (headers: Headers) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>

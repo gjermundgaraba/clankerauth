@@ -1,4 +1,3 @@
-/** The package against the real server: forward-auth tokens, verification, API keys, logout. */
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";
@@ -26,7 +25,7 @@ const startServer = Effect.gen(function* () {
     serve(incoming, outgoing);
   });
 
-  // Every interface: `*.localhost` names resolve to either loopback family.
+  // why: no host, so `*.localhost` names reach it over either loopback family
   yield* Effect.acquireRelease(
     Effect.callback<void>((resume) => {
       server.listen(0, () => resume(Effect.void));
@@ -42,7 +41,6 @@ const startServer = Effect.gen(function* () {
   if (address === null || !(address instanceof Object) || !("port" in address))
     return yield* Effect.die(new Error("Expected TCP listener"));
   const { port } = address;
-  // Forward auth shares one cookie domain between the issuer and the apps behind the proxy.
   const url = `http://clankerauth.home.localhost:${port}`;
 
   const services = yield* Layer.build(
@@ -85,7 +83,6 @@ const startServer = Effect.gen(function* () {
       return response;
     });
 
-  /** The proxy's subrequest for a browser request to `original` on an app behind it. */
   const forward = (resource: string, original: URL) =>
     call(`/forward-auth?resource=${encodeURIComponent(resource)}`, undefined, {
       "x-forwarded-proto": original.protocol.slice(0, -1),
@@ -125,8 +122,6 @@ it.live(
 
       const verifier = yield* verifierFor();
 
-      // After login the owner continues to the app, which sets the forward cookie; the proxy's
-      // subrequest then yields a token the verifier accepts for this resource only.
       const proceed = yield* issuer.call(
         `/forward-auth/continue?rd=${encodeURIComponent(app.href)}`,
       );
@@ -148,8 +143,6 @@ it.live(
 
       assert.ok((yield* Effect.flip(other.verifyToken(token))) instanceof Unauthorized);
 
-      // API keys verify offline, from the resource's key list, with their granted scopes and
-      // the key as actor.
       const created = yield* issuer.call("/api/createApiKey", {
         name: "Backup script",
         permissions: { [resource]: ["notes:read"] },
@@ -166,21 +159,18 @@ it.live(
       assert.equal(machine.subject, principal.subject);
       assert.deepEqual(machine.scopes, ["notes:read"]);
       assert.deepEqual(machine.actor, { kind: "key", keyId });
-      // A key with no grant on that resource is not that resource's credential at all.
       assert.ok((yield* Effect.flip(other.verifyToken(key))) instanceof Unauthorized);
       assert.equal(
         (yield* issuer.call("/api/updateApiKey", { keyId, enabled: false })).status,
         200,
       );
-      // A disabled key is gone from the next list: a verifier holding this minute's list
-      // still accepts it, and one that reads the list now does not.
+      // why: a verifier keeps the key list it read, so only a fresh one sees the disabled key
       yield* verifier.verifyToken(key);
       assert.ok(
         (yield* Effect.flip((yield* verifierFor()).verifyToken(key))) instanceof Unauthorized,
       );
 
-      // Logout ends the issuer session. Node's fetch is a script's request, not a navigation,
-      // so the next check is refused in place, and continuing asks for login.
+      // why: Node's fetch is not a navigation, so forward auth answers 401, not a login redirect
       const logout = yield* issuer.call(signOutUrl(issuer.url, app.href));
       assert.equal(logout.status, 302);
       assert.equal(logout.headers.get("location"), app.href);

@@ -109,7 +109,7 @@ describe("dashboard update", () => {
     );
   });
 
-  test("a change that destroys something is asked about, then saved in its dialog", () => {
+  test("a change that destroys something is asked about, then saved in its dialog, which closes still asking it", () => {
     story(
       update,
       given(listed),
@@ -136,6 +136,7 @@ describe("dashboard update", () => {
       ),
       model((next) => {
         expect(ConfirmDialog.isOpen(next.confirm)).toBe(false);
+        expect(next.maybePending).toEqual(Option.some(deleteKey));
         expect(isHeld(next)).toBe(false);
       }),
     );
@@ -175,7 +176,7 @@ describe("dashboard update", () => {
     );
   });
 
-  test("a submitted form saves its change, and the editor closes once saved", () => {
+  test("a submitted form saves its change, and the editor closes once saved, still showing it", () => {
     story(
       update,
       given(listed),

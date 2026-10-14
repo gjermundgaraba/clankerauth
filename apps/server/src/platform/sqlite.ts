@@ -15,11 +15,6 @@ export type SqliteRow = Record<string, SqliteCell>;
 /** Opaque Better Auth table map keyed by table name. */
 export type DatabaseSchema = Record<string, SqliteRow>;
 
-/**
- * A decoder for values this issuer wrote itself. A row or column that no longer
- * matches its schema is a broken database, not a bad request, so it fails as an
- * internal error carrying the schema issue.
- */
 export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
   const decode = Schema.decodeUnknownEffect(schema);
 
@@ -28,7 +23,6 @@ export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
     Effect.mapError(decode(value), InternalServerError.of);
 };
 
-/** Run Effect queries through the same Kysely connection or transaction as Better Auth. */
 export function makeSql(database: Kysely<DatabaseSchema>) {
   return <Row = SqliteRow>(
     strings: TemplateStringsArray,
@@ -42,7 +36,6 @@ export function makeSql(database: Kysely<DatabaseSchema>) {
 
 export type Sql = ReturnType<typeof makeSql>;
 
-/** Commit on success, roll back on failure or defect; a started transaction always settles. */
 export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>(
   database: Kysely<DatabaseSchema>,
   operation: (sql: Sql) => Effect.Effect<A, E, R>,
@@ -54,13 +47,10 @@ export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>
 
   const exit = yield* Effect.exit(operation(makeSql(trx)));
 
-  // The body's own outcome is what callers see; a failed ROLLBACK cannot improve on it.
   const settle = Effect.ignore(
     Effect.tryPromise({ try: () => trx.rollback().execute(), catch: InternalServerError.of }),
   );
 
-  // A failed COMMIT, such as a deferred constraint, leaves the transaction open on the
-  // shared connection; roll it back before surfacing the failure.
   const commit = Effect.tryPromise({
     try: () => trx.commit().execute(),
     catch: InternalServerError.of,
@@ -83,7 +73,7 @@ export async function openDatabase(filename: string) {
       dialect: new NodeSqliteDialect({ database }),
     });
 
-    // Initialize the dialect so Kysely owns connection cleanup even before the first caller query.
+    // why: initializing the dialect makes Kysely own connection cleanup before any query
     await query`SELECT 1`.execute(kysely);
 
     return { kysely, sql: makeSql(kysely), close: () => kysely.destroy() };
@@ -93,7 +83,6 @@ export async function openDatabase(filename: string) {
   }
 }
 
-/** The issuer's one SQLite connection, shared by Better Auth and every domain's queries. */
 export class Database extends Context.Service<
   Database,
   {
@@ -105,7 +94,6 @@ export class Database extends Context.Service<
     ) => Effect.Effect<A, E | InternalServerError, R>;
   }
 >()("clankerauth/Database") {
-  /** Opens `filename`, creating its directory, and closes the connection with the scope. */
   static readonly layer = (filename: string) =>
     Layer.effect(
       Database,

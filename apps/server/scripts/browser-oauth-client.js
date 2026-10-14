@@ -1,6 +1,6 @@
 import { auth, Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
-// A browser-owned OAuth client. Persist the flow across real issuer navigation.
+// why: sessionStorage carries the flow across real issuer navigations
 const read = (key) => JSON.parse(sessionStorage.getItem(key) ?? "null") ?? undefined;
 
 const write = (key, value) => sessionStorage.setItem(key, JSON.stringify(value));

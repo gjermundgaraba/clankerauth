@@ -1,4 +1,3 @@
-// Run against a pnpm deploy --prod output, never a live database or .env.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -55,7 +54,7 @@ async function start() {
     try {
       if ((await fetch(`${baseURL}/healthz`, { signal: AbortSignal.timeout(500) })).ok) return;
     } catch {
-      /* Listener may not yet be bound. */
+      // why: the listener may not be bound yet
     }
 
     await setTimeout(50);
@@ -189,7 +188,7 @@ try {
     redirect: "manual",
   });
 
-  // Fetch requests receive the provider’s redirect descriptor; browser navigation uses 302.
+  // why: fetch requests get the provider's redirect descriptor; navigations get a 302
   assert.equal(authorize.status, 200, await authorize.clone().text());
   const consentUrl = new URL((await authorize.json()).url, baseURL);
   assert.equal(consentUrl.pathname, "/consent");
@@ -224,7 +223,6 @@ try {
   const token = await tokenResponse.json();
   assert.ok(isString(token.refresh_token));
 
-  // Exercise the generated MCP adapter through the real buffered Node bridge.
   const mcp = await fetch(`${baseURL}/mcp`, {
     method: "POST",
     headers: {

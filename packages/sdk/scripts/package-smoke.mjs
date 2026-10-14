@@ -33,7 +33,6 @@ const typeCheck = (file) =>
     { cwd: directory },
   );
 
-/** Emits declarations for `files`, as a consumer package that exports what they declare does. */
 const emitDeclarations = (...files) =>
   execute(
     process.execPath,
@@ -55,10 +54,6 @@ const emitDeclarations = (...files) =>
     { cwd: directory },
   );
 
-/**
- * The copy the workspace tests against, packed, which the isolated installation must use too:
- * a registry version or a local tarball alike.
- */
 const tested = async (dependency) => {
   const { stdout } = await execute(
     "npm",
@@ -76,7 +71,6 @@ const tested = async (dependency) => {
   return join(directory, JSON.parse(stdout)[0].filename);
 };
 
-/** Imports an entry point the way a consumer in the isolated installation resolves it. */
 const load = async (specifier) => {
   const file = join(directory, `${specifier.replaceAll(/[^\w-]/gu, "_")}.mjs`);
   await writeFile(file, `export * from "${specifier}";`);
@@ -85,11 +79,10 @@ const load = async (specifier) => {
 };
 
 try {
-  // pnpm resolves the workspace catalog protocol in the packed manifest; npm would not.
+  // why: pnpm pack resolves the workspace catalog protocol in the manifest; npm pack would not.
   await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: root });
   const tarball = (await readdir(directory)).find((file) => file.endsWith(".tgz"));
 
-  // Without one, npm would install the directory itself and test nothing that ships.
   if (tarball === undefined) throw new Error(`pnpm pack wrote no tarball to ${directory}`);
   await writeFile(
     join(directory, "package.json"),
@@ -113,11 +106,12 @@ try {
   assert.equal(manifest.sideEffects, false);
   assert.equal(manifest.peerDependenciesMeta["@gjermundgaraba/effect-actions"].optional, true);
   assert.equal(manifest.dependencies["@gjermundgaraba/effect-actions"], undefined);
-  // The application's Effect is the SDK's: a second copy would split its types and services.
-  assert.ok(manifest.peerDependencies.effect);
+  assert.ok(
+    manifest.peerDependencies.effect,
+    "effect must be a peer: a second copy would split its types and services",
+  );
   assert.equal(manifest.dependencies.effect, undefined);
 
-  // The README's install line is the peer range, so it cannot drift past a breaking minor.
   assert.ok(
     (await readFile(join(installed, "README.md"), "utf8")).includes(
       `@gjermundgaraba/effect-actions@${manifest.peerDependencies["@gjermundgaraba/effect-actions"]}`,
@@ -125,8 +119,6 @@ try {
     "The README's effect-actions install line does not match the peer range",
   );
 
-  // Every entry point ships declarations; a build that emits only some of them is
-  // invisible until a consumer imports the one that is missing.
   for (const [entry, target] of Object.entries(manifest.exports))
     assert.ok(
       (await readFile(join(installed, target.types), "utf8")).length > 0,
@@ -146,7 +138,6 @@ const verification: Effect.Effect<Verifier.Principal, AuthenticationError | Conf
 void verification;
 `,
   );
-  // Core consumers type-check without installing effect-actions or skipping declarations.
   await typeCheck("consumer.ts");
 
   const api = await load(name);
@@ -154,7 +145,6 @@ void verification;
   for (const exported of ["Verifier", "RequestPolicy"])
     assert(exported in api, `Missing core export: ${exported}`);
 
-  // Errors live behind `/errors` only, so a shared contract cannot reach for them here.
   for (const absent of ["Unauthorized", "InsufficientScope", "ProviderUnavailable"])
     assert(!(absent in api), `Root re-exports an error: ${absent}`);
 
@@ -168,7 +158,6 @@ void verification;
   ])
     assert(exported in errors, `Missing error export: ${exported}`);
 
-  // Resolve Effect from the isolated installation, not the workspace's development dependencies.
   const { Effect } = await load("effect");
   const { FetchHttpClient } = await load("effect/http");
 
@@ -188,8 +177,6 @@ void verification;
   for (const exported of ["seal", "open", "digest", "type", "lifetime", "Entry", "Grant", "Claims"])
     assert(exported in keyList, `Missing key-list export: ${exported}`);
 
-  // Verify API keys offline against the installed fake issuer, and a revocation in the
-  // next list, through the installed package.
   const { startFakeIssuer } = await load(`${name}/testing`);
   const notes = "http://127.0.0.1:7337/";
   const issuer = await startFakeIssuer({ resource: notes, scopes: ["notes:read", "notes:write"] });
@@ -203,7 +190,6 @@ void verification;
       subject: "owner",
       scopes: ["notes:read", "notes:write"],
       actor: { kind: "key", keyId: "key-1" },
-      // This key does not expire.
       expiresAt: undefined,
     });
     await Effect.runPromise(installedVerifier.verifyToken(await issuer.sign()));
@@ -215,7 +201,6 @@ void verification;
     await issuer.close();
   }
 
-  // Optional integration is installed and exercised separately from the core consumer.
   await execute(
     "npm",
     [
@@ -297,13 +282,9 @@ void Whoami.name;
 void page;
 `,
   );
-  // The effect-actions package must also expose valid declarations.
   await typeCheck("integration.ts");
 
-  // A consumer package exports its descriptor, its resource and the implementations stating
-  // its authorizer, and emits declarations for them: every type those mention must be
-  // nameable through an entry point. The second file imports no SDK name, as an
-  // application's actions module does not.
+  // why: declared-actions.ts imports no SDK name, as an application's actions module does not.
   await writeFile(
     join(directory, "declared-resource.ts"),
     `
@@ -345,7 +326,6 @@ export const tagged = HttpRouter.middleware((route) =>
 export const local = Notes.local("owner");
 `,
   );
-  // A shared contracts package declares its descriptor from the browser-safe entries alone.
   await writeFile(
     join(directory, "declared-login.ts"),
     `
@@ -356,7 +336,7 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
 `,
   );
   await emitDeclarations("declared-resource.ts", "declared-actions.ts");
-  // Alone, so no other file's imports reach the type `/session` must name itself.
+  // why: alone, so no other file's imports reach the type `/session` must name itself.
   await emitDeclarations("declared-login.ts");
 
   const { Resource } = await load(`${name}/effect-actions`);
@@ -387,8 +367,6 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
       errors.Unauthorized,
   );
 
-  // The browser entry points are what a page and a shared contract import. Bundling them
-  // for the browser is the only way to prove that no verification code follows.
   await writeFile(
     join(directory, "browser.ts"),
     `export * from "${name}/errors";\nexport * from "${name}/session";\n`,

@@ -1,13 +1,4 @@
 import { administrationScopes, administrationIdentifier } from "@clankerauth/admin-api";
-/**
- * The issuer's own OAuth resource, administration, at its origin root as an application's
- * is: `/mcp` and `/api/owner/<action>` take its tokens. The dashboard at `/` is not part of
- * it and takes the owner's session cookie alone.
- *
- * The issuer verifies its own tokens in-process, so this builds admission from the SDK's
- * verifier directly rather than through `Resource`, and effect-actions' authentication
- * publishes its discovery and challenges.
- */
 import { Effect, Layer } from "effect";
 import type * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/http";
@@ -23,9 +14,6 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const issuer = `${baseURL}/api/auth`;
   const resource = administrationIdentifier(baseURL);
 
-  // Published, and named in every challenge, by the authentication around the endpoint.
-  // Clients ask for what a 401 names. Naming both scopes lets the owner decide at consent
-  // whether a client may change anything or only look.
   const protectedResource = {
     resource,
     authorizationServers: [issuer],
@@ -33,12 +21,10 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
     scopesRequired: [administrationScopes.read, administrationScopes.write],
   } satisfies Authentication.ProtectedResource;
 
-  // The SDK verifier reads JWKS from this issuer in-process. The raw verifier has no
-  // deadline, so the provider call is awaited by the request fiber that made it: nothing
-  // detaches a provider Promise, which is what lets shutdown wait for every one.
+  // why: the raw verifier has no deadline, so shutdown can wait for every provider call
   const loopback: typeof fetch = (input, init) => {
     const request = new Request(input, init);
-    // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
+    // why: Better Auth reads the client address from this header
     request.headers.set(peerHeader, "127.0.0.1");
 
     return auth.handler(request);
@@ -47,7 +33,6 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const verifier = yield* Verifier.make({
     issuer,
     resource,
-    // API keys never administer the issuer, and the loopback serves provider routes only.
     apiKeys: false,
   }).pipe(
     Effect.provide(

@@ -4,8 +4,6 @@ import { defineTaggedUnion } from "foldkit/schema";
 
 // CHANGE
 
-/** Every write the dashboard makes, each carrying what the issuer needs and what the owner is
- *  told about it. */
 export const Change = defineTaggedUnion({
   CreateResource: {
     identifier: Schema.String,
@@ -18,7 +16,6 @@ export const Change = defineTaggedUnion({
     scopes: Schema.Array(Schema.String),
   },
   DeleteResource: { identifier: Schema.String },
-  // A `datetime-local` value, or none for a key valid until revoked.
   CreateKey: {
     name: Schema.String,
     permissions: KeyPermissions,
@@ -56,7 +53,6 @@ export type Change = typeof Change.Type;
 
 // CREDENTIAL
 
-/** A secret the issuer shows once, which the owner must store before dismissing it. */
 export const Credential = defineTaggedUnion({
   ClientSecret: { clientId: Schema.String, name: Schema.String, secret: Schema.String },
   ApiKey: { keyId: Schema.String, name: Schema.String, key: Schema.String },
@@ -64,14 +60,12 @@ export const Credential = defineTaggedUnion({
 
 export type Credential = typeof Credential.Type;
 
-/** One id per thing a credential belongs to, so a rotated secret replaces the one before it. */
 export const credentialId = (credential: Credential): string =>
   Credential.match(credential, {
     ClientSecret: ({ clientId }) => `client:${clientId}`,
     ApiKey: ({ keyId }) => `key:${keyId}`,
   });
 
-/** Whether a credential stops meaning anything once this change is saved. */
 export const isVoidedBy = (change: Change, credential: Credential): boolean =>
   Change.matchOrElse(
     change,
@@ -82,7 +76,6 @@ export const isVoidedBy = (change: Change, credential: Credential): boolean =>
     () => false,
   );
 
-/** A rotation changes nothing the dashboard lists, so only it is saved without a reread. */
 export const needsReread = (change: Change): boolean => !Change.guards.RotateSecret(change);
 
 // WORDS
@@ -98,7 +91,6 @@ export type Confirmation = Readonly<{
 
 const REAUTHORIZE = "It must authorize again, and an automatic Client asks for consent.";
 
-/** The question a change asks first, or none for a change that is saved at once. */
 export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
   Change.matchOrElse<Option.Option<Confirmation>>(
     change,
@@ -186,7 +178,6 @@ export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
     () => Option.none(),
   );
 
-/** What the page's live region says once a change is saved. */
 export const announcementOf = (change: Change): string =>
   Change.match(change, {
     CreateResource: () => "Resource added.",
@@ -206,6 +197,5 @@ export const announcementOf = (change: Change): string =>
     DeleteClient: () => "Client deleted.",
   });
 
-/** Splits what the owner typed into unique words: scopes, redirect URIs. */
 export const splitWords = (text: string): ReadonlyArray<string> =>
   pipe(text.split(/\s+/u), Array.filter(String.isNonEmpty), Array.dedupe);

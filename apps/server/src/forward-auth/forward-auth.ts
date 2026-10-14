@@ -1,14 +1,4 @@
 import { administrationIdentifier } from "@clankerauth/admin-api";
-/**
- * Forward auth: a reverse proxy asks this issuer on every browser request. A signed-in
- * owner gets a short-lived access token for the app's resource in an Authorization header,
- * which the proxy copies upstream; anyone else is sent through the issuer and back.
- * The app verifies that token exactly as it verifies MCP and API-key bearer tokens.
- *
- * The owner's issuer session cookie never leaves the issuer host. Apps see only the
- * forward cookie: the session cookie value encrypted under the server secret, accepted
- * by these routes alone. It resolves to the live session, so sign-out revokes it.
- */
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
@@ -18,8 +8,6 @@ import { provider, respond } from "../issuer/errors.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
 import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
 
-/** The `client_id` claim of forward-auth tokens. Not a registered client: administration
- * MCP joins tokens to the client table, so these tokens can never administer the issuer. */
 export const forwardClientId = "forward-auth";
 
 export const forwardCookie = "clankerauth_forward";
@@ -27,7 +15,6 @@ export const forwardCookie = "clankerauth_forward";
 const json = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status });
 
-/** Forward auth exists to share one owner session across a cookie domain, so it needs one. */
 export const forwardAuthRoutes = (cookieDomain: string) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -35,7 +22,6 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       const { auth, context } = yield* Issuer;
       const catalog = yield* ResourceCatalog;
 
-      /** Return only where the forward cookie reaches, under the issuer's own scheme policy. */
       const allowedReturnURL = (value: string) => {
         if (!URL.canParse(value)) return undefined;
         const url = new URL(value);
@@ -92,7 +78,6 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         if (!resource) return json(403, "unknown_resource");
         const sealed = request.cookies[forwardCookie];
 
-        // A missing, tampered or foreign cookie is simply not a session.
         const unsealed = sealed
           ? yield* Effect.option(
               Effect.tryPromise(() => symmetricDecrypt({ key: secret, data: sealed })),
@@ -103,14 +88,11 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
           ? yield* session(`${sessionCookieName}=${unsealed.value}`)
           : null;
 
-        // Only a page navigation can follow the issuer and come back. A script's request would
-        // chase the redirect across origins and fail opaquely, so it gets a plain refusal.
         if (!current)
           return headers["sec-fetch-mode"] === "navigate"
             ? HttpServerResponse.redirect(withReturn("/forward-auth/continue", returnTo))
             : json(401, "unauthenticated");
 
-        // The profile the provider uses for its own access tokens.
         const iat = Math.floor((yield* Clock.currentTimeMillis) / 1000);
 
         const { token } = yield* provider(() =>
@@ -135,18 +117,17 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         });
       });
 
-      /** On the issuer host, where the session cookie is visible: seal it into the forward
-       * cookie and go back to the app, or sign in first. */
       const proceed = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+
         const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
+
         const returnTo = requested ? allowedReturnURL(requested) : undefined;
 
         if (!returnTo) return json(400, "invalid_return_url");
         const value = request.cookies[sessionCookieName];
         const current = value ? yield* session(request.headers.cookie ?? "") : null;
 
-        // Login returns only to this origin: back here, which then seals the cookie and goes on.
         if (!current || !value)
           return HttpServerResponse.redirect(
             withReturn("/login", withReturn("/forward-auth/continue", returnTo)),
@@ -156,7 +137,6 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
           symmetricEncrypt({ key: secret, data: value }),
         );
 
-        // A browser-session cookie: renewing it is two redirects while the issuer session lives.
         return yield* HttpServerResponse.redirect(returnTo).pipe(
           HttpServerResponse.setCookie(forwardCookie, sealed, cookieOptions),
         );
@@ -164,10 +144,11 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
       const logout = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+
         const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
+
         const returnTo = (requested && allowedReturnURL(requested)) || loginPage;
 
-        // Sign-out ends the session and clears its cookie whether or not one exists.
         const { headers } = yield* provider(() =>
           auth.api.signOut({
             headers: new Headers({ cookie: request.headers.cookie ?? "" }),

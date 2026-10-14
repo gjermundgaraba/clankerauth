@@ -34,7 +34,6 @@ const write = Action.make("write", {
   success: Schema.String,
 });
 
-/** The tests' scopes: a read every credential carries, and a write the application requires. */
 const guarded = { scopes: ["notes:read", "notes:write"], required: "notes:read" } as const;
 
 const resourceFor = (issuer: string) =>
@@ -56,36 +55,34 @@ const decide = (
 
 const unauthenticated = sent(new Action.Unauthenticated({ message: "Authentication required" }));
 
-// No credential at all, refused as effect-actions refuses a route without one.
 const missingToken = sent(new Action.Unauthenticated({ message: "A bearer token is required." }));
 
 const stepUp = sent(
   new Action.Forbidden({ message: "Requires notes:write.", scopes: ["notes:write"] }),
 );
 
-it.effect("requires refuses a caller without the scope, and names only that scope", () =>
-  Effect.gen(function* () {
-    assert.equal((yield* decide(Notes.requires("notes:write"), ["notes:write"]))._tag, "Success");
+it.effect(
+  "requires refuses a caller without the scope, naming only that scope, and only to an OAuth client",
+  () =>
+    Effect.gen(function* () {
+      assert.equal((yield* decide(Notes.requires("notes:write"), ["notes:write"]))._tag, "Success");
 
-    const refused = yield* decide(Notes.requires("notes:write"), ["notes:read"]);
-    assert.equal(refused._tag, "Failure");
-    // The built-in refusal every surface declares, on which an OAuth client steps up.
-    assert.deepEqual(sent(refused.failure), stepUp);
+      const refused = yield* decide(Notes.requires("notes:write"), ["notes:read"]);
+      assert.equal(refused._tag, "Failure");
+      assert.deepEqual(sent(refused.failure), stepUp);
 
-    // Only an OAuth client can re-authorize, so any other refusal names no scope to step up to.
-    for (const actor of [{ kind: "key", keyId: "key-1" }, { kind: "local" }] as const) {
-      const other = yield* decide(Notes.requires("notes:write"), ["notes:read"], actor);
-      assert.equal(other._tag, "Failure");
-      assert.deepEqual(
-        sent(other.failure),
-        sent(new Action.Forbidden({ message: "Requires notes:write." })),
-      );
-    }
+      for (const actor of [{ kind: "key", keyId: "key-1" }, { kind: "local" }] as const) {
+        const other = yield* decide(Notes.requires("notes:write"), ["notes:read"], actor);
+        assert.equal(other._tag, "Failure");
+        assert.deepEqual(
+          sent(other.failure),
+          sent(new Action.Forbidden({ message: "Requires notes:write." })),
+        );
+      }
 
-    // The application's rule decides which actions need it.
-    assert.equal((yield* decide(authorize(read), ["notes:read"]))._tag, "Success");
-    assert.equal((yield* decide(authorize(write), ["notes:read"]))._tag, "Failure");
-  }),
+      assert.equal((yield* decide(authorize(read), ["notes:read"]))._tag, "Success");
+      assert.equal((yield* decide(authorize(write), ["notes:read"]))._tag, "Failure");
+    }),
 );
 
 it.effect(
@@ -123,7 +120,6 @@ it.live("admission verifies outside a router and renders a ready-to-send refusal
     assert.equal(accepted.principal.subject, "owner");
     assert.equal(accepted.principal.actor.kind, "client");
 
-    // The verified `exp`, so a host bounding a connection never decodes the token again.
     const claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString());
     assert.equal(accepted.principal.expiresAt, claims.exp * 1000);
 
@@ -136,7 +132,6 @@ it.live("admission verifies outside a router and renders a ready-to-send refusal
     assert.equal(missing.refusal.status, 401);
     assert.deepEqual(JSON.parse(missing.refusal.body), missingToken);
 
-    // The header is read through effect-actions, as a route reads a request's.
     assert.equal((yield* admit(`bearer ${issuer.key}`)).ok, true);
 
     const invalid = yield* admit("Bearer not-a-token");
@@ -144,7 +139,6 @@ it.live("admission verifies outside a router and renders a ready-to-send refusal
     assert.equal(invalid.refusal.status, 401);
     assert.deepEqual(JSON.parse(invalid.refusal.body), unauthenticated);
 
-    // A socket may demand the write scope before it is established.
     const readOnly = yield* admit(
       `Bearer ${yield* Effect.promise(() => issuer.sign({ scope: "notes:read" }))}`,
       "notes:write",
@@ -154,7 +148,6 @@ it.live("admission verifies outside a router and renders a ready-to-send refusal
     assert.equal(readOnly.refusal.status, 403);
     assert.deepEqual(JSON.parse(readOnly.refusal.body), stepUp);
 
-    // A key cannot step up: a plain 403, naming no scope that would prompt a login.
     const readOnlyKey = yield* admit(`Bearer ${issuer.readOnlyKey}`, "notes:write");
     assert.equal(readOnlyKey.ok, false);
     assert.equal(readOnlyKey.refusal.status, 403);
@@ -164,11 +157,9 @@ it.live("admission verifies outside a router and renders a ready-to-send refusal
     );
     assert.equal((yield* admit(`Bearer ${issuer.key}`, "notes:write")).ok, true);
 
-    // An outage after the key list was read is no refusal at all.
     issuer.fail(503);
     assert.equal((yield* admit(`Bearer ${issuer.key}`)).ok, true);
 
-    // Before any list, a key cannot be decided: the SDK's 503, not a refusal.
     const cold = yield* resourceFor(issuer.issuer);
     const unavailable = yield* cold.admit(`Bearer ${issuer.key}`);
     assert.equal(unavailable.ok, false);
@@ -183,7 +174,6 @@ it.live("a WebSocket upgrade is admitted by key, or refused before it is upgrade
     const resource = yield* resourceFor(issuer.issuer);
     const services = yield* Effect.context<never>();
 
-    // A Node upgrade handler: the socket is switched only after admission.
     const server = yield* Effect.acquireRelease(
       Effect.sync(() =>
         createServer().on("upgrade", async (incoming, socket) => {
@@ -242,7 +232,6 @@ it.live("a WebSocket upgrade is admitted by key, or refused before it is upgrade
       event: "response",
       status: 401,
     });
-    // Admitted for writing, so a read-only key is refused before the socket switches.
     assert.deepEqual(yield* upgrade(`Bearer ${issuer.readOnlyKey}`), {
       event: "response",
       status: 403,
@@ -267,10 +256,8 @@ it.live("a resource that accepts only access tokens refuses a key by shape alone
     assert.equal(refused.ok, false);
     assert.equal(refused.refusal.status, 401);
     assert.deepEqual(JSON.parse(refused.refusal.body), unauthenticated);
-    // The issuer would have accepted this key. It was never asked: the prefix decides.
     assert.equal(issuer.keyLists(), 0);
 
-    // Access tokens still verify, which is the only credential such a resource takes.
     const accepted = yield* resource.admit(`Bearer ${yield* Effect.promise(() => issuer.sign())}`);
 
     assert.equal(accepted.ok, true);
@@ -281,7 +268,6 @@ it.live("one resource at the origin root covers every surface an MCP client asks
   Effect.gen(function* () {
     const issuer = yield* startIssuer(`${publicUrl}/`);
 
-    // Any path on the public URL is discarded: the resource is the origin root.
     const resource = yield* withHttp(
       resourceOf({
         issuer: issuer.issuer,
@@ -293,8 +279,6 @@ it.live("one resource at the origin root covers every surface an MCP client asks
     assert.equal(resource.resource, `${publicUrl}/`);
     assert.equal(new URL(resource.resource).href, resource.resource);
 
-    // The official client accepts an origin-root resource for any endpoint under it,
-    // and sends back exactly the identifier the metadata published.
     for (const endpoint of ["/mcp", "/api/notes/read", "/"]) {
       assert.equal(
         checkResourceAllowed({
@@ -315,7 +299,6 @@ it.live("one resource at the origin root covers every surface an MCP client asks
   }),
 );
 
-/** An error of the application's own, which a descriptor may declare beside the SDK's. */
 class Throttled extends Schema.TaggedError<Throttled>()(
   "Throttled",
   { message: Schema.String },
@@ -325,8 +308,6 @@ class Throttled extends Schema.TaggedError<Throttled>()(
 it("a resource's descriptor declares ProviderUnavailable, which the types require", () => {
   const declaration = { scopes: ["notes:read"], required: "notes:read" };
 
-  // The verifier fails with `ProviderUnavailable` when the issuer cannot be reached, so a
-  // descriptor that does not declare it is refused where the resource is declared.
   // @ts-expect-error -- `error: ProviderUnavailable` is missing from the descriptor.
   Resource.make(Authentication.make("notes.Undeclared", CurrentPrincipal), declaration);
 
@@ -336,8 +317,7 @@ it("a resource's descriptor declares ProviderUnavailable, which the types requir
     declaration,
   );
 
-  // A descriptor that only may declare it does not: without it, an outage would be a defect.
-  // `declares` is always true here, but only a `boolean` to the types.
+  // why: always true, but only a `boolean` to the types, so neither branch is narrowed away.
   const declares: boolean = Math.random() < 2;
 
   Resource.make(
@@ -348,7 +328,6 @@ it("a resource's descriptor declares ProviderUnavailable, which the types requir
     declaration,
   );
 
-  // A union schema holding it declares it, as its decoding does.
   Resource.make(
     Authentication.make("notes.Union", CurrentPrincipal, {
       error: Schema.Union([ProviderUnavailable, Throttled]),
@@ -356,7 +335,6 @@ it("a resource's descriptor declares ProviderUnavailable, which the types requir
     declaration,
   );
 
-  // A descriptor may declare more, which the resource keeps as it was given.
   const Declaring = Resource.make(
     Authentication.make("notes.Declaring", CurrentPrincipal, {
       error: [Throttled, ProviderUnavailable],

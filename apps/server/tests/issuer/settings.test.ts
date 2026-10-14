@@ -18,7 +18,6 @@ const load = (env: Record<string, string> = {}) =>
     ),
   );
 
-/** Every rejection names the variable that failed. */
 const rejects = (env: Record<string, string>, variable: string) =>
   Effect.gen(function* () {
     expect((yield* Effect.flip(load(env))).message, JSON.stringify(env)).toContain(variable);
@@ -90,7 +89,6 @@ it.effect("proxy trust and plain HTTP are opt-in", () =>
     expect(enabled.allowInsecureHttp).toBe(true);
     yield* rejects({ CLANKERAUTH_BASE_URL: "http://clankerauth.internal" }, "CLANKERAUTH_BASE_URL");
 
-    // The same flag governs the issuer origin and the MCP browser origins.
     const insecure = yield* load({
       CLANKERAUTH_BASE_URL: "http://clankerauth.internal",
       CLANKERAUTH_ALLOW_INSECURE_HTTP: "true",

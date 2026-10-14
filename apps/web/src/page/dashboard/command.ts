@@ -22,9 +22,7 @@ const clientSecretOf = (credentials: typeof ClientCredentials.Type): Option.Opti
 
 const nothingShown = Effect.as(Option.none<Credential>());
 
-/** Saves a change at the issuer, with the credential it shows once, if any. */
 const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, string> =>
-  // Each change calls a different action, which declares its own failures.
   toOwnerSentence<Option.Option<Credential>, unknown>(
     Change.match(change, {
       CreateResource: ({ identifier, name, scopes }) =>
@@ -32,7 +30,7 @@ const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, st
       UpdateResource: ({ identifier, name, scopes }) =>
         issuer.updateResource({ identifier, name, scopes }).pipe(nothingShown),
       DeleteResource: ({ identifier }) => issuer.deleteResource({ identifier }).pipe(nothingShown),
-      // A `datetime-local` value has no zone, so the browser's own zone applies.
+      // why: a `datetime-local` value has no zone, so `new Date` reads it in the browser's zone
       CreateKey: ({ name, permissions, maybeExpiry }) =>
         Effect.suspend(() =>
           issuer.createApiKey({

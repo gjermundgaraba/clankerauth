@@ -66,8 +66,6 @@ export type Message = typeof Message.Type;
 
 // OUT MESSAGE
 
-/** `CreatedOwner`: the owner exists and is signed in. `FoundOwner`: someone set the issuer up
- *  first, so the owner signs in instead. */
 export const OutMessage = defineMessageUnion({
   CreatedOwner: {},
   FoundOwner: {},

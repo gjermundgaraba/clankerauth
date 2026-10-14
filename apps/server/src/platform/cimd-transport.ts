@@ -2,9 +2,7 @@ import { fetchClientMetadataResource as secureFetch } from "@better-auth/cimd/no
 import { Context, Layer } from "effect";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 
-// The secure Node transport pins validated DNS answers, but its initial DNS
-// lookup cannot be aborted. Reject the calling request promptly on cancellation
-// while retaining capacity for every underlying operation until it settles.
+// why: the secure transport cannot abort its DNS lookup, so capacity stays held until it settles
 export function createAbortAwareTransport(
   transport: ClientMetadataResourceFetch,
   maximumPending = 8,
@@ -46,9 +44,6 @@ export function createAbortAwareTransport(
             release();
 
             if (aborted) {
-              // A transport may finish after the caller has gone away. Dispose
-              // of its body and consume cancellation errors without an orphaned
-              // rejection. No provider/database work runs in this continuation.
               void response.body?.cancel().catch(() => {});
             } else resolve(response);
           },
@@ -61,12 +56,10 @@ export function createAbortAwareTransport(
   };
 }
 
-/** Outbound retrieval of Client ID Metadata Documents. */
 export class CimdTransport extends Context.Service<
   CimdTransport,
   { readonly fetch: ClientMetadataResourceFetch }
 >()("clankerauth/CimdTransport") {
-  /** The provider's secure Node transport, which pins validated DNS answers. */
   static readonly layer = Layer.succeed(CimdTransport, {
     fetch: createAbortAwareTransport(secureFetch),
   });

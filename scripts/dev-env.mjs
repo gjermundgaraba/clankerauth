@@ -19,7 +19,7 @@ const secret = readFileSync(secretFile, "utf8").trim();
 if (secret.length < 32)
   throw new Error("The dev secret in .dev/secret must contain at least 32 characters.");
 
-// Dev always uses its own identity state, even when production variables are exported.
+// why: overrides exported production variables, so dev never touches production identity state.
 Object.assign(process.env, {
   CLANKERAUTH_BASE_URL: "http://localhost:3000",
   CLANKERAUTH_BETTER_AUTH_SECRET: secret,

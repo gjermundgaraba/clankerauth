@@ -3,10 +3,7 @@ import { Clock, Effect } from "effect";
 import { internal, provider } from "../issuer/errors.ts";
 import type { ProviderContext } from "../issuer/issuer.ts";
 
-/** The pinned provider's administration APIs require a signed session cookie.
- * The session lives in the calling scope, which deletes it on close; never put this
- * cookie in a response. Its one-minute expiry bounds crash residue.
- */
+// why: provider admin APIs need a session cookie, which must never reach a response
 export const providerSessionFor = (context: ProviderContext, origin: string) =>
   Effect.fn("Administration.providerSession")(function* (userId: string) {
     const expiresAt = new Date((yield* Clock.currentTimeMillis) + 60_000);
@@ -27,7 +24,7 @@ export const providerSessionFor = (context: ProviderContext, origin: string) =>
               session.token,
               context.secret,
             ),
-            // Prevent getSession from extending this request-local session's expiry.
+            // why: stops getSession from extending this request-local session's expiry
             serializeSignedCookie(
               context.authCookies.dontRememberToken.name,
               "true",

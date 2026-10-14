@@ -4,20 +4,15 @@ import { ClientAccess, type InternalServerError, type Resource } from "@clankera
 import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
 
-/** Every authorization targets exactly one configured resource; anything else is refused so. */
 export const exactlyOneResource = "Exactly one configured resource is required";
 
-/**
- * An automatic client registered itself, through DCR or CIMD, so no user owns its row; a
- * managed one is the owner's. In SQL, `automatic` and `managed` qualify `oauthClient` rows.
- */
+// why: a client that registered itself, through DCR or CIMD, has no owning user
 export const isAutomatic = (client: { readonly userId: string | null }) => client.userId === null;
 
 export const automatic = (table = "oauthClient") => query.raw(`${table}.userId IS NULL`);
 
 export const managed = (table = "oauthClient") => query.raw(`${table}.userId IS NOT NULL`);
 
-/** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
 export const protocolScopes = ["offline_access"];
 
 export type ResourceValue = typeof Resource.Type;
@@ -34,7 +29,6 @@ const decodeResourceRow = persisted(ResourceRow);
 
 const accessRows = persisted(Schema.Array(ClientAccess));
 
-/** Every scope a client may hold across `identifiers`, with the protocol scopes. */
 export const scopesOf = (catalog: readonly ResourceValue[], identifiers: readonly string[]) => [
   ...new Set([
     ...protocolScopes,
@@ -55,7 +49,6 @@ export const validateSelection = Effect.fn("Resources.validateSelection")(functi
   if (unknown !== -1) return yield* invalidInput(["resources", unknown], "Unknown Resource");
 });
 
-/** A managed client's resource links, read through `query`, which may be a transaction's. */
 export const accessForClient = Effect.fn("Resources.accessForClient")(function* (
   clientId: string,
   query: Sql,
@@ -65,7 +58,6 @@ export const accessForClient = Effect.fn("Resources.accessForClient")(function* 
   );
 });
 
-/** The stored resources and client access, read without the provider. */
 export class ResourceCatalog extends Context.Service<
   ResourceCatalog,
   {

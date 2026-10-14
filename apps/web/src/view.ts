@@ -139,8 +139,6 @@ const pageView = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 // VIEW
 
-/** The page's one live region is at the end of the body, except while a dashboard dialog is
- *  open, which hosts it instead. */
 const isLiveRegionInDialog = (page: Page): boolean =>
   Page.matchOrElse(
     page,

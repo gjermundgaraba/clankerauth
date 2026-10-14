@@ -4,10 +4,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
-/**
- * This issuer's own fault: a failed query, an unreadable row, an unexpected provider failure.
- * The schema defines the public response; the diagnostic cause reaches logs, never a caller.
- */
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   { message: Schema.String },
@@ -23,7 +19,6 @@ export class InternalServerError extends Schema.TaggedError<InternalServerError>
   };
 }
 
-/** The issuer could not decide the request now, such as when its session store is unreachable. */
 export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
   "ServiceUnavailable",
   { message: Schema.String },
@@ -57,10 +52,6 @@ export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
     new ApiKeyNotFound({ keyId, message: `No API key ${keyId} exists` });
 }
 
-/**
- * The client registered itself, through DCR or CIMD: the owner can revoke, block or delete it,
- * but its access and registration are its own, and consent decides what it gets.
- */
 export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
   "ClientIsAutomatic",
   { clientId: Schema.String, message: Schema.String },
@@ -73,7 +64,6 @@ export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
     });
 }
 
-/** First-run setup has already created the owner. */
 export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
   "OwnerExists",
   { message: Schema.String },
@@ -82,21 +72,18 @@ export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
   static readonly of = () => new OwnerExists({ message: "Setup already completed" });
 }
 
-/** The provider refused the request's input on a rule of its own, which `message` states. */
 export class ProviderRefused extends Schema.TaggedError<ProviderRefused>()(
   "ProviderRefused",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-/** A request body the issuer could not read, on a route that is not an action. */
 export class UnreadableRequest extends Schema.TaggedError<UnreadableRequest>()(
   "UnreadableRequest",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
-/** Every error of this contract. */
 export const errors = [
   InternalServerError,
   ServiceUnavailable,
@@ -111,14 +98,8 @@ export const errors = [
 
 export type IssuerError = (typeof errors)[number]["Type"];
 
-/** What authentication fails with when it cannot decide who is calling. */
 const undecided = [ServiceUnavailable, InternalServerError] as const;
 
-/**
- * The owner administering the issuer, as its authentication verified the request: what every
- * administration action states, `caller: CurrentOwner`. Never supplied by action arguments or
- * at startup.
- */
 export class CurrentOwner extends Context.Service<CurrentOwner, Owner>()(
   "clankerauth/CurrentOwner",
 ) {}
@@ -131,49 +112,24 @@ export interface Owner {
   readonly providerHeaders: Effect.Effect<Headers, InternalServerError, Scope.Scope>;
 }
 
-/**
- * The dashboard's owner session: the issuer's session cookie, named `cookie`, which the browser
- * sends. The provider names that cookie by the deployment, `__Secure-` prefixed over HTTPS, so
- * the server builds this descriptor where it starts, from the name its sessions use, and builds
- * both its binding and its `Authentication.layer` from it: that layer serves only a binding
- * built from that very descriptor, not another naming the same cookie. A browser's binding,
- * from `OwnerSession`, only calls. Its verifier reads the session through the provider, so it
- * may fail with `ServiceUnavailable` or `InternalServerError`, answered with its own status.
- */
+// why: the cookie name varies by deployment, and a layer serves only its own descriptor's binding.
 export const ownerSession = (cookie: string) =>
   Authentication.make("clankerauth.OwnerSession", CurrentOwner, {
     security: HttpApiSecurity.apiKey({ in: "cookie", key: cookie }),
     error: undecided,
   });
 
-/**
- * The browser's owner session. A page never needs the cookie's name, as the browser sends its
- * cookies itself: this one names the provider's cookie over plain HTTP, which only the server
- * would read.
- */
+// why: a browser sends its cookies itself, so only the server would read this cookie name.
 export const OwnerSession = ownerSession("better-auth.session_token");
 
-/**
- * An administration client's OAuth access token for the issuer's origin root, `<baseURL>/`,
- * over MCP or `OwnerHttp`. Its verifier reads the token's owner and client from the database,
- * so it may fail with `ServiceUnavailable` when the token cannot be decided, or
- * `InternalServerError`.
- */
 export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentOwner, {
   error: undecided,
 });
 
-/**
- * The issuer's own resource, administration: its origin root, as every application's resource
- * is. It names the token audience of administration over `/mcp` and `/api/owner/<action>`.
- */
 export const administrationIdentifier = (origin: string) => new URL("/", origin).href;
 
-/** Administration's fixed scopes: `read` allows listing, and `write` allows everything. */
 export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
 
-/** The owner's password length: the issuer enforces it, and the setup page checks it first so
- *  it can name the field. */
 export const MINIMUM_PASSWORD_LENGTH = 8;
 
 export const MAXIMUM_PASSWORD_LENGTH = 128;
@@ -196,12 +152,10 @@ export const ClientAuthMethod = Schema.Literals([
 
 export const ApplicationType = Schema.Literals(["web", "native"]);
 
-/** The resources a managed client may obtain, each named once. */
 const ResourceSelection = Schema.Array(Schema.String).check(
   Schema.isUnique({ message: "Choose unique Resources" }),
 );
 
-/** Provider vocabulary: the server passes these fields through unchanged. */
 export const ClientInput = Schema.Struct({
   client_name: Schema.String,
   redirect_uris: Schema.Array(Schema.String),
@@ -210,7 +164,7 @@ export const ClientInput = Schema.Struct({
   application_type: ApplicationType,
 });
 
-/** The provider's update endpoint cannot change the authentication method. */
+// why: the provider's update endpoint cannot change `token_endpoint_auth_method`.
 export const ClientUpdateInput = Schema.Struct({
   client_id: Schema.String,
   client_name: Schema.String,
@@ -220,7 +174,6 @@ export const ClientUpdateInput = Schema.Struct({
 
 export const ClientId = Schema.Struct({ client_id: Schema.String });
 
-/** Without a resource, every authorization the client holds. */
 export const ClientRevokeInput = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.optional(Schema.String),
@@ -258,11 +211,7 @@ export const Resource = Schema.Struct({
 
 export const ResourceSummary = Resource.pipe(Schema.fieldsAssign({ builtIn: Schema.Boolean }));
 
-/**
- * A resource as the owner writes it. The issuer trims each field before storing it, so the
- * rules allow surrounding whitespace: a name that is not blank, and scopes that are OAuth
- * scope tokens (RFC 6749 §3.3). Stored resources are `Resource`, which carries no rule.
- */
+// why: the issuer trims each field before storing it, so these checks allow surrounding spaces.
 export const ResourceInput = Schema.Struct({
   identifier: Schema.String,
   name: Schema.String.check(Schema.isPattern(/\S/u, { message: "Resources require a name" })),
@@ -291,11 +240,6 @@ export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(Cli
 
 export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
-/**
- * Permissions as the owner grants them: at least one resource, each with scopes named once.
- * A stored key's are `KeyPermissions`, which a key whose permissions no longer decode is
- * listed with, empty.
- */
 const KeyGrants = Schema.Record(
   Schema.String,
   Schema.Array(Schema.String).check(
@@ -306,25 +250,14 @@ const KeyGrants = Schema.Record(
   ),
 ).check(Schema.isMinProperties(1, { message: "Select at least one Resource and scope" }));
 
-/** A key's name as the owner writes it; the issuer stores it trimmed. */
 const KeyName = Schema.String.check(
   Schema.isMaxLength(100, { message: "Key names require 1–100 characters" }),
   Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" }),
 );
 
-/**
- * Timestamps stay ISO strings on the wire and arrive as `DateTime.Utc` values. An input
- * without an offset is read as UTC, so the instant an API caller means never depends on
- * the host's time zone; every value this issuer writes carries `Z`.
- */
+// why: an input without an offset reads as UTC, so no instant depends on the host's time zone.
 const Timestamp = Schema.DateTimeUtcFromString;
 
-/**
- * What a client holds for one resource: a consent, a live refresh token, or both. A
- * managed client skips consent, so `approvedAt` is null for it and it shows only while it
- * holds a refresh token. `scopes` are the consent's, else the newest token's.
- * `refreshedAt` is when the newest live refresh token was issued, at sign-in or on refresh.
- */
 export const Connection = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.String,
@@ -361,8 +294,6 @@ const anyone = { caller: Action.Anyone } as const;
 
 const owned = { caller: CurrentOwner } as const;
 
-// These actions have their own access rules, not an owner-session requirement.
-// They are HTTP-only: bootstrap and key lists are not MCP administration tools.
 export const IssuerActions = [
   Action.make("setupStatus", {
     description: "Check whether the issuer needs its first owner account.",
@@ -525,21 +456,11 @@ export const Administration = [
   }),
 ] as const;
 
-/**
- * Every action over HTTP, at `/api/<action>`, owner administration authenticated by
- * `authentication`: the server's, from its deployment's cookie, or the browser's
- * `OwnerSession`. Resource servers read `/api/keyList`, so that path is part of the protocol.
- */
 export const binding = (authentication: typeof OwnerSession) =>
   ActionHttp.make([...Administration, ...IssuerActions], { authentication });
 
-/** The browser's binding, and a typed client's: the cookie name is the server's concern. */
 export const Http = binding(OwnerSession);
 
-/**
- * Owner administration over HTTP for a client holding an access token, such as the CLI, at
- * `/api/owner/<action>`: the actions `/mcp` serves, authenticated as it is, by `OwnerToken`.
- */
 export const OwnerHttp = ActionHttp.make(Administration, {
   prefix: "/api/owner",
   authentication: OwnerToken,

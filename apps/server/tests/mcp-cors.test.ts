@@ -86,7 +86,7 @@ it.live("MCP preflight rejects unlisted origins, methods, and headers", () =>
       expect(response.headers.has("access-control-allow-origin")).toBe(false);
     }
 
-    // Stateless 2026-07-28 MCP has no GET stream, session deletion, session or resumption headers.
+    // why: stateless 2026-07-28 MCP has no GET stream, session deletion, or session headers
     for (const method of ["GET", "DELETE", "PATCH"])
       expect((yield* preflight(handle, clientOrigin, method)).status).toBe(403);
 
@@ -185,7 +185,6 @@ it.live(
         }),
       );
 
-      // The SameSite cookie authenticates the owner; no CORS grant is exposed for the dashboard API.
       expect(dashboard.status).toBe(200);
       expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
     }).pipe(Effect.provide(corsIssuer())),

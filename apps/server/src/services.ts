@@ -9,11 +9,6 @@ import { Database } from "./platform/sqlite.ts";
 import { ResourceCatalog } from "./resources/catalog.ts";
 import { Resources } from "./resources/resources.ts";
 
-/**
- * Every service the issuer runs on, from the settings and CIMD transport an entry chooses.
- * Building it opens the database, migrates and initializes the provider, and publishes the
- * resource catalog; closing its scope closes the database last.
- */
 export const issuerServices = <E>(
   settings: Layer.Layer<Settings, E>,
   cimdTransport: Layer.Layer<CimdTransport>,

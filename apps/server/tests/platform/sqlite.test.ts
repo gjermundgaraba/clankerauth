@@ -135,7 +135,6 @@ it.effect("local transactions preserve domain failures and roll back failed comm
     ).toBe(error);
     expect(yield* database.sql`SELECT * FROM parent`).toEqual([]);
 
-    // The callback succeeds, but the deferred foreign key fails at COMMIT.
     expect(
       yield* Effect.flip(transaction(database.kysely, (sql) => sql`INSERT INTO child VALUES (99)`)),
     ).toBeInstanceOf(Error);

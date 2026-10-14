@@ -64,10 +64,6 @@ type Owned<A, E = never> = Effect.Effect<A, Refusal | E, CurrentOwner | Scope.Sc
 
 type Editing = ClientNotFound | ClientIsAutomatic;
 
-/**
- * Owner policy over provider client rows: blocking uses the provider's own `disabled`
- * flag, which it enforces at authorize, token and refresh.
- */
 export class Clients extends Context.Service<
   Clients,
   {
@@ -126,7 +122,6 @@ export class Clients extends Context.Service<
           return yield* Effect.fail(ClientNotFound.of(clientId));
       });
 
-      /** A client the owner registered, which the owner may edit; refuses any other. */
       const managedClient = Effect.fn("Clients.managed")(function* (clientId: string) {
         const [client] = yield* clientOwners(
           yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
@@ -148,11 +143,6 @@ export class Clients extends Context.Service<
         return { revoked: true };
       });
 
-      /**
-       * What each client holds, per resource: a consent, a live refresh token, or both. A
-       * managed client skips consent, so only its refresh tokens show. Scopes are the
-       * consent's, else the newest token's; rotation revokes the replaced token.
-       */
       const connections = Effect.fn("Clients.connections")(function* () {
         const now = new Date(yield* Clock.currentTimeMillis).toISOString();
 
@@ -236,7 +226,7 @@ export class Clients extends Context.Service<
 
           const client = yield* refused(
             provider(() =>
-              // The administrative endpoint accepts skip_consent; the plain one drops it.
+              // why: the plain endpoint drops skip_consent; the administrative one keeps it
               auth.api.adminCreateOAuthClient({
                 headers,
                 body: {
@@ -246,7 +236,6 @@ export class Clients extends Context.Service<
                   application_type: input.application_type,
                   grant_types: ["authorization_code", "refresh_token"],
                   scope: scopes.join(" "),
-                  // Owner-registered clients are first party: no consent screen.
                   skip_consent: true,
                 },
               }),

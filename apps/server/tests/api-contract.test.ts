@@ -12,12 +12,10 @@ import { Database } from "../src/platform/sqlite.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
 import { Issuer } from "../src/issuer/issuer.ts";
 
-/** A typed client of the issuer's binding, as an HTTP caller of the issuer builds one. */
 const apiClient = (baseUrl: string) => ActionHttp.client(Http, { baseUrl });
 
 const baseURL = "http://localhost:3000";
 
-/** The issuer's web application, as a browser on its origin reaches it. */
 class Browser extends Context.Service<
   Browser,
   {
@@ -27,8 +25,6 @@ class Browser extends Context.Service<
   }
 >()("api-contract.test/Browser") {}
 
-// Model the browser's same-origin headers and cookie transport while exercising
-// the actual FetchHttpClient request encoding and HttpApiClient response decoding.
 const browser = Layer.effect(
   Browser,
   Effect.gen(function* () {
@@ -169,14 +165,11 @@ describe("API integration", () => {
         blocked: true,
       });
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(true);
-      // Blocking issuance must not block the owner's provider-backed resource maintenance.
       expect(yield* api.updateResource(updatedResource)).toEqual(updatedResource);
       expect(yield* api.blockClient({ client_id: created.client_id, blocked: false })).toEqual({
         blocked: false,
       });
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
-      // Persisted values must satisfy the outgoing contract; corrupt data is a
-      // server failure, not a bad request from this correctly typed caller.
       yield* sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
       const invalidResponse = yield* Effect.flip(api.listClients());
       expect(invalidResponse._tag).toBe("InternalServerError");
@@ -197,8 +190,6 @@ describe("API integration", () => {
       Effect.gen(function* () {
         const browser = yield* Browser;
         const { auth, context } = yield* Issuer;
-        // The owner session's verifier fails with an error `OwnerSession` declares, not a refusal:
-        // signing in again cannot help.
         vi.spyOn(auth.api, "getSession").mockRejectedValue(
           new APIError("SERVICE_UNAVAILABLE", { message: "Session store unavailable" }),
         );
@@ -292,13 +283,11 @@ describe("API integration", () => {
       expect(listing.clients).toHaveLength(1);
       expect(listing.clients[0]).toMatchObject({ client_id, onboarding: "dcr", blocked: false });
       expect(listing.clients[0]).not.toHaveProperty("client_secret");
-      // An automatic client may ask for any resource; consent decides, not client access.
       expect(listing.clientAccess).toEqual([]);
       expect(listing.connections).toEqual([]);
       expect((yield* Effect.flip(api.setClientAccess({ client_id, resources: [] })))._tag).toBe(
         "ClientIsAutomatic",
       );
-      // The owner edits only the clients the owner registered.
       expect(
         (yield* Effect.flip(
           api.updateClient({
@@ -327,8 +316,6 @@ describe("API integration", () => {
         `${baseURL}/`,
       ]);
 
-      // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
-      // and nullable live metadata is omitted rather than invented.
       yield* sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
       expect((yield* api.listClients()).clients).toEqual([
         {
@@ -399,7 +386,6 @@ describe("API integration", () => {
       expect((yield* Effect.flip(api.blockClient({ client_id, blocked: true })))._tag).toBe(
         "InternalServerError",
       );
-      // Failed revocation also rolls back the disabled flag written by block.
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
       expect(yield* sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`).toEqual([
         { id: "failure-consent" },

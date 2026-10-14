@@ -37,7 +37,6 @@ export type ViewInputs = Readonly<{
 
 type FormLabels = Readonly<{ title: string; submit: string }>;
 
-/** The editor card's title and submit button for a form. */
 export const labelsOf = (form: Model): FormLabels =>
   Model.match(form, {
     Resource: ({ mode }) =>
@@ -355,7 +354,6 @@ const clientFields = (
 
 // VIEW
 
-/** The open form's fields, held while it saves. */
 export const view = defineView<Model, Message, ViewInputs>((form, inputs, h): Html =>
   Fields.view(
     {

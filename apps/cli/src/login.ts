@@ -21,17 +21,11 @@ import {
   type Tokens,
 } from "./oauth.ts";
 
-/** The scopes a sign-in to administration asks for unless told otherwise. */
 export const administrationScope = `${administrationScopes.read} ${administrationScopes.write}`;
 
-/** A sign-in asks for a refresh token too, so it lasts while it is used. */
 const withRefresh = (scope: string) =>
   scope.split(" ").includes("offline_access") ? scope : `${scope} offline_access`;
 
-/**
- * The command that signs in to `resource` again: administration needs neither flag unless
- * it was granted other scopes than its default, and another resource needs both.
- */
 export const loginHint = (url: string, resource: string, scope?: string) => {
   const asked = scope
     ?.split(" ")
@@ -49,24 +43,17 @@ export const loginHint = (url: string, resource: string, scope?: string) => {
   return `clankerauth login ${url}${resourceFlag}${scopeFlag}`;
 };
 
-/** The redirect a registration names; a sign-in adds the port it listens on. */
+// why: loopback redirects match without their port (RFC 8252), so one registration serves all.
 const registeredRedirect = "http://127.0.0.1/callback";
 
-/** How long a sign-in waits for the owner to approve it in the browser. */
 const approvalWindow = "5 minutes";
 
-/** When tokens issued now expire; an issuer that does not say is asked again next time. */
 const expiry = (tokens: Tokens) =>
   new Date(Date.now() + (tokens.expires_in ?? 0) * 1000).toISOString();
 
-/**
- * The callback page says nothing of the outcome, which is decided after the browser has
- * its answer: the terminal reports it.
- */
 const page =
   '<!doctype html><meta charset="utf-8"><title>clankerauth</title><p>Return to the terminal.</p>';
 
-/** Listen on a free loopback port for the one request the authorization redirect makes. */
 const listen = Effect.acquireRelease(
   Effect.gen(function* () {
     const received = yield* Deferred.make<URLSearchParams>();
@@ -93,8 +80,7 @@ const listen = Effect.acquireRelease(
         ),
       );
       server.listen(0, "127.0.0.1", () =>
-        // SAFETY: a TCP listener's address is an AddressInfo once it listens; only a pipe's
-        // is a string, and only a closed server's is null.
+        // SAFETY: a listening TCP server's address is an AddressInfo, not a pipe's string.
         resume(Effect.succeed((server.address() as AddressInfo).port)),
       );
     });
@@ -108,19 +94,12 @@ const listen = Effect.acquireRelease(
     }),
 );
 
-/** Revoke these sign-ins' refresh tokens, as far as the issuer can be reached. */
 const revokeAll = (credentials: Credentials, signIns: ReadonlyArray<SignIn>) =>
   Effect.forEach(signIns, ({ refreshToken }) => Effect.ignore(revoke(credentials, refreshToken)), {
     concurrency: "unbounded",
     discard: true,
   });
 
-/**
- * Sign in to the issuer at `url` as its owner, for `resource`, administration when none:
- * discover the issuer, register this CLI once per issuer, have the owner approve the URL
- * printed on stderr, and keep the tokens beside the sign-ins to other resources. Signing
- * in to another issuer than the kept one revokes and forgets the kept one's sign-ins.
- */
 export const login = Effect.fn("Cli.login")(function* (
   url: string,
   target: Option.Option<string>,
@@ -203,10 +182,6 @@ export const login = Effect.fn("Cli.login")(function* (
   return { url: origin, resource, scope: signIn.scope };
 }, Effect.scoped);
 
-/**
- * A current access token for `resource`, refreshed first when it has expired or is about
- * to: the refresh token rotates, so the new pair is saved before the token is used.
- */
 export const accessToken = Effect.fn("Cli.accessToken")(function* (
   credentials: Credentials,
   resource: string,
@@ -242,11 +217,6 @@ export const accessToken = Effect.fn("Cli.accessToken")(function* (
   return refreshed.accessToken;
 });
 
-/**
- * Forget the sign-in to `resource`, or every one when none is named, revoking each refresh
- * token first when the issuer can be reached. The file goes with the last sign-in, and
- * with a file no sign-in can be read from.
- */
 export const logout = Effect.fn("Cli.logout")(function* (resource: Option.Option<string>) {
   const stored = yield* readCredentials();
 

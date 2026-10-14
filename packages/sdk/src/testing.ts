@@ -98,8 +98,6 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
     if (Option.isNone(asked)) return send(400, '{"error":"Invalid request"}');
     const { resource } = asked.value;
 
-    // Like the real issuer, a list holds only what is granted on the resource it names,
-    // and only what has not expired.
     const now = Date.now();
 
     const entries = await Promise.all(

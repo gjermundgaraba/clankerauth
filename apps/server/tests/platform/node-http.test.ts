@@ -321,7 +321,7 @@ it.live("shutdown interrupts an open response stream before closing request scop
       "first",
     );
 
-    // Shutdown may end the stream cleanly or abort its connection.
+    // why: shutdown may end the stream cleanly or abort its connection
     const disconnected = reader.read().then(
       (result) => expect(result.done).toBe(true),
       () => {},
