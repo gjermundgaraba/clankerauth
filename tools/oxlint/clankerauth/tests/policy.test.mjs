@@ -76,6 +76,32 @@ await test("type documentation and directives with a reason are kept, other doc 
   );
 });
 
+await test("a schema is a type: its declaration and fields keep their documentation", async () => {
+  assert.deepEqual(
+    await ruleLines(
+      "no-prose-comments",
+      "apps/server",
+      [
+        'import { Schema } from "effect";',
+        "/** A count of attempts. */",
+        "export const Attempts = Schema.Struct({",
+        "  /** How many remain. */",
+        "  remaining: Schema.Number,",
+        "});",
+        "/** The attempts' own failure. */",
+        'export class Exhausted extends Schema.TaggedError<Exhausted>()("Exhausted", {}) {}',
+        "/** Builds attempts. */",
+        "export const attempts = (remaining: number) => ({ remaining });",
+        "export const options = {",
+        "  /** How many to allow. */",
+        "  remaining: 3,",
+        "};",
+      ].join("\n") + "\n",
+    ),
+    [9, 12],
+  );
+});
+
 await test("the published SDK keeps its API documentation, and only the web app has section headers", async () => {
   assert.deepEqual(
     await ruleLines(

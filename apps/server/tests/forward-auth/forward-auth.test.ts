@@ -1,9 +1,10 @@
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Cookies } from "effect/http";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { forwardClientId, forwardCookie } from "../../src/forward-auth/forward-auth.ts";
-import { testWebApplication, WebApplication } from "../test-issuer.ts";
+import { cookieHeader, testWebApplication, WebApplication } from "../test-issuer.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const origin = "https://clankerauth.home.example";
@@ -66,10 +67,10 @@ const forward = (cookie: string, target = resource, original = page, mode = "nav
 };
 
 const cookiePair = (response: Response, name: string) =>
-  response.headers
-    .getSetCookie()
-    .map((cookie) => cookie.split(";")[0]!)
-    .find((pair) => pair.startsWith(`${name}=`));
+  Cookies.get(Cookies.fromSetCookie(response.headers.getSetCookie()), name).pipe(
+    Option.map((cookie) => `${cookie.name}=${cookie.valueEncoded}`),
+    Option.getOrUndefined,
+  );
 
 const redirectTo = (response: Response, path: string, rd = page) => {
   expect(response.status).toBe(302);
@@ -89,10 +90,7 @@ const signedInOwner = Layer.effect(
     expect(login.status).toBe(200);
     expect(login.headers.getSetCookie().join(";")).not.toContain("Domain=");
 
-    const session = login.headers
-      .getSetCookie()
-      .map((part) => part.split(";")[0])
-      .join("; ");
+    const session = cookieHeader(login);
 
     expect(
       (yield* send(session, "/api/createResource", {

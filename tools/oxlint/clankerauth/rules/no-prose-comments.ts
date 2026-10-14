@@ -16,6 +16,37 @@ const typeDeclarations = new Set([
   "TSModuleDeclaration",
 ]);
 
+const rootName = (node: ESTree.Node): string | undefined => {
+  let current = node;
+
+  while (current.type === "CallExpression" || current.type === "MemberExpression")
+    current = current.type === "CallExpression" ? current.callee : current.object;
+
+  return current.type === "Identifier" ? current.name : undefined;
+};
+
+const isSchema = (node: ESTree.Node | null | undefined) =>
+  node !== null && node !== undefined && rootName(node) === "Schema";
+
+const declaresSchema = (node: ESTree.Node): boolean => {
+  if (node.type === "VariableDeclaration")
+    return node.declarations.some((declarator) => isSchema(declarator.init));
+
+  if (node.type === "ClassDeclaration") return isSchema(node.superClass);
+
+  if (node.type === "Property")
+    return node.parent?.type === "ObjectExpression" && isSchema(node.parent.parent);
+
+  return false;
+};
+
+const documentsType = (node: ESTree.Node): boolean =>
+  typeDeclarations.has(node.type) ||
+  declaresSchema(node) ||
+  (node.type === "ExportNamedDeclaration" &&
+    node.declaration !== null &&
+    documentsType(node.declaration));
+
 const directives = [
   /^\s*(?:eslint|oxlint)-(?:disable|enable)\S*(?:\s+[^-\s]\S*)*\s+--\s+\S/u,
   /^\s*@ts-expect-error\s+\S/u,
@@ -33,7 +64,7 @@ export const noProseCommentsRule = defineRule({
     type: "suggestion",
     docs: {
       description:
-        "Allow only tool directives with a reason, one-line `SAFETY:` and `why:` comments, documentation of types, and configured exceptions.",
+        "Allow only tool directives with a reason, one-line `SAFETY:` and `why:` comments, documentation of types and schemas, and configured exceptions.",
     },
     messages: {
       prose:
@@ -52,7 +83,7 @@ export const noProseCommentsRule = defineRule({
     defaultOptions: [{ docBlocks: "types", sectionHeaders: false }],
   },
   createOnce(context) {
-    const documentsType = (comment: ESTree.Comment): boolean => {
+    const documentsAType = (comment: ESTree.Comment): boolean => {
       const { text } = context.sourceCode;
       let offset = comment.end;
 
@@ -61,15 +92,7 @@ export const noProseCommentsRule = defineRule({
       let node: ESTree.Node | null = context.sourceCode.getNodeByRangeIndex(offset);
 
       while (node !== null && node.start === offset) {
-        if (typeDeclarations.has(node.type)) return true;
-
-        if (
-          node.type === "ExportNamedDeclaration" &&
-          node.declaration !== null &&
-          typeDeclarations.has(node.declaration.type)
-        )
-          return true;
-
+        if (documentsType(node)) return true;
         node = node.parent ?? null;
       }
 
@@ -89,7 +112,7 @@ export const noProseCommentsRule = defineRule({
 
       if (!comment.value.startsWith("*")) return false;
 
-      return options.docBlocks === "all" || documentsType(comment);
+      return options.docBlocks === "all" || documentsAType(comment);
     };
 
     return {

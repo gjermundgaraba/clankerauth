@@ -12,7 +12,7 @@ import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import { Administration, InternalServerError } from "@clankerauth/admin-api";
 import { listen } from "../../src/platform/node-http.ts";
-import { testWebApplication, WebApplication } from "../test-issuer.ts";
+import { signIn, testWebApplication, WebApplication } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 
@@ -22,17 +22,11 @@ const resource = "https://example.internal/api";
 
 const CreatedApiKey = Schema.Struct({ key: Schema.String, keyId: Schema.String });
 
-type JsonPrimitive = string | number | boolean | null;
-
-type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
-
-type TestRequestBody = { readonly [key: string]: JsonValue };
+type TestRequestBody = typeof Schema.JsonObject.Type;
 
 class OwnerCookie extends Context.Service<OwnerCookie, string>()("api-keys.test/OwnerCookie") {}
 
-class OwnerBearer extends Context.Service<OwnerBearer, Effect.Effect<string>>()(
-  "api-keys.test/OwnerBearer",
-) {}
+class OwnerBearer extends Context.Service<OwnerBearer, string>()("api-keys.test/OwnerBearer") {}
 
 const send = (
   cookie: string,
@@ -88,15 +82,10 @@ const signedInOwner = Layer.effect(
       password: "test-only password123",
     });
 
-    const login = yield* send("", "/api/auth/sign-in/email", {
+    const cookie = yield* signIn(yield* WebApplication, origin, {
       email: "owner@example.internal",
       password: "test-only password123",
     });
-
-    const cookie = login.headers
-      .getSetCookie()
-      .map((part) => part.split(";")[0])
-      .join("; ");
 
     expect(
       (yield* send(cookie, "/api/createResource", {
@@ -116,19 +105,16 @@ const ownerBearer = Layer.effect(
     const handle = yield* WebApplication;
     const cookie = yield* OwnerCookie;
 
-    return yield* Effect.cached(
-      Effect.promise(() => mcpOAuthGrant(handle, origin, cookie)).pipe(
-        Effect.map(({ tokens }) => tokens.access_token),
-      ),
-    );
+    const { tokens } = yield* Effect.promise(() => mcpOAuthGrant(handle, origin, cookie));
+
+    return tokens.access_token;
   }),
 );
 
 const apiKeysIssuer = () =>
-  ownerBearer.pipe(
-    Layer.provideMerge(signedInOwner),
-    Layer.provideMerge(testWebApplication({ baseURL: origin })),
-  );
+  signedInOwner.pipe(Layer.provideMerge(testWebApplication({ baseURL: origin })));
+
+const bearerIssuer = () => ownerBearer.pipe(Layer.provideMerge(apiKeysIssuer()));
 
 const create = Effect.gen(function* () {
   const response = yield* call("/api/createApiKey", {
@@ -391,7 +377,7 @@ it.live("key writes require owner authorization", () =>
 const mcp = (method: string, params: ActionMcp.Params = {}, headers: Record<string, string> = {}) =>
   Effect.gen(function* () {
     const handle = yield* WebApplication;
-    const bearer = yield* yield* OwnerBearer;
+    const bearer = yield* OwnerBearer;
 
     return yield* Effect.promise(() =>
       handle(
@@ -408,7 +394,7 @@ const mcp = (method: string, params: ActionMcp.Params = {}, headers: Record<stri
 const ownerTools = Effect.gen(function* () {
   const handle = yield* WebApplication;
 
-  return yield* administrationTools(handle, origin, yield* yield* OwnerBearer);
+  return yield* administrationTools(handle, origin, yield* OwnerBearer);
 });
 
 it.live("MCP administration advertises no list changes and refuses subscriptions", () =>
@@ -422,7 +408,7 @@ it.live("MCP administration advertises no list changes and refuses subscriptions
     );
 
     expect(JSON.parse(listen.replace(/^data: /m, "").trim()).error.code).toBe(-32601);
-  }).pipe(Effect.provide(apiKeysIssuer())),
+  }).pipe(Effect.provide(bearerIssuer())),
 );
 
 it.live("HTTP and MCP share administration contracts, writes, secrets and revocation", () =>
@@ -484,7 +470,7 @@ it.live("HTTP and MCP share administration contracts, writes, secrets and revoca
         message: "Resource identifiers must be absolute URIs in canonical form, without a fragment",
       },
     ]);
-  }).pipe(Effect.provide(apiKeysIssuer())),
+  }).pipe(Effect.provide(bearerIssuer())),
 );
 
 it.live("HTTP and MCP sanitize invalid managed-client output", () =>
@@ -514,7 +500,7 @@ it.live("HTTP and MCP sanitize invalid managed-client output", () =>
     const administration = yield* ownerTools;
     const tool = yield* Effect.flip(administration.listClients());
     expect(tool).toEqual(new InternalServerError({ message: "Request could not be completed" }));
-  }).pipe(Effect.provide(apiKeysIssuer())),
+  }).pipe(Effect.provide(bearerIssuer())),
 );
 
 it.live(
@@ -587,7 +573,7 @@ it.live("HTTP administration requires the owner session; MCP requires bearer aut
     expect(
       (yield* mcp("tools/list", {}, { cookie: "", authorization: `Bearer ${key.key}` })).status,
     ).toBe(401);
-  }).pipe(Effect.provide(apiKeysIssuer())),
+  }).pipe(Effect.provide(bearerIssuer())),
 );
 
 it.live(

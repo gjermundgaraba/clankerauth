@@ -15,7 +15,6 @@ const settings = testSettings({ baseURL: "https://issuer.example" });
 
 const start = Effect.gen(function* () {
   const { context: services, scope: generation } = yield* startGeneration();
-  yield* Effect.addFinalizer(() => Effect.sync(() => vi.restoreAllMocks()));
   const handlerScope = yield* Scope.fork(yield* Effect.scope, "sequential");
   const listener = yield* listen(0, "127.0.0.1");
 

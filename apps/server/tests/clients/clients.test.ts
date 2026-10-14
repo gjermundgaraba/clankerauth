@@ -1,10 +1,10 @@
 import { it } from "@effect/vitest";
 import { Context, Effect, Exit, Layer } from "effect";
-import { ClientIsAutomatic, ClientNotFound } from "@clankerauth/admin-api";
+import { ClientIsAutomatic, ClientNotFound, CurrentOwner } from "@clankerauth/admin-api";
 import { beforeEach, expect } from "vite-plus/test";
 import { createHash } from "node:crypto";
-import { convertSetCookieToCookie } from "better-auth/test";
-import { issuerGeneration, testIssuer, testSettings, withOwnerHeaders } from "../test-issuer.ts";
+import { issuerGeneration, signIn, testIssuer, testSettings } from "../test-issuer.ts";
+import { peerHeader } from "../../src/platform/node-http.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 import { Issuer } from "../../src/issuer/issuer.ts";
@@ -21,6 +21,8 @@ const clientId = "https://client.example/oauth/metadata.json";
 const callback = "http://127.0.0.1:4184/callback";
 
 const verifier = "a".repeat(43);
+
+const owner = { email: "owner@example.com", password: "test-password-long-enough" };
 
 type AuthRequestBody = { readonly [key: string]: string | boolean | null | readonly string[] };
 
@@ -63,11 +65,21 @@ class OwnerCookie extends Context.Service<OwnerCookie, string>()("clients.test/O
 const ownerHeaders = Effect.map(OwnerCookie, (cookie) => new Headers({ cookie, origin: baseURL }));
 
 const asOwner = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.flatMap(ownerHeaders, (headers) => withOwnerHeaders(headers)(effect));
+  Effect.gen(function* () {
+    const owners = yield* OwnerAccount;
+    const userId = yield* owners.find();
+
+    if (!userId) return yield* Effect.die("Missing test owner");
+
+    return yield* effect.pipe(
+      Effect.provideService(CurrentOwner, owners.caller(userId, owner.email, true)),
+      Effect.scoped,
+    );
+  });
 
 const request = (path: string, body?: AuthRequestBody, cookie?: string) =>
   Effect.gen(function* () {
-    const headers = new Headers({ "x-clankerauth-peer": "127.0.0.1" });
+    const headers = new Headers({ [peerHeader]: "127.0.0.1" });
 
     if (body !== undefined)
       headers.set(
@@ -228,18 +240,9 @@ const managed = Effect.gen(function* () {
 const ownerWithResource = Layer.effect(
   OwnerCookie,
   Effect.gen(function* () {
-    yield* (yield* OwnerAccount).create({
-      email: "owner@example.com",
-      password: "test-password-long-enough",
-    });
-
-    const login = yield* request("/sign-in/email", {
-      email: "owner@example.com",
-      password: "test-password-long-enough",
-    });
-
-    expect(login.status).toBe(200);
-    const cookie = convertSetCookieToCookie(login.headers).get("cookie") ?? "";
+    yield* (yield* OwnerAccount).create(owner);
+    const { auth } = yield* Issuer;
+    const cookie = yield* signIn((request) => auth.handler(request), baseURL, owner);
     yield* createResource(resource, "Test resource", ["resource:read"]).pipe(
       Effect.provideService(OwnerCookie, cookie),
     );

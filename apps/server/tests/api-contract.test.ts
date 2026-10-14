@@ -5,7 +5,8 @@ import { FetchHttpClient } from "effect/http";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, ServiceUnavailable } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
-import { testWebApplication, WebApplication } from "./test-issuer.ts";
+import { signIn, testWebApplication, WebApplication } from "./test-issuer.ts";
+import { peerHeader } from "../src/platform/node-http.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 import { Database } from "../src/platform/sqlite.ts";
@@ -36,7 +37,7 @@ const browser = Layer.effect(
         const request = new Request(input, init);
         request.headers.set("origin", baseURL);
         request.headers.set("cookie", self.cookie);
-        request.headers.set("x-clankerauth-peer", "127.0.0.1");
+        request.headers.set(peerHeader, "127.0.0.1");
 
         return handle(request);
       },
@@ -79,19 +80,7 @@ describe("API integration", () => {
       const anonymous = yield* Effect.flip(api.listClients());
       expect(anonymous._tag).toBe("Unauthenticated");
 
-      const login = yield* Effect.promise(() =>
-        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        }),
-      );
-
-      expect(login.status).toBe(200);
-      browser.cookie = login.headers
-        .getSetCookie()
-        .map((value) => value.split(";")[0])
-        .join("; ");
+      browser.cookie = yield* signIn(browser.handle, baseURL, { email, password });
       expect(browser.cookie).not.toBe("");
 
       const resourceInput = {
@@ -225,18 +214,7 @@ describe("API integration", () => {
       const api = yield* apiClient(baseURL);
       yield* api.setupOwner({ email, password });
 
-      const login = yield* Effect.promise(() =>
-        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        }),
-      );
-
-      browser.cookie = login.headers
-        .getSetCookie()
-        .map((value) => value.split(";")[0])
-        .join("; ");
+      browser.cookie = yield* signIn(browser.handle, baseURL, { email, password });
       yield* api.createResource({
         identifier: resource,
         name: "MCP",
@@ -247,7 +225,7 @@ describe("API integration", () => {
         browser.handle(
           new Request(`${baseURL}/api/auth/oauth2/register`, {
             method: "POST",
-            headers: { "content-type": "application/json", "x-clankerauth-peer": "127.0.0.1" },
+            headers: { "content-type": "application/json", [peerHeader]: "127.0.0.1" },
             body: JSON.stringify({
               client_name: "Automatic MCP",
               redirect_uris: ["http://127.0.0.1:9876/callback"],
@@ -347,19 +325,7 @@ describe("API integration", () => {
       const api = yield* apiClient(baseURL);
       yield* api.setupOwner({ email, password });
 
-      const login = yield* Effect.promise(() =>
-        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        }),
-      );
-
-      expect(login.status).toBe(200);
-      browser.cookie = login.headers
-        .getSetCookie()
-        .map((value) => value.split(";")[0])
-        .join("; ");
+      browser.cookie = yield* signIn(browser.handle, baseURL, { email, password });
       const missing = { client_id: "missing-client" };
       expect((yield* Effect.flip(api.revokeClient(missing)))._tag).toBe("ClientNotFound");
 

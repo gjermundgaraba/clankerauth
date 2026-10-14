@@ -2,10 +2,12 @@ import * as oauth from "oauth4webapi";
 import { Effect, Option, Schema } from "effect";
 import type { Credentials } from "./credentials.ts";
 
+/** Something the issuer answered that a sign-in, a refresh or a revocation cannot go on from. */
 export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   message: Schema.String,
 }) {}
 
+/** The issuer's RFC 8414 metadata a sign-in uses, every endpoint required. */
 const Server = Schema.Struct({
   issuer: Schema.String,
   authorization_endpoint: Schema.String,
@@ -23,6 +25,7 @@ const transport = (url: string) => ({
   [oauth.allowInsecureRequests]: new URL(url).protocol === "http:",
 });
 
+/** The RFC 9728 check's failure: the metadata names another resource than the one asked for. */
 const NamedElsewhere = Schema.Struct({
   attribute: Schema.Literal("resource"),
   body: Schema.Struct({ resource: Schema.String }),

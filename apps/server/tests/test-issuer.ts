@@ -3,12 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context, Effect, Layer, Option, Redacted, Scope } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/http";
-import { CurrentOwner } from "@clankerauth/admin-api";
+import { Cookies, HttpRouter, HttpServerRequest } from "effect/http";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
+import { expect, vi } from "vite-plus/test";
 import { application } from "../src/http/application.ts";
 import { Settings, type IssuerSettings } from "../src/issuer/settings.ts";
 import { CimdTransport } from "../src/platform/cimd-transport.ts";
+import { peerHeader } from "../src/platform/node-http.ts";
 import { issuerServices, type IssuerServices } from "../src/services.ts";
 
 type SettingsOverrides = Partial<IssuerSettings> & Pick<IssuerSettings, "baseURL">;
@@ -77,7 +78,7 @@ export class WebApplication extends Context.Service<
                     HttpServerRequest.HttpServerRequest,
                     // why: node-http sets the peer header from the socket; tests bypass node-http
                     request.modify({
-                      remoteAddress: Option.fromNullishOr(request.headers["x-clankerauth-peer"]),
+                      remoteAddress: Option.fromNullishOr(request.headers[peerHeader]),
                     }),
                   ),
                 ),
@@ -97,15 +98,49 @@ export const testWebApplication = (
   cimdTransport?: ClientMetadataResourceFetch,
 ) => WebApplication.layer.pipe(Layer.provideMerge(testIssuer(overrides, cimdTransport)));
 
-export const withOwnerHeaders =
-  (headers: Headers) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(CurrentOwner, {
-        userId: "",
-        email: "",
-        writable: true,
-        providerHeaders: Effect.succeed(headers),
-      }),
-      Effect.scoped,
+export const cookieHeader = (response: Response) =>
+  Cookies.toCookieHeader(Cookies.fromSetCookie(response.headers.getSetCookie()));
+
+export const cookieJar = () => {
+  let cookies = Cookies.empty;
+
+  return {
+    header: () => Cookies.toCookieHeader(cookies),
+    keep: (response: Response) => {
+      cookies = Cookies.merge(cookies, Cookies.fromSetCookie(response.headers.getSetCookie()));
+    },
+    clear: () => {
+      cookies = Cookies.empty;
+    },
+  };
+};
+
+export const signIn = (
+  handle: (request: Request) => Promise<Response>,
+  origin: string,
+  credentials: { readonly email: string; readonly password: string },
+) =>
+  Effect.gen(function* () {
+    const response = yield* Effect.promise(() =>
+      handle(
+        new Request(`${origin}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { origin, "content-type": "application/json", [peerHeader]: "127.0.0.1" },
+          body: JSON.stringify(credentials),
+        }),
+      ),
     );
+
+    expect(response.status, yield* Effect.promise(() => response.clone().text())).toBe(200);
+
+    return cookieHeader(response);
+  });
+
+export const advanceDate = (millis: number) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + millis);
+    }),
+    () => Effect.sync(() => vi.useRealTimers()),
+  );

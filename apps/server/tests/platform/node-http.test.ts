@@ -4,7 +4,12 @@ import { request } from "node:http";
 import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
-import { createNodeServer, listen, requestPolicy } from "../../src/platform/node-http.ts";
+import {
+  createNodeServer,
+  listen,
+  peerHeader,
+  requestPolicy,
+} from "../../src/platform/node-http.ts";
 
 const baseURL = "https://issuer.example";
 
@@ -55,7 +60,7 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
 
         for (const name of ["forwarded", "x-forwarded-host", "x-forwarded-proto"])
           expect(req.headers[name]).toBeUndefined();
-        expect(req.headers["x-clankerauth-peer"]).toBe("127.0.0.1");
+        expect(req.headers[peerHeader]).toBe("127.0.0.1");
         expect(req.headers.cookie).toBe("session=owner");
         called();
 
@@ -82,7 +87,7 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
           forwarded: "for=evil",
           "x-forwarded-host": "evil.example",
           "x-forwarded-proto": "http",
-          "x-clankerauth-peer": "forged",
+          [peerHeader]: "forged",
           cookie: "session=owner",
         },
         body: "payload",
@@ -133,7 +138,7 @@ it.live("a trusted proxy's last X-Forwarded-For hop becomes the peer address", (
     const { url } = yield* serve(
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
-        peers.push(req.headers["x-clankerauth-peer"] ?? "");
+        peers.push(req.headers[peerHeader] ?? "");
         expect(req.headers["x-forwarded-for"]).toBeUndefined();
 
         return HttpServerResponse.empty();

@@ -8,5 +8,5 @@ export default defineConfig({
     format: ["esm"],
     dts: false,
   },
-  test: { include: ["tests/**/*.test.ts"], testTimeout: 30000 },
+  test: { include: ["tests/**/*.test.ts"], testTimeout: 30000, restoreMocks: true },
 });

@@ -75,7 +75,7 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
   web app's, which use Foldkit's test harness.
 - **No prose comments**: a reason goes where the code can enforce or reveal it: a type, a test,
   or the commit message. What remains: tool directives with their reason inline; a one-line
-  `// SAFETY:` above a type assertion; `/** */` documentation of types and their members; the
+  `// SAFETY:` above a type assertion; `/** */` documentation of types and schemas and their members; the
   published API's documentation in `packages/sdk/src` and `packages/dev/src`; Foldkit's section
   headers in `apps/web/src`; and one-line `// why:` comments for a reason no type or test can
   carry, such as a provider workaround or a shutdown order. `clankerauth/no-prose-comments`

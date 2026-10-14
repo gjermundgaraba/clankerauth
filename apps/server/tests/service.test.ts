@@ -3,10 +3,17 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { documentPaths } from "@clankerauth/web/document-paths";
 import { InternalServerError } from "@clankerauth/admin-api";
 import { sql as query } from "kysely";
-import { describe, expect, vi } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import { createHash, randomBytes } from "node:crypto";
 import { createLocalJWKSet, jwtVerify } from "jose";
-import { issuerGeneration, testSettings, WebApplication } from "./test-issuer.ts";
+import {
+  advanceDate,
+  cookieJar,
+  issuerGeneration,
+  testSettings,
+  WebApplication,
+} from "./test-issuer.ts";
+import { peerHeader } from "../src/platform/node-http.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 import { Database } from "../src/platform/sqlite.ts";
@@ -16,11 +23,7 @@ import { ResourceCatalog } from "../src/resources/catalog.ts";
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
 
-type JsonPrimitive = string | number | boolean | null;
-
-type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
-
-type TestRequestBody = { readonly [key: string]: JsonValue };
+type TestRequestBody = typeof Schema.JsonObject.Type;
 
 const password = "test-only owner password 8rS!";
 
@@ -32,17 +35,13 @@ const resourceB = "https://reports.internal/api";
 
 const baseURL = "http://localhost:3000";
 
-class CookieJar extends Context.Service<CookieJar, Map<string, string>>()(
+class CookieJar extends Context.Service<CookieJar, ReturnType<typeof cookieJar>>()(
   "service.test/CookieJar",
 ) {}
 
 const generation = () => WebApplication.layer.pipe(Layer.provideMerge(issuerGeneration()));
 
-const browser = () =>
-  Layer.merge(
-    testSettings({ baseURL }),
-    Layer.sync(CookieJar, () => new Map<string, string>()),
-  );
+const browser = () => Layer.merge(testSettings({ baseURL }), Layer.sync(CookieJar, cookieJar));
 
 const onGeneration = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provide(effect, generation());
@@ -67,13 +66,12 @@ const request = (
 
     const headers = new Headers({
       origin: options.origin ?? baseURL,
-      "x-clankerauth-peer": "127.0.0.1",
+      [peerHeader]: "127.0.0.1",
     });
 
     if (options.authorization) headers.set("authorization", options.authorization);
 
-    if (!options.anonymous)
-      headers.set("cookie", [...cookies].map(([k, v]) => `${k}=${v}`).join("; "));
+    if (!options.anonymous) headers.set("cookie", cookies.header());
 
     if (body)
       headers.set(
@@ -101,11 +99,7 @@ const request = (
       ),
     );
 
-    if (!options.anonymous)
-      for (const cookie of response.headers.getSetCookie()) {
-        const pair = cookie.split(";")[0]!;
-        cookies.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
-      }
+    if (!options.anonymous) cookies.keep(response);
 
     return response;
   });
@@ -261,13 +255,6 @@ const signedInIssuer = () =>
 
 const rejection = <A>(evaluate: () => Promise<A>) =>
   Effect.flip(Effect.tryPromise({ try: evaluate, catch: (error) => error }));
-
-const withFakeDate = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => vi.useFakeTimers({ toFake: ["Date"] })),
-    () => effect,
-    () => Effect.sync(() => vi.useRealTimers()),
-  );
 
 describe("first-run setup", () => {
   it.live(
@@ -597,9 +584,9 @@ describe("OAuth boundaries and lifecycle", () => {
         expect(initial - Date.now()).toBeGreaterThan(29 * day);
         expect(initial - Date.now()).toBeLessThanOrEqual(30 * day);
 
-        yield* withFakeDate(
+        yield* Effect.scoped(
           Effect.gen(function* () {
-            vi.setSystemTime(Date.now() + 2 * day);
+            yield* advanceDate(2 * day);
             const redirect = yield* request(unprompted(app.client_id).path);
             expect(redirect.status, yield* text(redirect)).toBe(302);
             expect(redirect.headers.getSetCookie().join(";")).toContain("session_token");
@@ -963,9 +950,9 @@ describe("OAuth boundaries and lifecycle", () => {
         const keys = createLocalJWKSet(yield* json(yield* request("/api/auth/jwks")));
         yield* Effect.promise(() => jwtVerify(next.access_token, keys, { audience: resourceA }));
 
-        yield* withFakeDate(
+        yield* Effect.scoped(
           Effect.gen(function* () {
-            vi.setSystemTime(Date.now() + (refreshTokenReuseSeconds + 1) * 1000);
+            yield* advanceDate((refreshTokenReuseSeconds + 1) * 1000);
             expect((yield* refresh(rotated.refresh_token, resourceA)).status).toBe(400);
             expect((yield* refresh(next.refresh_token, resourceA)).status).toBe(400);
           }),

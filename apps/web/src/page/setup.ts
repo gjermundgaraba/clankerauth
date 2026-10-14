@@ -1,5 +1,6 @@
-import { MAXIMUM_PASSWORD_LENGTH, MINIMUM_PASSWORD_LENGTH } from "@clankerauth/admin-api";
-import { Boolean, Effect, Match, Option, Schema } from "effect";
+import { passwordRule } from "@clankerauth/admin-api";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
@@ -26,7 +27,7 @@ const SetupField = Schema.Literals(["Email", "Password", "Confirmation"]);
 type SetupField = typeof SetupField.Type;
 
 export const Problem = defineTaggedUnion({
-  Invalid: { field: SetupField },
+  Invalid: { field: SetupField, sentence: Schema.String },
   Refused: { reason: Schema.String },
 });
 
@@ -58,6 +59,7 @@ export const Message = defineMessageUnion({
   ToggledConfirmationShown: {},
   SubmittedSetup: {},
   SucceededSetupOwner: { outcome: Outcome },
+  RejectedSetupInput: { field: SetupField, sentence: Schema.String },
   FailedSetupOwner: { reason: Schema.String },
   CompletedFocus: {},
 });
@@ -87,17 +89,38 @@ export const init = (): Model => ({
 
 // COMMAND
 
+const INPUT_FIELDS = new Map<PropertyKey, SetupField>([
+  ["email", "Email"],
+  ["password", "Password"],
+]);
+
+const rejectedFieldOf = (error: Action.InvalidInput) =>
+  Array.findFirst(error.issues, ({ path, message }) =>
+    Option.map(
+      Option.flatMap(Array.head(path), (key) => Option.fromNullishOr(INPUT_FIELDS.get(key))),
+      (field) => Message.RejectedSetupInput({ field, sentence: message }),
+    ),
+  );
+
 export const SetupOwner = Command.define("SetupOwner", {
   args: { email: Schema.String, password: Schema.String },
-  messages: [Message.SucceededSetupOwner, Message.FailedSetupOwner],
+  messages: [Message.SucceededSetupOwner, Message.RejectedSetupInput, Message.FailedSetupOwner],
   execute: ({ email, password }) =>
     issuer.setupOwner({ email, password }).pipe(
-      Effect.map((): Outcome => "Created"),
-      Effect.catchTag("OwnerExists", () => Effect.succeed<Outcome>("AlreadyOwned")),
+      Effect.as(Message.SucceededSetupOwner({ outcome: "Created" })),
+      Effect.catchTag("OwnerExists", () =>
+        Effect.succeed(Message.SucceededSetupOwner({ outcome: "AlreadyOwned" })),
+      ),
+      Effect.catchTag("InvalidInput", (error) =>
+        Option.match(rejectedFieldOf(error), {
+          onNone: () => Effect.fail(error),
+          onSome: Effect.succeed,
+        }),
+      ),
       toOwnerSentence,
       Effect.match({
         onFailure: (reason) => Message.FailedSetupOwner({ reason }),
-        onSuccess: (outcome) => Message.SucceededSetupOwner({ outcome }),
+        onSuccess: (message) => message,
       }),
     ),
 });
@@ -110,41 +133,26 @@ const FIELD_IDS: Readonly<Record<SetupField, string>> = {
   Confirmation: "setup-confirmation",
 };
 
-const invalidFieldOf = (model: Model): Option.Option<SetupField> => {
-  if (model.email.trim() === "") {
-    return Option.some("Email");
-  }
-
-  if (
-    model.password.length < MINIMUM_PASSWORD_LENGTH ||
-    model.password.length > MAXIMUM_PASSWORD_LENGTH
-  ) {
-    return Option.some("Password");
-  }
-
-  if (model.password !== model.confirmation) {
-    return Option.some("Confirmation");
-  }
-
-  return Option.none();
-};
+const invalid = (model: Model, field: SetupField, sentence: string) => ({
+  model: modifyFields(model, {
+    isCreating: () => false,
+    maybeProblem: () => Option.some(Problem.Invalid({ field, sentence })),
+  }),
+  commands: [Focus.Focus({ id: FIELD_IDS[field] })],
+});
 
 const submitted = (model: Model): Update.Return<Model, Message> =>
-  Option.match(invalidFieldOf(model), {
-    onNone: () => ({
-      model: modifyFields(model, {
-        isCreating: () => true,
-        isPasswordShown: () => false,
-        isConfirmationShown: () => false,
-        maybeProblem: () => Option.none(),
-      }),
-      commands: [SetupOwner({ email: model.email.trim(), password: model.password })],
-    }),
-    onSome: (field) => ({
-      model: modifyFields(model, { maybeProblem: () => Option.some(Problem.Invalid({ field })) }),
-      commands: [Focus.Focus({ id: FIELD_IDS[field] })],
-    }),
-  });
+  model.password === model.confirmation
+    ? {
+        model: modifyFields(model, {
+          isCreating: () => true,
+          isPasswordShown: () => false,
+          isConfirmationShown: () => false,
+          maybeProblem: () => Option.none(),
+        }),
+        commands: [SetupOwner({ email: model.email.trim(), password: model.password })],
+      }
+    : invalid(model, "Confirmation", "Passwords do not match.");
 
 export const update = (model: Model, message: Message) =>
   Message.match<Update.ReturnWithOutMessage<Model, Message, OutMessage>>(message, {
@@ -169,6 +177,7 @@ export const update = (model: Model, message: Message) =>
         Match.exhaustive,
       ),
     }),
+    RejectedSetupInput: ({ field, sentence }) => invalid(model, field, sentence),
     FailedSetupOwner: ({ reason }) => ({
       model: modifyFields(model, {
         isCreating: () => false,
@@ -179,12 +188,6 @@ export const update = (model: Model, message: Message) =>
   });
 
 // VIEW
-
-const INVALID_SENTENCES: Readonly<Record<SetupField, string>> = {
-  Email: "Enter the owner's email address.",
-  Password: `Use a password between ${MINIMUM_PASSWORD_LENGTH} and ${MAXIMUM_PASSWORD_LENGTH} characters.`,
-  Confirmation: "Passwords do not match.",
-};
 
 const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
   Option.match(model.maybeProblem, {
@@ -202,11 +205,18 @@ const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html>
   });
 
 const invalidSentenceOf = (model: Model, field: SetupField): string | undefined =>
-  Option.exists(model.maybeProblem, (problem) =>
-    Problem.matchOrElse(problem, { Invalid: (invalid) => invalid.field === field }, () => false),
-  )
-    ? INVALID_SENTENCES[field]
-    : undefined;
+  Option.getOrUndefined(
+    Option.flatMap(model.maybeProblem, (problem) =>
+      Problem.matchOrElse(
+        problem,
+        {
+          Invalid: (invalid) =>
+            invalid.field === field ? Option.some(invalid.sentence) : Option.none(),
+        },
+        () => Option.none(),
+      ),
+    ),
+  );
 
 export const view = defineView<Model, Message>((model, h): Html =>
   wallCardView(
@@ -266,7 +276,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   onToggleShown: Message.ToggledPasswordShown(),
                   isRequired: true,
                   error: invalidSentenceOf(model, "Password"),
-                  help: `Use ${MINIMUM_PASSWORD_LENGTH}–${MAXIMUM_PASSWORD_LENGTH} characters. Save your password somewhere safe.`,
+                  help: `${passwordRule}. Save your password somewhere safe.`,
                   autocomplete: "new-password",
                 },
                 h,

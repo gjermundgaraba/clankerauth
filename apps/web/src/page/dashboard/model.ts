@@ -9,6 +9,7 @@ import { type Listing, listingQuery } from "./listing.ts";
 
 // MODEL
 
+/** A credential shown once, with the button that copies it. */
 export const PendingCredential = Schema.Struct({
   credential: Credential,
   copy: CopyButton.Model,
@@ -16,6 +17,7 @@ export const PendingCredential = Schema.Struct({
 
 export type PendingCredential = typeof PendingCredential.Type;
 
+/** Where a change was asked for, which is where its refusal is shown. */
 export const Place = Schema.Literals(["Page", "Editor", "Confirm"]);
 
 export type Place = typeof Place.Type;
@@ -28,6 +30,7 @@ export const Activity = defineTaggedUnion({
 
 export type Activity = typeof Activity.Type;
 
+/** What went wrong with a change or the sign-out, shown where it was asked for. */
 export const Refusal = Schema.Struct({ place: Place, title: Schema.String, reason: Schema.String });
 
 export type Refusal = typeof Refusal.Type;
@@ -37,8 +40,10 @@ export const Model = Schema.Struct({
   credentials: Schema.Array(PendingCredential),
   issuerCopy: CopyButton.Model,
   editor: Dialog.Model,
+  /** What the editor shows. Kept after it closes, so it closes on what it showed. */
   maybeForm: Schema.Option(Form.Model),
   confirm: ConfirmDialog.Model,
+  /** The change the confirmation asks about, kept after it closes the same way. */
   maybePending: Schema.Option(Change),
   activity: Activity,
   maybeRefusal: Schema.Option(Refusal),

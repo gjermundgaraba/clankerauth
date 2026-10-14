@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect, Option, Schema } from "effect";
 
+/** The kept sign-ins cannot be read or written. */
 export class CredentialsError extends Schema.TaggedError<CredentialsError>()("CredentialsError", {
   message: Schema.String,
 }) {}
@@ -11,17 +12,30 @@ export class CredentialsError extends Schema.TaggedError<CredentialsError>()("Cr
 const failed = (what: string) => (error: { readonly message: string }) =>
   new CredentialsError({ message: `${what} ${credentialsPath()}: ${error.message}` });
 
+/**
+ * The owner's authorization for one resource: administration or an application's. The
+ * access token lasts fifteen minutes and the refresh token rotates on every use, so the
+ * file is rewritten whenever a command refreshes.
+ */
 export const SignIn = Schema.Struct({
+  /** The token audience: a resource identifier, such as `https://notes.home.example/`. */
   resource: Schema.String,
   scope: Schema.String,
   accessToken: Schema.String,
   refreshToken: Schema.String,
+  /** When the access token expires, as an ISO instant. */
   expiresAt: Schema.String,
 });
 
 export type SignIn = typeof SignIn.Type;
 
+/**
+ * The issuer signed in to, the client this CLI registered there, and one sign-in per
+ * resource. `server` is the part of the issuer's RFC 8414 metadata a refresh and a
+ * revocation need, under its RFC names.
+ */
 export const Credentials = Schema.Struct({
+  /** The issuer's origin, `CLANKERAUTH_BASE_URL`: where `/api/owner/<action>` is served. */
   url: Schema.String,
   server: Schema.Struct({
     issuer: Schema.String,

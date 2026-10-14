@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { webMcpRequest } from "./mcp.ts";
 import { expect } from "vite-plus/test";
-import { testWebApplication, WebApplication } from "./test-issuer.ts";
+import { signIn, testWebApplication, WebApplication } from "./test-issuer.ts";
 import { mcpOAuthGrant, type TestHandler } from "./mcp-oauth-helper.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
 
@@ -141,21 +141,7 @@ it.live(
       const credentials = { email: "owner@example.internal", password: "test-only password123" };
       yield* (yield* OwnerAccount).create(credentials);
 
-      const login = yield* send(
-        handle,
-        new Request(`${baseURL}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { origin: baseURL, "content-type": "application/json" },
-          body: JSON.stringify(credentials),
-        }),
-      );
-
-      expect(login.status).toBe(200);
-
-      const cookie = login.headers
-        .getSetCookie()
-        .map((part) => part.split(";")[0])
-        .join("; ");
+      const cookie = yield* signIn(handle, baseURL, credentials);
 
       const { tokens } = yield* Effect.promise(() => mcpOAuthGrant(handle, baseURL, cookie));
 

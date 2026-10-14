@@ -174,7 +174,17 @@ void verification;
 
   const keyList = await load(`${name}/key-list`);
 
-  for (const exported of ["seal", "open", "digest", "type", "lifetime", "Entry", "Grant", "Claims"])
+  for (const exported of [
+    "seal",
+    "open",
+    "digest",
+    "type",
+    "lifetime",
+    "keyPrefix",
+    "Entry",
+    "Grant",
+    "Claims",
+  ])
     assert(exported in keyList, `Missing key-list export: ${exported}`);
 
   const { startFakeIssuer } = await load(`${name}/testing`);
@@ -222,7 +232,7 @@ import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import type { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
-import { CurrentPrincipal, Principal, Whoami, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
+import { CurrentPrincipal, Principal, Whoami, returnToParameter, signOutPath, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
 import type { Caller } from "@gjermundgaraba/clankerauth-sdk/session";
 import { ProviderUnavailable } from "@gjermundgaraba/clankerauth-sdk/errors";
 const Notes = Resource.make(
@@ -242,6 +252,7 @@ const layer = Notes.layer({
 });
 const subject = Effect.map(CurrentPrincipal, principal => principal.subject);
 const page: (principal: Principal) => string = principal => signOutUrl(principal.issuer, "/");
+const protocol: readonly [string, string] = [signOutPath, returnToParameter];
 void layer;
 void Notes.provider;
 void Notes.session;
@@ -280,6 +291,7 @@ void local;
 void subject;
 void Whoami.name;
 void page;
+void protocol;
 `,
   );
   await typeCheck("integration.ts");
