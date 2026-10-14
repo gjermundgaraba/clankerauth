@@ -4,6 +4,10 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
+/**
+ * This issuer's own fault: a failed query, an unreadable row, an unexpected provider failure.
+ * The schema defines the public response; the diagnostic cause reaches logs, never a caller.
+ */
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   { message: Schema.String },
@@ -19,6 +23,7 @@ export class InternalServerError extends Schema.TaggedError<InternalServerError>
   };
 }
 
+/** The issuer could not decide the request now, such as when its session store is unreachable. */
 export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
   "ServiceUnavailable",
   { message: Schema.String },
@@ -52,6 +57,10 @@ export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
     new ApiKeyNotFound({ keyId, message: `No API key ${keyId} exists` });
 }
 
+/**
+ * The client registered itself, through DCR or CIMD: the owner can revoke, block or delete it,
+ * but its access and registration are its own, and consent decides what it gets.
+ */
 export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
   "ClientIsAutomatic",
   { clientId: Schema.String, message: Schema.String },
@@ -64,6 +73,7 @@ export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
     });
 }
 
+/** First-run setup has already created the owner. */
 export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
   "OwnerExists",
   { message: Schema.String },
@@ -72,31 +82,19 @@ export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
   static readonly of = () => new OwnerExists({ message: "Setup already completed" });
 }
 
+/** The provider refused the request's input on a rule of its own, which `message` states. */
 export class ProviderRefused extends Schema.TaggedError<ProviderRefused>()(
   "ProviderRefused",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
 
+/** A request body the issuer could not read, on a route that is not an action. */
 export class UnreadableRequest extends Schema.TaggedError<UnreadableRequest>()(
   "UnreadableRequest",
   { message: Schema.String },
   { httpApiStatus: 400 },
 ) {}
-
-export const errors = [
-  InternalServerError,
-  ServiceUnavailable,
-  ClientNotFound,
-  ResourceNotFound,
-  ApiKeyNotFound,
-  ClientIsAutomatic,
-  OwnerExists,
-  ProviderRefused,
-  UnreadableRequest,
-] as const;
-
-export type IssuerError = (typeof errors)[number]["Type"];
 
 const undecided = [ServiceUnavailable, InternalServerError] as const;
 
@@ -134,7 +132,7 @@ export const MINIMUM_PASSWORD_LENGTH = 8;
 
 export const MAXIMUM_PASSWORD_LENGTH = 128;
 
-const passwordRule = `Passwords have ${MINIMUM_PASSWORD_LENGTH} to ${MAXIMUM_PASSWORD_LENGTH} characters`;
+export const passwordRule = `Passwords have ${MINIMUM_PASSWORD_LENGTH} to ${MAXIMUM_PASSWORD_LENGTH} characters`;
 
 export const SetupInput = Schema.Struct({
   email: Schema.String.check(Schema.isPattern(/\S/u, { message: "Setup requires an email" })),
@@ -152,10 +150,12 @@ export const ClientAuthMethod = Schema.Literals([
 
 export const ApplicationType = Schema.Literals(["web", "native"]);
 
+/** The resources a managed client may obtain, each named once. */
 const ResourceSelection = Schema.Array(Schema.String).check(
   Schema.isUnique({ message: "Choose unique Resources" }),
 );
 
+/** The provider's registration fields, passed through unchanged, and the client's `resources`. */
 export const ClientInput = Schema.Struct({
   client_name: Schema.String,
   redirect_uris: Schema.Array(Schema.String),
@@ -174,6 +174,7 @@ export const ClientUpdateInput = Schema.Struct({
 
 export const ClientId = Schema.Struct({ client_id: Schema.String });
 
+/** Without a resource, every authorization the client holds. */
 export const ClientRevokeInput = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.optional(Schema.String),
@@ -240,6 +241,11 @@ export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(Cli
 
 export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
+/**
+ * Permissions as the owner grants them: at least one resource, each with scopes named once.
+ * A stored key's are `KeyPermissions`, which a key whose permissions no longer decode is
+ * listed with, empty.
+ */
 const KeyGrants = Schema.Record(
   Schema.String,
   Schema.Array(Schema.String).check(
@@ -250,6 +256,7 @@ const KeyGrants = Schema.Record(
   ),
 ).check(Schema.isMinProperties(1, { message: "Select at least one Resource and scope" }));
 
+/** A key's name as the owner writes it; the issuer stores it trimmed. */
 const KeyName = Schema.String.check(
   Schema.isMaxLength(100, { message: "Key names require 1–100 characters" }),
   Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" }),
@@ -258,6 +265,12 @@ const KeyName = Schema.String.check(
 // why: an input without an offset reads as UTC, so no instant depends on the host's time zone.
 const Timestamp = Schema.DateTimeUtcFromString;
 
+/**
+ * What a client holds for one resource: a consent, a live refresh token, or both. A
+ * managed client skips consent, so `approvedAt` is null for it and it shows only while it
+ * holds a refresh token. `scopes` are the consent's, else the newest token's.
+ * `refreshedAt` is when the newest live refresh token was issued, at sign-in or on refresh.
+ */
 export const Connection = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.String,
@@ -455,6 +468,20 @@ export const Administration = [
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
 ] as const;
+
+type ActionError = [...typeof IssuerActions, ...typeof Administration][number]["error"][number];
+
+export const errors = [
+  ...new Set([
+    ...[...IssuerActions, ...Administration].flatMap(
+      (action): ReadonlyArray<ActionError> => action.error,
+    ),
+    ...undecided,
+    UnreadableRequest,
+  ]),
+];
+
+export type IssuerError = (typeof errors)[number]["Type"];
 
 export const binding = (authentication: typeof OwnerSession) =>
   ActionHttp.make([...Administration, ...IssuerActions], { authentication });

@@ -10,6 +10,7 @@ import {
 import { APIError } from "better-auth/api";
 import { HttpServerResponse } from "effect/http";
 import { provider, refusal, respond } from "../src/issuer/errors.ts";
+import { peerHeader } from "../src/platform/node-http.ts";
 import { testWebApplication, WebApplication } from "./test-issuer.ts";
 
 it("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
@@ -40,7 +41,7 @@ it.live("the provider bridge answers an unreadable body as a 400", () =>
       headers: {
         origin: baseURL,
         "content-type": "application/x-www-form-urlencoded",
-        "x-clankerauth-peer": "127.0.0.1",
+        [peerHeader]: "127.0.0.1",
       },
       body: new ReadableStream({
         start: (controller) => controller.error(new Error("reset by peer")),

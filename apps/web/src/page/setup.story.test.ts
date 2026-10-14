@@ -22,7 +22,35 @@ describe("setup update", () => {
       Command.resolve(Focus.Focus({ id: "setup-confirmation" }), Message.CompletedFocus()),
       model((next) => {
         expect(next.isCreating).toBe(false);
-        expect(next.maybeProblem).toEqual(Option.some(Problem.Invalid({ field: "Confirmation" })));
+        expect(next.maybeProblem).toEqual(
+          Option.some(
+            Problem.Invalid({ field: "Confirmation", sentence: "Passwords do not match." }),
+          ),
+        );
+      }),
+    );
+  });
+
+  test("a field the issuer rejects is named with the issuer's sentence and focused", () => {
+    story(
+      update,
+      ...filledIn,
+      message(Message.SubmittedSetup()),
+      Command.resolve(
+        SetupOwner,
+        Message.RejectedSetupInput({
+          field: "Password",
+          sentence: "Passwords have 8 to 128 characters",
+        }),
+      ),
+      Command.resolve(Focus.Focus({ id: "setup-password" }), Message.CompletedFocus()),
+      model((next) => {
+        expect(next.isCreating).toBe(false);
+        expect(next.maybeProblem).toEqual(
+          Option.some(
+            Problem.Invalid({ field: "Password", sentence: "Passwords have 8 to 128 characters" }),
+          ),
+        );
       }),
     );
   });

@@ -24,6 +24,7 @@ import { codesView } from "./codes.ts";
 
 // MODEL
 
+/** What a signed authorization request asks, as the provider wrote it into this page's query. */
 const ConsentRequest = Schema.Struct({
   clientId: Schema.String,
   scopes: Schema.Array(Schema.String),

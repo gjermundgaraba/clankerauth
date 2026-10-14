@@ -22,14 +22,14 @@ vp add @gjermundgaraba/effect-actions@^0.16.0
 
 ## Entry points
 
-| Import                             | Needs effect-actions | Browser safe | What it holds                                                                         |
-| ---------------------------------- | -------------------- | ------------ | ------------------------------------------------------------------------------------- |
-| `…/clankerauth-sdk`                | no                   | no           | `Verifier`, `RequestPolicy`                                                           |
-| `…/clankerauth-sdk/errors`         | no                   | **yes**      | the verifier's errors; `ProviderUnavailable` is the one a descriptor declares         |
-| `…/clankerauth-sdk/session`        | yes                  | **yes**      | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl` |
-| `…/clankerauth-sdk/effect-actions` | yes                  | no           | `Resource`                                                                            |
-| `…/clankerauth-sdk/key-list`       | no                   | no           | the key list format, for issuers and fakes                                            |
-| `…/clankerauth-sdk/testing`        | no                   | no           | `startFakeIssuer`, for tests (Node only)                                              |
+| Import                             | Needs effect-actions | Browser safe | What it holds                                                                                                             |
+| ---------------------------------- | -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `…/clankerauth-sdk`                | no                   | no           | `Verifier`, `RequestPolicy`                                                                                               |
+| `…/clankerauth-sdk/errors`         | no                   | **yes**      | the verifier's errors; `ProviderUnavailable` is the one a descriptor declares                                             |
+| `…/clankerauth-sdk/session`        | yes                  | **yes**      | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl`, `signOutPath`, `returnToParameter` |
+| `…/clankerauth-sdk/effect-actions` | yes                  | no           | `Resource`                                                                                                                |
+| `…/clankerauth-sdk/key-list`       | no                   | no           | the key list format and `keyPrefix`, for issuers and fakes                                                                |
+| `…/clankerauth-sdk/testing`        | no                   | no           | `startFakeIssuer`, for tests (Node only)                                                                                  |
 
 The package is free of side effects, so a bundler drops what a page does not use. Errors are **not** re-exported from the root: a shared contract imports them from `/errors`, and nothing about that import pulls token verification into a browser bundle.
 

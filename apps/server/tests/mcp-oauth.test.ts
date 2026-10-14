@@ -9,7 +9,9 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { nodeHandler } from "../src/http/application.ts";
 import { listen } from "../src/platform/node-http.ts";
 import {
+  advanceDate,
   issuerGeneration,
+  signIn,
   testSettings,
   testWebApplication,
   WebApplication,
@@ -27,11 +29,7 @@ import { Resources } from "../src/resources/resources.ts";
 
 const baseURL = "http://localhost:3000";
 
-type JsonPrimitive = string | number | boolean | null;
-
-type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
-
-type TestRequestBody = { readonly [key: string]: JsonValue };
+type TestRequestBody = typeof Schema.JsonObject.Type;
 
 type ClientActionPayload = {
   client_id: string;
@@ -62,25 +60,10 @@ const signedIn = Layer.effect(
 
     const handle = yield* WebApplication;
 
-    const login = yield* Effect.promise(() =>
-      handle(
-        new Request(`${baseURL}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { origin: baseURL, "content-type": "application/json" },
-          body: JSON.stringify({
-            email: "owner@example.internal",
-            password: "test-only password123",
-          }),
-        }),
-      ),
-    );
-
-    expect(login.status).toBe(200);
-
-    const cookie = login.headers
-      .getSetCookie()
-      .map((part) => part.split(";")[0])
-      .join("; ");
+    const cookie = yield* signIn(handle, baseURL, {
+      email: "owner@example.internal",
+      password: "test-only password123",
+    });
 
     return { handle, cookie };
   }),
@@ -358,11 +341,12 @@ it.live(
         }),
       ).toString("base64url");
       expect((yield* mcp(parts.join("."))).status).toBe(401);
-      yield* Effect.gen(function* () {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(Date.now() + (Number(valid.tokens.expires_in) + 60) * 1000);
-        expect((yield* mcp(valid.tokens.access_token)).status).toBe(401);
-      }).pipe(Effect.ensuring(Effect.sync(() => vi.useRealTimers())));
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* advanceDate((Number(valid.tokens.expires_in) + 60) * 1000);
+          expect((yield* mcp(valid.tokens.access_token)).status).toBe(401);
+        }),
+      );
     }).pipe(Effect.provide(dashboardIssuer())),
 );
 

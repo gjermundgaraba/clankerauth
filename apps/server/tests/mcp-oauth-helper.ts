@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { expect } from "vite-plus/test";
+import { peerHeader } from "../src/platform/node-http.ts";
 
 export const administrationResource = (baseURL: string) => ({
   identifier: `${baseURL}/`,
@@ -30,7 +31,7 @@ export async function mcpOAuthCode(
     const registration = await handle(
       new Request(`${baseURL}/api/auth/oauth2/register`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-clankerauth-peer": "127.0.0.1" },
+        headers: { "content-type": "application/json", [peerHeader]: "127.0.0.1" },
         body: JSON.stringify({
           client_name: "MCP OAuth integration test",
           redirect_uris: [callback],

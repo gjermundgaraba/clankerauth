@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { it } from "@effect/vitest";
 import { nodeHandler } from "../src/http/application.ts";
 import { forwardClientId } from "../src/forward-auth/forward-auth.ts";
-import { testIssuer } from "./test-issuer.ts";
+import { cookieJar, testIssuer } from "./test-issuer.ts";
 import { listen } from "../src/platform/node-http.ts";
 import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -30,8 +30,7 @@ const startServer = Effect.gen(function* () {
   );
 
   yield* listener.serve(yield* nodeHandler().pipe(Effect.provideContext(services)));
-  const cookies = new Map<string, string>();
-  const cookieHeader = () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+  const cookies = cookieJar();
 
   const call = (
     path: string,
@@ -39,7 +38,7 @@ const startServer = Effect.gen(function* () {
     headers: Record<string, string> = {},
   ) =>
     Effect.gen(function* () {
-      const request = new Headers({ origin: url, cookie: cookieHeader(), ...headers });
+      const request = new Headers({ origin: url, cookie: cookies.header(), ...headers });
 
       if (body) request.set("content-type", "application/json");
 
@@ -52,10 +51,7 @@ const startServer = Effect.gen(function* () {
         }),
       );
 
-      for (const cookie of response.headers.getSetCookie()) {
-        const pair = cookie.split(";")[0]!;
-        cookies.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
-      }
+      cookies.keep(response);
 
       return response;
     });
