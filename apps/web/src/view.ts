@@ -10,7 +10,7 @@ import {
   Tips,
 } from "@gjermundgaraba-designs/pixel-paper";
 
-import * as Dashboard from "./dashboard/index.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import { Message } from "./message.ts";
 import { type Model, Page, routeOf } from "./model.ts";
 import * as Consent from "./page/consent.ts";

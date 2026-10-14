@@ -20,8 +20,8 @@ import { Dialog as UiDialog } from "@foldkit/ui";
 import { Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
 import { describe, test } from "vite-plus/test";
 
-import { listed } from "./dashboard/dashboard.fixture.ts";
-import * as Dashboard from "./dashboard/index.ts";
+import { listed } from "./page/dashboard/dashboard.fixture.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import { urlAt } from "./fixture.ts";
 import { CheckAccess, init, update } from "./main.ts";
 import { Message } from "./message.ts";

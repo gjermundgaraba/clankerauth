@@ -5,11 +5,11 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { InternalServerError } from "@clankerauth/admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { nodeHandler } from "../src/app.ts";
-import { createNodeServer } from "../src/node-http.ts";
+import { nodeHandler } from "../src/http/application.ts";
+import { createNodeServer } from "../src/platform/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner } from "../src/auth.ts";
-import { openIssuer, type Issuer } from "./issuer.ts";
+import { createOwner } from "../src/owner/setup.ts";
+import { openIssuer, type Issuer } from "./open-issuer.ts";
 import { administrationResource, mcpOAuthGrant, oauthToken } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";

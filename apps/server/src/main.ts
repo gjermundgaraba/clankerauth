@@ -2,10 +2,10 @@ import { Effect, Layer } from "effect";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { FetchHttpClient, HttpRouter } from "effect/http";
 import { Otlp, OtlpSerialization } from "effect/observability";
-import { application } from "./app.ts";
-import { Auth } from "./auth.ts";
-import { loadSettings } from "./config.ts";
-import { createNodeServer } from "./node-http.ts";
+import { application } from "./http/application.ts";
+import { Auth } from "./issuer/issuer.ts";
+import { loadSettings } from "./issuer/settings.ts";
+import { createNodeServer } from "./platform/node-http.ts";
 
 process.umask(0o077);
 

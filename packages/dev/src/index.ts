@@ -5,14 +5,16 @@ import { fileURLToPath } from "node:url";
 import { Context, Effect, Exit, Fiber, FileSystem, Layer, Redacted, Schema, Scope } from "effect";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Cookies, FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { administration } from "../../../apps/server/src/administration.ts";
-import { nodeHandler } from "../../../apps/server/src/app.ts";
-import { Auth, createOwner } from "../../../apps/server/src/auth.ts";
-import { validateSettings } from "../../../apps/server/src/config.ts";
+import { clientActions } from "../../../apps/server/src/clients/actions.ts";
+import { resourceActions } from "../../../apps/server/src/resources/actions.ts";
+import { nodeHandler } from "../../../apps/server/src/http/application.ts";
+import { Auth } from "../../../apps/server/src/issuer/issuer.ts";
+import { createOwner } from "../../../apps/server/src/owner/setup.ts";
+import { validateSettings } from "../../../apps/server/src/issuer/settings.ts";
 import { CurrentOwner } from "@clankerauth/admin-api";
-import { machineKeys } from "../../../apps/server/src/machine-keys.ts";
-import { providerSession } from "../../../apps/server/src/provider-session.ts";
-import { createNodeServer } from "../../../apps/server/src/node-http.ts";
+import { machineKeys } from "../../../apps/server/src/api-keys/api-keys.ts";
+import { providerSession } from "../../../apps/server/src/owner/provider-session.ts";
+import { createNodeServer } from "../../../apps/server/src/platform/node-http.ts";
 import type { DisposableIssuer, DisposableIssuerOptions, Identity } from "./types.d.ts";
 
 const credentialsFile = "credentials.json";
@@ -220,7 +222,8 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   const owner = { email: identity.email, password: identity.password };
 
   // Seed in-process: the owner's provider session authorizes administration directly.
-  const admin = yield* Effect.provide(administration, issuer);
+  const admin = yield* Effect.provide(clientActions, issuer);
+  const resourceAdmin = yield* Effect.provide(resourceActions, issuer);
   const keys = yield* Effect.provide(machineKeys, issuer);
 
   /**
@@ -258,7 +261,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   yield* asOwner(() =>
     Effect.forEach(options.resources, (resource) =>
       Effect.flatMap(service.resources.get(resource.identifier), (existing) =>
-        existing ? Effect.void : Effect.asVoid(admin.createResource(resource)),
+        existing ? Effect.void : Effect.asVoid(resourceAdmin.createResource(resource)),
       ),
     ),
   );

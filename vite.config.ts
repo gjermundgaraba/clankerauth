@@ -28,7 +28,7 @@ const foldkitOverrides = [
   // The dashboard's fixtures read its listing as the tests do, answering the Query's fetches
   // with the Query's own Messages.
   {
-    files: [`${foldkitSource}/dashboard/dashboard.fixture.ts`],
+    files: [`${foldkitSource}/page/dashboard/dashboard.fixture.ts`],
     rules: levels({ "foldkit/no-child-message-construction-in-root": "off" }),
   },
 ];

@@ -5,9 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { Effect, Exit, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { webMcpRequest } from "./mcp.ts";
-import { nodeHandler } from "../src/app.ts";
-import { openIssuer, type Issuer } from "./issuer.ts";
-import { createNodeServer } from "../src/node-http.ts";
+import { nodeHandler } from "../src/http/application.ts";
+import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { createNodeServer } from "../src/platform/node-http.ts";
 
 let issuer: Issuer;
 

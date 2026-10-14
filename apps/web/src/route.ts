@@ -2,7 +2,7 @@ import { Schema, pipe } from "effect";
 import { Route } from "foldkit";
 import { defineRouteUnion, literal } from "foldkit/route";
 
-// The server serves the dashboard document at exactly these paths (apps/server/src/app.ts).
+// The server serves the dashboard document at exactly these paths (apps/server/src/http/application.ts).
 export const AppRoute = defineRouteUnion({
   Clients: {},
   Resources: {},

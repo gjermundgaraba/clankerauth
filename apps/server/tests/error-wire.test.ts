@@ -4,8 +4,8 @@ import { BadRequest, InternalServerError } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { HttpServerResponse } from "effect/http";
-import { internalError, respond } from "../src/api-errors.ts";
-import { openIssuer } from "./issuer.ts";
+import { internalError, respond } from "../src/issuer/errors.ts";
+import { openIssuer } from "./open-issuer.ts";
 import { webApplication } from "./web-application.ts";
 
 test("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {

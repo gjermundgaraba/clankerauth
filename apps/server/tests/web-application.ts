@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/http";
-import { application } from "../src/app.ts";
-import { Auth } from "../src/auth.ts";
+import { application } from "../src/http/application.ts";
+import { Auth } from "../src/issuer/issuer.ts";
 
 /** Test boundary: simulate the socket peer; production never trusts this header. */
 export function webApplication(service: Auth["Service"], staticRoot?: string) {

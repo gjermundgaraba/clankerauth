@@ -3,7 +3,7 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { Url } from "foldkit/url";
 import { Tips } from "@gjermundgaraba-designs/pixel-paper";
 
-import * as Dashboard from "./dashboard/index.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import * as Consent from "./page/consent.ts";
 import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";

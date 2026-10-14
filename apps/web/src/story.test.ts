@@ -4,8 +4,8 @@ import { Command, given, message, model, story } from "foldkit/story";
 import type { Url } from "foldkit/url";
 import { describe, expect, test } from "vite-plus/test";
 
-import { FIRST_READ, failedReadOf } from "./dashboard/dashboard.fixture.ts";
-import { listingQuery } from "./dashboard/listing.ts";
+import { FIRST_READ, failedReadOf } from "./page/dashboard/dashboard.fixture.ts";
+import { listingQuery } from "./page/dashboard/listing.ts";
 import { urlAt } from "./fixture.ts";
 import {
   CheckAccess,
