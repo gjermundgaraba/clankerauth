@@ -24,7 +24,8 @@ const nothingShown = Effect.as(Option.none<Credential>());
 
 /** Saves a change at the issuer, with the credential it shows once, if any. */
 const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, string> =>
-  toOwnerSentence(
+  // Each change calls a different action, which declares its own failures.
+  toOwnerSentence<Option.Option<Credential>, unknown>(
     Change.match(change, {
       CreateResource: ({ identifier, name, scopes }) =>
         issuer.createResource({ identifier, name, scopes }).pipe(nothingShown),

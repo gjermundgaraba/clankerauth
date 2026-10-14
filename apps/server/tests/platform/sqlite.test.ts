@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { NotFound } from "@clankerauth/admin-api";
+import { ClientNotFound } from "@clankerauth/admin-api";
 import { Cause, Effect, Exit, Result } from "effect";
 import { sql as query } from "kysely";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -114,7 +114,7 @@ test("local transactions preserve domain failures and roll back failed commits",
     await Effect.runPromise(
       database.sql`CREATE TABLE child (parentId INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED)`,
     );
-    const error = new NotFound({ error: "Client not found" });
+    const error = ClientNotFound.of("missing");
     await expect(
       Effect.runPromise(
         transaction(database.kysely, (sql) =>

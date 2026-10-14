@@ -1,21 +1,21 @@
 import { expect, test } from "vite-plus/test";
 import { Effect, Schema } from "effect";
-import { BadRequest, InternalServerError } from "@clankerauth/admin-api";
+import { InternalServerError, ProviderRefused, UnreadableRequest } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { HttpServerResponse } from "effect/http";
-import { internalError, respond } from "../src/issuer/errors.ts";
+import { provider, respond } from "../src/issuer/errors.ts";
 import { openIssuer } from "./open-issuer.ts";
 import { webApplication } from "./web-application.ts";
 
 test("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
   const cause = new Error("SQLITE_CORRUPT: database disk image is malformed");
-  const failure = internalError(cause);
+  const failure = InternalServerError.of(cause);
 
   expect(failure.cause).toBe(cause);
   expect(Schema.encodeSync(InternalServerError)(failure)).toEqual(
     Schema.encodeSync(InternalServerError)(
-      new InternalServerError({ error: "Request could not be completed" }),
+      new InternalServerError({ message: "Request could not be completed" }),
     ),
   );
 });
@@ -53,7 +53,9 @@ test("the provider bridge answers an unreadable body as a 400", async () => {
 
     expect(truncated.status).toBe(400);
     expect(await truncated.json()).toEqual(
-      Schema.encodeSync(BadRequest)(new BadRequest({ error: "Request body could not be read" })),
+      Schema.encodeSync(UnreadableRequest)(
+        new UnreadableRequest({ message: "Request body could not be read" }),
+      ),
     );
   } finally {
     await handle.dispose();
@@ -64,7 +66,9 @@ test("the provider bridge answers an unreadable body as a 400", async () => {
 test("a route's own failures keep their bodies, and a provider refusal is the built-in 403", async () => {
   // What `/forward-auth*` and `/healthz` answer a failure with: `respond`.
   const answered = async (cause: unknown) => {
-    const response = HttpServerResponse.toWeb(await Effect.runPromise(respond(cause)));
+    // A provider call fails as `provider` turns what the provider threw.
+    const failure = await Effect.runPromise(Effect.flip(provider(() => Promise.reject(cause))));
+    const response = HttpServerResponse.toWeb(await Effect.runPromise(respond(failure)));
 
     return { status: response.status, body: await response.json() };
   };
@@ -73,12 +77,12 @@ test("a route's own failures keep their bodies, and a provider refusal is the bu
   expect(await answered(new Error("SQLITE_BUSY"))).toEqual({
     status: 500,
     body: Schema.encodeSync(InternalServerError)(
-      new InternalServerError({ error: "Request could not be completed" }),
+      new InternalServerError({ message: "Request could not be completed" }),
     ),
   });
   expect(await answered(new APIError("BAD_REQUEST", { message: "Bad target" }))).toEqual({
     status: 400,
-    body: Schema.encodeSync(BadRequest)(new BadRequest({ error: "Bad target" })),
+    body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
   });
 
   // A provider 401 or 403 is effect-actions' `Forbidden`, which carries `message`.

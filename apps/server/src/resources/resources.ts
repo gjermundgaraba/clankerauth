@@ -3,16 +3,18 @@ import { Clock, Context, Effect, Layer, Schema, Scope, Semaphore } from "effect"
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   administrationIdentifier,
-  BadRequest,
+  ClientIsAutomatic,
+  ClientNotFound,
   CurrentOwner,
-  NotFound,
+  ResourceNotFound,
   type ClientAccess,
   type ClientAccessInput,
-  type OwnerError,
+  type InternalServerError,
+  type ProviderRefused,
   type ResourceId,
 } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
-import { invalidInput, provider } from "../issuer/errors.ts";
+import { invalidInput, missing, provider, refused, refusedOrMissing } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { clearAuthorization } from "../authorization/authorization.ts";
@@ -73,7 +75,7 @@ const validateInput = Effect.fn("Resources.validateInput")(function* (input: Res
   return { identifier, name, scopes } satisfies ResourceValue;
 });
 
-type Refusal = OwnerError | Action.InvalidInput;
+type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
 // Provider APIs own their writes and transaction boundaries. Do not hold a separate
 // transaction while calling them on the shared connection. Mutations take one permit,
@@ -91,16 +93,23 @@ export class Resources extends Context.Service<
     ) => Effect.Effect<ResourceValue, Refusal, CurrentOwner | Scope.Scope>;
     readonly update: (
       input: ResourceValue,
-    ) => Effect.Effect<ResourceValue, Refusal, CurrentOwner | Scope.Scope>;
+    ) => Effect.Effect<ResourceValue, Refusal | ResourceNotFound, CurrentOwner | Scope.Scope>;
     readonly delete: (
       input: typeof ResourceId.Type,
-    ) => Effect.Effect<{ deleted: boolean }, Refusal, CurrentOwner | Scope.Scope>;
+    ) => Effect.Effect<
+      { deleted: boolean },
+      InternalServerError | Action.InvalidInput | ResourceNotFound,
+      CurrentOwner | Scope.Scope
+    >;
     /** Links a managed client to exactly these resources, clearing what removed links allowed. */
     readonly setAccess: (
       input: typeof ClientAccessInput.Type,
-    ) => Effect.Effect<ReadonlyArray<typeof ClientAccess.Type>, Refusal>;
+    ) => Effect.Effect<
+      ReadonlyArray<typeof ClientAccess.Type>,
+      InternalServerError | Action.InvalidInput | ClientNotFound | ClientIsAutomatic
+    >;
     /** Publishes the catalog to the provider and rebuilds every client's copy of it. */
-    readonly synchronize: () => Effect.Effect<void, OwnerError>;
+    readonly synchronize: () => Effect.Effect<void, InternalServerError>;
   }
 >()("clankerauth/Resources") {
   /** Publishes the catalog once the provider has seeded the administration resource. */
@@ -177,15 +186,17 @@ export class Resources extends Context.Service<
             yield* transaction((query) =>
               clearAuthorization(query, { resource: resource.identifier }),
             );
-          yield* provider(() =>
-            auth.api.adminCreateOAuthResource({
-              headers,
-              body: {
-                identifier: resource.identifier,
-                name: resource.name,
-                allowedScopes: [...protocolScopes, ...resource.scopes],
-              },
-            }),
+          yield* refused(
+            provider(() =>
+              auth.api.adminCreateOAuthResource({
+                headers,
+                body: {
+                  identifier: resource.identifier,
+                  name: resource.name,
+                  allowedScopes: [...protocolScopes, ...resource.scopes],
+                },
+              }),
+            ),
           );
           yield* synchronize();
 
@@ -196,15 +207,17 @@ export class Resources extends Context.Service<
           yield* reserved(resource.identifier);
           const headers = yield* providerHeaders;
 
-          yield* provider(() =>
-            auth.api.adminUpdateOAuthResource({
-              headers,
-              params: resourceParams(resource.identifier),
-              body: {
-                name: resource.name,
-                allowedScopes: [...protocolScopes, ...resource.scopes],
-              },
-            }),
+          yield* refusedOrMissing(() => ResourceNotFound.of(resource.identifier))(
+            provider(() =>
+              auth.api.adminUpdateOAuthResource({
+                headers,
+                params: resourceParams(resource.identifier),
+                body: {
+                  name: resource.name,
+                  allowedScopes: [...protocolScopes, ...resource.scopes],
+                },
+              }),
+            ),
           );
           yield* synchronize();
 
@@ -214,8 +227,10 @@ export class Resources extends Context.Service<
           yield* reserved(identifier);
           const headers = yield* providerHeaders;
 
-          yield* provider(() =>
-            auth.api.adminDeleteOAuthResource({ headers, params: resourceParams(identifier) }),
+          yield* missing(() => ResourceNotFound.of(identifier))(
+            provider(() =>
+              auth.api.adminDeleteOAuthResource({ headers, params: resourceParams(identifier) }),
+            ),
           );
           // The provider removes the resource and foreign keys remove its links; the
           // authorization clients were given for it goes with it. Should this clear fail,
@@ -235,14 +250,9 @@ export class Resources extends Context.Service<
             yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
           );
 
-          if (!client) return yield* Effect.fail(new NotFound({ error: "Client not found" }));
+          if (!client) return yield* Effect.fail(ClientNotFound.of(clientId));
 
-          if (isAutomatic(client))
-            return yield* Effect.fail(
-              new BadRequest({
-                error: "Automatic Clients may ask for any Resource; revoke or block them instead",
-              }),
-            );
+          if (isAutomatic(client)) return yield* Effect.fail(ClientIsAutomatic.of(clientId));
           const resources = yield* catalog.list();
           yield* validateSelection(resources, identifiers);
           const now = yield* Clock.currentTimeMillis;

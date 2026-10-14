@@ -200,7 +200,7 @@ test("an aborted MCP tool call settles its provider work and compensation before
   });
   // Fail once the provider has created the client, so the handler has to remove it again.
   vi.spyOn(issuer.get(Resources), "setAccess").mockReturnValue(
-    Effect.fail(new InternalServerError({ error: "Request could not be completed" })),
+    Effect.fail(new InternalServerError({ message: "Request could not be completed" })),
   );
   vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
     const deleted = await deleteClient(context);

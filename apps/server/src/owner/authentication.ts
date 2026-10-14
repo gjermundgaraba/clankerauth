@@ -12,7 +12,7 @@ import {
 } from "@clankerauth/admin-api";
 import type { OwnerSession } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
-import { provider } from "../issuer/errors.ts";
+import { provider, undecided } from "../issuer/errors.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
 import { OwnerAccount } from "./owner.ts";
 import { Issuer } from "../issuer/issuer.ts";
@@ -33,7 +33,7 @@ export const sessionOwner = (authentication: typeof OwnerSession) =>
           const request = yield* HttpServerRequest.HttpServerRequest;
           const headers = new Headers(request.headers);
 
-          const session = yield* provider(() => issuer.auth.api.getSession({ headers }));
+          const session = yield* undecided(provider(() => issuer.auth.api.getSession({ headers })));
 
           if (!session)
             return yield* new Action.Unauthenticated({ message: "Owner session required" });
@@ -71,7 +71,7 @@ export const bearerOwner = (resource: AdministrationResource) =>
           // The issuer is this process, so its own vocabulary answers it being unreachable.
           const principal = yield* Resource.authenticate(resource.verifier, token).pipe(
             Effect.catchTag("ProviderUnavailable", () =>
-              Effect.fail(new ServiceUnavailable({ error: "Request could not be completed" })),
+              Effect.fail(new ServiceUnavailable({ message: "Request could not be completed" })),
             ),
           );
 

@@ -95,7 +95,7 @@ export const SetupOwner = Command.define("SetupOwner", {
   execute: ({ email, password }) =>
     issuer.setupOwner({ email, password }).pipe(
       Effect.map((): Outcome => "Created"),
-      Effect.catchTag("Conflict", () => Effect.succeed<Outcome>("AlreadyOwned")),
+      Effect.catchTag("OwnerExists", () => Effect.succeed<Outcome>("AlreadyOwned")),
       toOwnerSentence,
       Effect.match({
         onFailure: (reason) => Message.FailedSetupOwner({ reason }),

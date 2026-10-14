@@ -145,13 +145,16 @@ A token needs `clankerauth:read` to list and `clankerauth:write` for everything 
 HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding,
 `POST /api/<action>`; `/api/owner/<action>` serves the same owner operations to an access
 token, as the `clankerauth` command calls them, and nothing else. The
-dashboard uses the direct typed action client. Input that does not decode, or that
-decodes but the issuer's own checks refuse, answers effect-actions' built-in
-`InvalidInput` (400), naming the field at fault. Input the provider rejects, such as a
-short password, an invalid email or a redirect URI, a request body the issuer cannot
-read, and a request its state refuses answer `BadRequest` (400) with an `error` message
-and no field. Data the issuer cannot read answers sanitized `InternalServerError` JSON
-(500). MCP uses native tool errors: declared domain
+dashboard uses the direct typed action client. Each action declares the failures it can
+produce, and each failure names its subject and carries a `message`. Input that does not
+decode, such as a setup password outside 8 to 128 characters, or that decodes but the issuer's
+own checks refuse, answers effect-actions' built-in `InvalidInput` (400), naming the field at
+fault. A client, resource or API key that does not exist answers `ClientNotFound`,
+`ResourceNotFound` or `ApiKeyNotFound` (404) with its identifier; editing or linking a client
+that registered itself answers `ClientIsAutomatic` (409), and a second setup `OwnerExists`
+(409). Input the provider refuses on a rule of its own, such as an invalid email or redirect
+URI, answers `ProviderRefused` (400). Data the issuer cannot read answers sanitized
+`InternalServerError` JSON (500). MCP uses native tool errors: declared domain
 failures are JSON text with `isError: true`, while schema failures use native
 validation/internal-error messages. Successful tool results return the action's output
 as `structuredContent`.
@@ -215,7 +218,7 @@ in to an application's resource too, and `clankerauth token --resource <identifi
 current access token for it, so a script takes its bearer token from there instead of keeping
 an API key.
 
-See the breaking [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code, and [AGENTS.md](AGENTS.md) how the code is laid out.
 
