@@ -197,25 +197,27 @@ const MISSING_SENTENCES: Readonly<Record<LoginField, string>> = {
   Password: "Enter your password.",
 };
 
-const problemView = (problem: Problem, h: HtmlBuilder<Message>): Html =>
-  Notice.view(
-    {
-      tone: "Error",
-      title: "Not signed in",
-      body: [
-        Problem.match(problem, {
-          Missing: ({ field }) => MISSING_SENTENCES[field],
-          Refused: ({ reason }) => reason,
-        }),
-      ],
-    },
-    h,
-  );
+const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  Option.match(model.maybeProblem, {
+    onNone: () => [],
+    onSome: (problem) =>
+      Problem.matchOrElse(
+        problem,
+        {
+          Refused: ({ reason }) => [
+            Notice.view({ tone: "Error", title: "Not signed in", body: [reason] }, h),
+          ],
+        },
+        () => [],
+      ),
+  });
 
-const isMissing = (model: Model, field: LoginField): boolean =>
+const missingSentenceOf = (model: Model, field: LoginField): string | undefined =>
   Option.exists(model.maybeProblem, (problem) =>
     Problem.matchOrElse(problem, { Missing: (missing) => missing.field === field }, () => false),
-  );
+  )
+    ? MISSING_SENTENCES[field]
+    : undefined;
 
 export const view = defineView<Model, Message>((model, h): Html =>
   wallCardView(
@@ -243,7 +245,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
             "Use your local account to continue. Password sign-in only: there is no external identity provider.",
           ],
         ),
-        ...Option.toArray(Option.map(model.maybeProblem, (problem) => problemView(problem, h))),
+        ...refusalView(model, h),
         Fields.view(
           {
             isBusy: model.isSigningIn,
@@ -257,7 +259,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   onInput: (value) => Message.UpdatedEmail({ value }),
                   isBoxed: true,
                   isRequired: true,
-                  isInvalid: isMissing(model, "Email"),
+                  error: missingSentenceOf(model, "Email"),
                   inputAttributes: [
                     h.Autocomplete("username"),
                     h.Placeholder("owner@example.internal"),
@@ -274,7 +276,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   isShown: model.isPasswordShown,
                   onToggleShown: Message.ToggledPasswordShown(),
                   isRequired: true,
-                  isInvalid: isMissing(model, "Password"),
+                  error: missingSentenceOf(model, "Password"),
                   autocomplete: "current-password",
                 },
                 h,

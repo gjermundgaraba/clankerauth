@@ -188,25 +188,27 @@ const INVALID_SENTENCES: Readonly<Record<SetupField, string>> = {
   Confirmation: "Passwords do not match.",
 };
 
-const problemView = (problem: Problem, h: HtmlBuilder<Message>): Html =>
-  Notice.view(
-    {
-      tone: "Error",
-      title: "Not created",
-      body: [
-        Problem.match(problem, {
-          Invalid: ({ field }) => INVALID_SENTENCES[field],
-          Refused: ({ reason }) => reason,
-        }),
-      ],
-    },
-    h,
-  );
+const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+  Option.match(model.maybeProblem, {
+    onNone: () => [],
+    onSome: (problem) =>
+      Problem.matchOrElse(
+        problem,
+        {
+          Refused: ({ reason }) => [
+            Notice.view({ tone: "Error", title: "Not created", body: [reason] }, h),
+          ],
+        },
+        () => [],
+      ),
+  });
 
-const isInvalid = (model: Model, field: SetupField): boolean =>
+const invalidSentenceOf = (model: Model, field: SetupField): string | undefined =>
   Option.exists(model.maybeProblem, (problem) =>
     Problem.matchOrElse(problem, { Invalid: (invalid) => invalid.field === field }, () => false),
-  );
+  )
+    ? INVALID_SENTENCES[field]
+    : undefined;
 
 export const view = defineView<Model, Message>((model, h): Html =>
   wallCardView(
@@ -234,7 +236,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
             "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
           ],
         ),
-        ...Option.toArray(Option.map(model.maybeProblem, (problem) => problemView(problem, h))),
+        ...refusalView(model, h),
         Fields.view(
           {
             isBusy: model.isCreating,
@@ -248,7 +250,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   onInput: (value) => Message.UpdatedEmail({ value }),
                   isBoxed: true,
                   isRequired: true,
-                  isInvalid: isInvalid(model, "Email"),
+                  error: invalidSentenceOf(model, "Email"),
                   inputAttributes: [
                     h.Autocomplete("username"),
                     h.Placeholder("owner@example.internal"),
@@ -265,7 +267,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   isShown: model.isPasswordShown,
                   onToggleShown: Message.ToggledPasswordShown(),
                   isRequired: true,
-                  isInvalid: isInvalid(model, "Password"),
+                  error: invalidSentenceOf(model, "Password"),
                   help: `Use ${MINIMUM_PASSWORD_LENGTH}–${MAXIMUM_PASSWORD_LENGTH} characters. Save your password somewhere safe.`,
                   autocomplete: "new-password",
                 },
@@ -279,8 +281,9 @@ export const view = defineView<Model, Message>((model, h): Html =>
                   onInput: (value) => Message.UpdatedConfirmation({ value }),
                   isShown: model.isConfirmationShown,
                   onToggleShown: Message.ToggledConfirmationShown(),
+                  toggleLabel: "Show confirmation",
                   isRequired: true,
-                  isInvalid: isInvalid(model, "Confirmation"),
+                  error: invalidSentenceOf(model, "Confirmation"),
                   autocomplete: "new-password",
                 },
                 h,
