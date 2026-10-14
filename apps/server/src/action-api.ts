@@ -92,8 +92,6 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
           version: manifest.version,
           // Native MCP admission needs this allowlist even after owner authentication.
           allowedOrigins: mcpAllowedOrigins,
-          // The tools are the contract's, fixed at startup: there is no change to subscribe to.
-          allowSubscriptions: false,
           instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
           authentication: OwnerToken,
         }),
