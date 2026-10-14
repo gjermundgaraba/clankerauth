@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, Layer, Schema, type Scope } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
+  administrationIdentifier,
   CurrentOwner,
   NotFound,
   type ClientAccessInput,
@@ -20,8 +21,8 @@ import { Database, persisted, type Sql } from "../platform/sqlite.ts";
 import { provider } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
-import { clearCodes, clearGrants, referencePrefix } from "../authorization/authorization.ts";
-import { administrationIdentifier, protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
+import { clearCodes, clearAuthorization, referencePrefix } from "../authorization/authorization.ts";
+import { isAutomatic, protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
 import { Resources } from "../resources/resources.ts";
 
 const decodeConnections = persisted(
@@ -113,7 +114,7 @@ export class Clients extends Context.Service<
         query: Sql,
       ) {
         yield* exists(clientId, query);
-        yield* clearGrants(query, { clientId, resource });
+        yield* clearAuthorization(query, { clientId, resource });
 
         return { revoked: true };
       });
@@ -167,7 +168,7 @@ export class Clients extends Context.Service<
             onboarding:
               row.clientDiscoveryId !== null
                 ? ("cimd" as const)
-                : row.userId === null
+                : isAutomatic(row)
                   ? ("dcr" as const)
                   : ("managed" as const),
             blocked: row.disabled === 1,

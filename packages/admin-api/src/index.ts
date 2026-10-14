@@ -126,6 +126,15 @@ export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentO
   error: errors,
 });
 
+/**
+ * The issuer's own resource, administration: its origin root, as every application's resource
+ * is. It names the token audience of administration over `/mcp` and `/api/owner/<action>`.
+ */
+export const administrationIdentifier = (origin: string) => new URL("/", origin).href;
+
+/** Administration's fixed scopes: `read` allows listing, and `write` allows everything. */
+export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
+
 /** The owner's password length: the issuer enforces it, and the setup page checks it first so
  *  it can name the field. */
 export const MINIMUM_PASSWORD_LENGTH = 8;
@@ -294,7 +303,7 @@ export const ApiKeyUpdate = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
 });
 
-export const MachineKey = Schema.Struct({
+export const ApiKey = Schema.Struct({
   keyId: Schema.String,
   name: Schema.String,
   enabled: Schema.Boolean,
@@ -430,24 +439,21 @@ export const Administration = [
     description: "List API key metadata without secret values.",
     readOnly: true,
     ...owned,
-    success: Schema.Struct({ keys: Schema.Array(MachineKey) }),
+    success: Schema.Struct({ keys: Schema.Array(ApiKey) }),
   }),
   Action.make("createApiKey", {
     description: "Create a scoped API key. Returns its secret once.",
     readOnly: false,
     ...owned,
     input: ApiKeyInput,
-    success: MachineKey.pipe(
-      Schema.fieldsAssign({ key: Schema.String }),
-      HttpApiSchema.status(201),
-    ),
+    success: ApiKey.pipe(Schema.fieldsAssign({ key: Schema.String }), HttpApiSchema.status(201)),
   }),
   Action.make("updateApiKey", {
     description: "Update an API key’s name, permissions or enabled state.",
     readOnly: false,
     ...owned,
     input: ApiKeyUpdate,
-    success: MachineKey,
+    success: ApiKey,
   }),
   Action.make("deleteApiKey", {
     description: "Delete an API key.",

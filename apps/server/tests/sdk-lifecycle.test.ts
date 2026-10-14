@@ -11,6 +11,7 @@ import { Effect, Exit, Schema, Scope } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Unauthorized } from "@gjermundgaraba/clankerauth-sdk/errors";
+import { signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
 
 const owner = { email: "owner@example.internal", password: randomBytes(24).toString("base64url") };
 
@@ -174,7 +175,7 @@ test("forward-auth tokens and API keys verify with the SDK against the real issu
 
     // Logout ends the issuer session. Node's fetch is a script's request, not a navigation,
     // so the next check is refused in place, and continuing asks for login.
-    const logout = await issuer.call(`/forward-auth/logout?rd=${encodeURIComponent(app.href)}`);
+    const logout = await issuer.call(signOutUrl(issuer.url, app.href));
     assert.equal(logout.status, 302);
     assert.equal(logout.headers.get("location"), app.href);
     assert.equal((await issuer.forward(resource, app)).status, 401);

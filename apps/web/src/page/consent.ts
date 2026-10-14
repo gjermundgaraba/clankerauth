@@ -20,6 +20,7 @@ import {
 
 import { decideConsent, publicClientName } from "../api.ts";
 import { wallCardView } from "./wall.ts";
+import { codesView } from "./codes.ts";
 
 // MODEL
 
@@ -255,15 +256,6 @@ const loadingView = (h: HtmlBuilder<Message>): Html =>
     h,
   );
 
-const codesView = (
-  values: ReadonlyArray<string>,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html | string> =>
-  Array.match(values, {
-    onEmpty: () => ["None in this request"],
-    onNonEmpty: (present) => Array.map(present, (value) => h.code([], [value])),
-  });
-
 const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
   Array.match(asking.request.scopes, {
     onEmpty: () => h.p([h.Class("note-line")], ["No permissions requested beyond signing in."]),
@@ -337,7 +329,7 @@ const requestDetailsView = (
             onSome: (redirect) => [h.code([], [redirect])],
           }),
         },
-        { label: "only for", value: codesView(resources, h) },
+        { label: "only for", value: codesView(resources, "None in this request", h) },
       ],
     },
     h,

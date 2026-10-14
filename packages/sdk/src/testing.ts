@@ -154,7 +154,7 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
         .sign(pair.privateKey);
     },
     apiKey: (permissions = { [options.resource]: options.scopes }, expiresAt) => {
-      const key = `clankerauth_${randomBytes(48).toString("base64url")}`;
+      const key = `${KeyList.keyPrefix}${randomBytes(48).toString("base64url")}`;
 
       keys.set(key, {
         keyId: `key-${++minted}`,

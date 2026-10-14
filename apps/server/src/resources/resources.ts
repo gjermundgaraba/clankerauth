@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Clock, Context, Effect, Layer, Schema, Scope, Semaphore } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
+  administrationIdentifier,
   BadRequest,
   CurrentOwner,
   NotFound,
@@ -14,10 +15,12 @@ import { Database, persisted, type Sql } from "../platform/sqlite.ts";
 import { invalidInput, provider } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
-import { clearGrants } from "../authorization/authorization.ts";
+import { clearAuthorization } from "../authorization/authorization.ts";
 import {
   accessForClient,
-  administrationIdentifier,
+  automatic,
+  isAutomatic,
+  managed,
   protocolScopes,
   ResourceCatalog,
   scopesOf,
@@ -144,10 +147,10 @@ export class Resources extends Context.Service<
         );
 
         yield* publishScopes(scopes);
-        yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE userId IS NULL AND scopes IS NOT ${JSON.stringify(scopes)}`;
+        yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE ${automatic()} AND scopes IS NOT ${JSON.stringify(scopes)}`;
 
         for (const client of yield* clientIds(
-          yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NOT NULL ORDER BY clientId`,
+          yield* sql`SELECT clientId FROM oauthClient WHERE ${managed()} ORDER BY clientId`,
         ))
           yield* syncClient(sql, resources, client.clientId);
       });
@@ -168,10 +171,12 @@ export class Resources extends Context.Service<
           const resource = yield* validateInput(input);
           const headers = yield* providerHeaders;
 
-          // Recreating a resource revives nothing, even if its deletion never cleared its grants.
+          // Recreating a resource revives nothing, even if its deletion never cleared its authorization.
           // Nothing is granted for an unknown resource, so none can appear before it exists.
           if (!(yield* catalog.get(resource.identifier)))
-            yield* transaction((query) => clearGrants(query, { resource: resource.identifier }));
+            yield* transaction((query) =>
+              clearAuthorization(query, { resource: resource.identifier }),
+            );
           yield* provider(() =>
             auth.api.adminCreateOAuthResource({
               headers,
@@ -215,7 +220,7 @@ export class Resources extends Context.Service<
           // The provider removes the resource and foreign keys remove its links; the
           // authorization clients were given for it goes with it. Should this clear fail,
           // create clears it before the identifier can be used again.
-          yield* transaction((query) => clearGrants(query, { resource: identifier }));
+          yield* transaction((query) => clearAuthorization(query, { resource: identifier }));
           yield* synchronize();
 
           return { deleted: true };
@@ -232,7 +237,7 @@ export class Resources extends Context.Service<
 
           if (!client) return yield* Effect.fail(new NotFound({ error: "Client not found" }));
 
-          if (client.userId === null)
+          if (isAutomatic(client))
             return yield* Effect.fail(
               new BadRequest({
                 error: "Automatic Clients may ask for any Resource; revoke or block them instead",
@@ -250,7 +255,7 @@ export class Resources extends Context.Service<
 
               for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
                 yield* query`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
-                yield* clearGrants(query, { clientId, resource: identifier });
+                yield* clearAuthorization(query, { clientId, resource: identifier });
               }
 
               for (const identifier of identifiers)

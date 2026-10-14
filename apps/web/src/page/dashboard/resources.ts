@@ -12,7 +12,8 @@ import {
 import { Change } from "./change.ts";
 import { addResource, editResource } from "./form.ts";
 import { Message } from "./message.ts";
-import { type SectionContext, codesView, footView, itemButtonView, noteView } from "./parts.ts";
+import { codesView } from "../codes.ts";
+import { type SectionContext, footView, itemButtonView, noteView } from "./parts.ts";
 
 type ResourceView = typeof ResourceSummary.Type;
 

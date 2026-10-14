@@ -1,4 +1,4 @@
-import type { MachineKey, ResourceSummary } from "@clankerauth/admin-api";
+import type { ApiKey, ResourceSummary } from "@clankerauth/admin-api";
 import { Array, Option, Record } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
@@ -15,7 +15,7 @@ import { createKey, editGrants, renameKey } from "./form.ts";
 import { Message } from "./message.ts";
 import { type SectionContext, footView, itemButtonView, momentOf, noteView } from "./parts.ts";
 
-type KeyView = typeof MachineKey.Type;
+type KeyView = typeof ApiKey.Type;
 
 type ResourceView = typeof ResourceSummary.Type;
 

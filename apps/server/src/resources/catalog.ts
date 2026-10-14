@@ -1,18 +1,21 @@
 import { Context, Effect, Layer, Schema } from "effect";
+import { sql as query } from "kysely";
 import { ClientAccess, type OwnerError, type Resource } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
 
-/** The administration resource's fixed scopes: `read` allows listing, and `write` allows
- * everything. */
-export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
+/** Every authorization targets exactly one configured resource; anything else is refused so. */
+export const exactlyOneResource = "Exactly one configured resource is required";
 
 /**
- * The issuer's own resource: its origin root, as every application's is. It names the
- * token audience of administration, over `/mcp` and `/api/owner/<action>` alike; the
- * dashboard at `/` takes the owner's session cookie, never a token.
+ * An automatic client registered itself, through DCR or CIMD, so no user owns its row; a
+ * managed one is the owner's. In SQL, `automatic` and `managed` qualify `oauthClient` rows.
  */
-export const administrationIdentifier = (baseURL: string) => new URL("/", baseURL).href;
+export const isAutomatic = (client: { readonly userId: string | null }) => client.userId === null;
+
+export const automatic = (table = "oauthClient") => query.raw(`${table}.userId IS NULL`);
+
+export const managed = (table = "oauthClient") => query.raw(`${table}.userId IS NOT NULL`);
 
 /** Reserved scope names that resources cannot define; the only protocol scope is refresh. */
 export const protocolScopes = ["offline_access"];
@@ -122,7 +125,7 @@ export class ResourceCatalog extends Context.Service<
           identifier: string,
         ) {
           const rows =
-            yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (c.userId IS NULL
+            yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (${automatic("c")}
             OR EXISTS (SELECT 1 FROM oauthClientResource l WHERE l.clientId = c.clientId AND l.resourceId = ${identifier}))`;
 
           return rows.length > 0;
