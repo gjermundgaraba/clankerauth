@@ -1,6 +1,6 @@
-import { serializeSignedCookie } from "better-call";
 import { Clock, Effect } from "effect";
 import { internal, provider } from "../issuer/errors.ts";
+import { signedSessionCookie } from "../issuer/cookies.ts";
 import type { ProviderContext } from "../issuer/issuer.ts";
 
 // why: provider admin APIs need a session cookie, which must never reach a response
@@ -15,27 +15,7 @@ export const providerSessionFor = (context: ProviderContext, origin: string) =>
       (session) => Effect.promise(() => context.internalAdapter.deleteSession(session.token)),
     );
 
-    const cookie = yield* internal(
-      provider(async () =>
-        (
-          await Promise.all([
-            serializeSignedCookie(
-              context.authCookies.sessionToken.name,
-              session.token,
-              context.secret,
-            ),
-            // why: stops getSession from extending this request-local session's expiry
-            serializeSignedCookie(
-              context.authCookies.dontRememberToken.name,
-              "true",
-              context.secret,
-            ),
-          ])
-        )
-          .map((cookie) => cookie.split(";")[0])
-          .join("; "),
-      ),
-    );
+    const cookie = yield* internal(provider(() => signedSessionCookie(context, session.token)));
 
     return new Headers({ origin, cookie });
   });

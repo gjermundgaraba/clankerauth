@@ -32,6 +32,72 @@ const commentOverrides = [
   },
 ];
 
+const domainImports = [
+  "^effect(/|$)",
+  "^@gjermundgaraba/effect-actions/",
+  "^@gjermundgaraba/clankerauth-sdk(/|$)",
+  "^@clankerauth/admin-api$",
+  "^apps/server/src/(?!http/)[^/]+/",
+];
+
+const httpImports = [
+  ...domainImports,
+  "^apps/server/src/http/",
+  "^apps/server/package\\.json$",
+  "^@effect/platform-node$",
+  "^@clankerauth/web/document-paths$",
+  "^node:(path|url)$",
+];
+
+const fence = (options: {
+  readonly allow?: ReadonlyArray<string>;
+  readonly deny?: ReadonlyArray<string>;
+}): ["error", typeof options] => ["error", options];
+
+const manualRuns = (options: {
+  readonly allow: ReadonlyArray<string>;
+}): ["error", typeof options] => ["error", options];
+
+const fenceOverrides = [
+  {
+    files: ["apps/server/src/**"],
+    rules: { "clankerauth/import-fence": fence({ allow: domainImports }) },
+  },
+  {
+    files: ["apps/server/src/http/**"],
+    rules: { "clankerauth/import-fence": fence({ allow: httpImports }) },
+  },
+  {
+    files: ["apps/server/src/*.ts", "apps/server/src/platform/**", "apps/server/src/issuer/**"],
+    rules: { "clankerauth/import-fence": "off" as const },
+  },
+  {
+    files: ["apps/web/**", "apps/cli/**", "packages/**"],
+    rules: {
+      "clankerauth/import-fence": fence({
+        deny: ["^@clankerauth/server(?!/embed$)", "^apps/server/"],
+      }),
+    },
+  },
+  {
+    files: ["apps/server/src/issuer/issuer.ts", "apps/server/tests/**", "packages/sdk/tests/**"],
+    rules: { "clankerauth/no-manual-effect-run": manualRuns({ allow: ["runPromiseWith"] }) },
+  },
+  {
+    files: [
+      "apps/server/src/main.ts",
+      "apps/cli/src/main.ts",
+      "packages/dev/src/index.ts",
+      "**/scripts/**",
+    ],
+    rules: { "clankerauth/no-manual-effect-run": "off" as const },
+  },
+  {
+    files: ["**/scripts/**"],
+    rules: { "clankerauth/import-fence": "off" as const },
+  },
+];
+
 const foldkitOverrides = [
   { files: [`${foldkitSource}/**/*.ts`], rules: levels(foldkitRecommended.rules) },
   ...foldkitRecommended.overrides.map((override) => ({
@@ -116,9 +182,10 @@ export default defineConfig({
       "anti-slop-effect/no-manual-tagged-construction": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
       "anti-slop-effect/prefer-effect-match": "error",
+      "clankerauth/no-manual-effect-run": "error",
       "clankerauth/no-prose-comments": "error",
     },
-    overrides: [...foldkitOverrides, ...commentOverrides],
+    overrides: [...foldkitOverrides, ...commentOverrides, ...fenceOverrides],
   },
   run: { cache: true },
 });

@@ -8,7 +8,7 @@ import test from "node:test";
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 
 // why: fixtures run the installed linter on the repository's real policy, overrides included.
-async function proseLines(folder, source) {
+async function ruleLines(rule, folder, source) {
   const directory = await mkdtemp(join(root, folder, "lint-fixture-"));
 
   try {
@@ -25,7 +25,7 @@ async function proseLines(folder, source) {
     const { diagnostics } = JSON.parse(result.stdout);
 
     return diagnostics
-      .filter((diagnostic) => diagnostic.code === "clankerauth(no-prose-comments)")
+      .filter((diagnostic) => diagnostic.code === `clankerauth(${rule})`)
       .map((diagnostic) => diagnostic.labels[0].span.line)
       .sort((a, b) => a - b);
   } finally {
@@ -35,7 +35,8 @@ async function proseLines(folder, source) {
 
 await test("a prose comment is refused, and a marked reason is one line", async () => {
   assert.deepEqual(
-    await proseLines(
+    await ruleLines(
+      "no-prose-comments",
       "apps/server",
       [
         "#!/usr/bin/env node",
@@ -54,7 +55,8 @@ await test("a prose comment is refused, and a marked reason is one line", async 
 
 await test("type documentation and directives with a reason are kept, other doc blocks are not", async () => {
   assert.deepEqual(
-    await proseLines(
+    await ruleLines(
+      "no-prose-comments",
       "apps/server",
       [
         "/** A count of attempts. */",
@@ -76,7 +78,8 @@ await test("type documentation and directives with a reason are kept, other doc 
 
 await test("the published SDK keeps its API documentation, and only the web app has section headers", async () => {
   assert.deepEqual(
-    await proseLines(
+    await ruleLines(
+      "no-prose-comments",
       "packages/sdk/src",
       [
         "/** Builds a count. */",
@@ -87,5 +90,75 @@ await test("the published SDK keeps its API documentation, and only the web app 
     ),
     [3],
   );
-  assert.deepEqual(await proseLines("apps/web/src", "// MODEL\n\nexport const model = 1;\n"), []);
+  assert.deepEqual(
+    await ruleLines("no-prose-comments", "apps/web/src", "// MODEL\n\nexport const model = 1;\n"),
+    [],
+  );
+});
+
+const imports = (...specifiers) =>
+  specifiers.map((specifier) => `export * from "${specifier}";`).join("\n\n") + "\n";
+
+await test("a domain folder imports Effect, the contracts and other domains, never a vendor or http/", async () => {
+  assert.deepEqual(
+    await ruleLines(
+      "import-fence",
+      "apps/server/src/clients",
+      imports(
+        "effect",
+        "@clankerauth/admin-api",
+        "../../platform/sqlite.ts",
+        "kysely",
+        "node:crypto",
+        "../../http/actions.ts",
+      ) + "\nexport const later = (name: string) => import(name);\n",
+    ),
+    [7, 9, 11, 13],
+  );
+});
+
+await test("platform/ and issuer/ take technology, and http/ its own list", async () => {
+  assert.deepEqual(
+    await ruleLines("import-fence", "apps/server/src/platform", imports("kysely")),
+    [],
+  );
+  assert.deepEqual(
+    await ruleLines("import-fence", "apps/server/src/issuer", imports("better-auth/crypto")),
+    [],
+  );
+  assert.deepEqual(
+    await ruleLines("import-fence", "apps/server/src/http", imports("node:path", "kysely")),
+    [3],
+  );
+});
+
+await test("outside the server, only its embed entry is importable", async () => {
+  assert.deepEqual(
+    await ruleLines(
+      "import-fence",
+      "packages/dev/src",
+      imports(
+        "@clankerauth/server/embed",
+        "@clankerauth/server/src/services.ts",
+        "../../../../apps/server/src/services.ts",
+      ),
+    ),
+    [3, 5],
+  );
+});
+
+await test("Effect runs by hand only in entries and bridges, and tests bridge with runPromiseWith", async () => {
+  const runs = [
+    'import { Effect } from "effect";',
+    "",
+    "export const a = Effect.runPromise(Effect.void);",
+    "",
+    "export const b = Effect.runPromiseWith(Effect.context<never>)(Effect.void);",
+  ].join("\n");
+
+  assert.deepEqual(
+    await ruleLines("no-manual-effect-run", "apps/server/src/clients", runs),
+    [3, 5],
+  );
+  assert.deepEqual(await ruleLines("no-manual-effect-run", "apps/server/tests", runs), [3]);
 });

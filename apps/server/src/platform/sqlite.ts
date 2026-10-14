@@ -36,6 +36,8 @@ export function makeSql(database: Kysely<DatabaseSchema>) {
 
 export type Sql = ReturnType<typeof makeSql>;
 
+export const sqlFragment = (text: string) => query.raw(text);
+
 export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>(
   database: Kysely<DatabaseSchema>,
   operation: (sql: Sql) => Effect.Effect<A, E, R>,

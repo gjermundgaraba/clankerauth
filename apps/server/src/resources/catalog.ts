@@ -1,7 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { sql as query } from "kysely";
 import { ClientAccess, type InternalServerError, type Resource } from "@clankerauth/admin-api";
-import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
+import { Database, persisted, sqlFragment, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
 
 export const exactlyOneResource = "Exactly one configured resource is required";
@@ -9,9 +8,9 @@ export const exactlyOneResource = "Exactly one configured resource is required";
 // why: a client that registered itself, through DCR or CIMD, has no owning user
 export const isAutomatic = (client: { readonly userId: string | null }) => client.userId === null;
 
-export const automatic = (table = "oauthClient") => query.raw(`${table}.userId IS NULL`);
+export const automatic = (table = "oauthClient") => sqlFragment(`${table}.userId IS NULL`);
 
-export const managed = (table = "oauthClient") => query.raw(`${table}.userId IS NOT NULL`);
+export const managed = (table = "oauthClient") => sqlFragment(`${table}.userId IS NOT NULL`);
 
 export const protocolScopes = ["offline_access"];
 

@@ -2,11 +2,11 @@ import { administrationIdentifier } from "@clankerauth/admin-api";
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { returnToParameter, signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
-import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
 import { provider, respond } from "../issuer/errors.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
 import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
+import { seal, unseal } from "../issuer/cookies.ts";
 
 export const forwardClientId = "forward-auth";
 
@@ -78,11 +78,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         if (!resource) return json(403, "unknown_resource");
         const sealed = request.cookies[forwardCookie];
 
-        const unsealed = sealed
-          ? yield* Effect.option(
-              Effect.tryPromise(() => symmetricDecrypt({ key: secret, data: sealed })),
-            )
-          : Option.none();
+        const unsealed = sealed ? yield* Effect.option(unseal(secret, sealed)) : Option.none();
 
         const current = Option.isSome(unsealed)
           ? yield* session(`${sessionCookieName}=${unsealed.value}`)
@@ -135,9 +131,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
             withReturn("/login", withReturn("/forward-auth/continue", returnTo)),
           );
 
-        const sealed = yield* Effect.tryPromise(() =>
-          symmetricEncrypt({ key: secret, data: value }),
-        );
+        const sealed = yield* seal(secret, value);
 
         return yield* HttpServerResponse.redirect(returnTo).pipe(
           HttpServerResponse.setCookie(forwardCookie, sealed, cookieOptions),

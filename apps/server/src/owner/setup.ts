@@ -1,7 +1,11 @@
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import type { SetupInput } from "@clankerauth/admin-api";
-import { ResponseCookies } from "../http/response-cookies.ts";
 import { OwnerAccount } from "./owner.ts";
+
+export class ResponseCookies extends Context.Service<
+  ResponseCookies,
+  { readonly add: (setCookie: Iterable<string>) => Effect.Effect<void> }
+>()("clankerauth/ResponseCookies") {}
 
 export const setupActions = Effect.map(OwnerAccount, (owner) => ({
   setupStatus: () => owner.find().pipe(Effect.map((found) => ({ required: !found }))),
