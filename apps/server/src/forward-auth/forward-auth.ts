@@ -1,7 +1,7 @@
 import { administrationIdentifier } from "@clankerauth/admin-api";
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
+import { returnToParameter, signOutPath } from "@gjermundgaraba/clankerauth-sdk/session";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
 import { provider, respond } from "../issuer/errors.ts";
@@ -50,7 +50,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
       const withReturn = (path: string, returnTo: URL) => {
         const url = new URL(path, settings.baseURL);
-        url.searchParams.set("rd", returnTo.href);
+        url.searchParams.set(returnToParameter, returnTo.href);
 
         return url;
       };
@@ -120,7 +120,9 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       const proceed = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
 
-        const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
+        const requested = new URL(request.url, settings.baseURL).searchParams.get(
+          returnToParameter,
+        );
 
         const returnTo = requested ? allowedReturnURL(requested) : undefined;
 
@@ -145,7 +147,9 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       const logout = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
 
-        const requested = new URL(request.url, settings.baseURL).searchParams.get("rd");
+        const requested = new URL(request.url, settings.baseURL).searchParams.get(
+          returnToParameter,
+        );
 
         const returnTo = (requested && allowedReturnURL(requested)) || loginPage;
 

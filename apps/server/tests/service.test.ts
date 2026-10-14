@@ -11,7 +11,7 @@ import { issuerGeneration, testSettings, WebApplication } from "./test-issuer.ts
 import { administrationResource } from "./mcp-oauth-helper.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
-import { Issuer } from "../src/issuer/issuer.ts";
+import { Issuer, refreshTokenReuseSeconds } from "../src/issuer/issuer.ts";
 import { ResourceCatalog } from "../src/resources/catalog.ts";
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
@@ -965,8 +965,7 @@ describe("OAuth boundaries and lifecycle", () => {
 
         yield* withFakeDate(
           Effect.gen(function* () {
-            vi.setSystemTime(Date.now() + 31_000);
-            // why: past the issuer's 30-second refresh-token reuse window
+            vi.setSystemTime(Date.now() + (refreshTokenReuseSeconds + 1) * 1000);
             expect((yield* refresh(rotated.refresh_token, resourceA)).status).toBe(400);
             expect((yield* refresh(next.refresh_token, resourceA)).status).toBe(400);
           }),

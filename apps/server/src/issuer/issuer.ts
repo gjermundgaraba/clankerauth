@@ -31,6 +31,8 @@ const isString = (value: unknown): value is string => typeof value === "string";
 
 export const accessTokenLifetime = 15 * 60;
 
+export const refreshTokenReuseSeconds = 30;
+
 type RunCallback = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
 const providerOptions = (
@@ -99,7 +101,7 @@ const providerOptions = (
     enforcePerClientResources: false,
     accessTokenExpiresIn: accessTokenLifetime,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
-    refreshTokenReuseInterval: 30,
+    refreshTokenReuseInterval: refreshTokenReuseSeconds,
     codeExpiresIn: 120,
     // why: setup creates the only account, so any authenticated user is the owner
     clientPrivileges: async ({ user, action }) =>

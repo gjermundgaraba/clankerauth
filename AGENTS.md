@@ -49,8 +49,8 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
 - `packages/admin-api`: the administration contract every surface is derived from: actions,
   schemas, errors, and the administration resource's identifier and scopes.
 - `packages/sdk`: the published SDK, one folder-less module per entry. It owns the protocol
-  constants resource servers share with the issuer, such as the API-key prefix and the sign-out
-  path.
+  constants resource servers share with the issuer, such as the API-key prefix, the sign-out
+  path and the return-to query parameter, which the web app's login page reads too.
 - `packages/dev`: the published development issuer, built from `@clankerauth/server/embed`.
 - `apps/cli`: the published CLI; `oauth.ts` is its only OAuth adapter.
 

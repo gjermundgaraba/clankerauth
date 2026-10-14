@@ -1,3 +1,4 @@
+import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
 import { Boolean, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -79,7 +80,7 @@ export const init = (search: string, fallback: string): Model => {
     maybeProblem: Option.none(),
     continuation: query.has("sig")
       ? Continuation.ContinueAuthorization()
-      : Continuation.RedirectTo({ destination: query.get("rd") ?? fallback }),
+      : Continuation.RedirectTo({ destination: query.get(returnToParameter) ?? fallback }),
   };
 };
 

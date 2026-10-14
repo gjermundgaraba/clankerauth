@@ -397,6 +397,9 @@ importers:
       '@gjermundgaraba-designs/pixel-paper':
         specifier: 'catalog:'
         version: 0.12.0(@effect/platform-browser@4.0.4(effect@4.0.4))(@foldkit/ui@0.168.0(effect@4.0.4)(foldkit@0.168.0(@effect/platform-browser@4.0.4(effect@4.0.4))(effect@4.0.4)))(effect@4.0.4)(foldkit@0.168.0(@effect/platform-browser@4.0.4(effect@4.0.4))(effect@4.0.4))
+      '@gjermundgaraba/clankerauth-sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.16.0(effect@4.0.4)
