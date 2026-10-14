@@ -81,9 +81,9 @@ test("documented adapter import passes without an unused suppression", async () 
 test("tagged wire expectations use constructors and encoders", async () => {
   const result = await lint(`
     import { Schema } from "effect";
-    import { BadRequest } from "@clankerauth/admin-api";
+    import { ProviderRefused } from "@clankerauth/admin-api";
 
-    export const expected = Schema.encodeSync(BadRequest)(new BadRequest({ error: "Invalid request" }));
+    export const expected = Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Invalid request" }));
   `, "anti-slop-effect/no-manual-tagged-construction", "contract.test.ts");
   assert.equal(result.status, 0, JSON.stringify(result.diagnostics));
   assert.deepEqual(result.diagnostics, []);
@@ -91,7 +91,7 @@ test("tagged wire expectations use constructors and encoders", async () => {
 
 test("tests are not blanket-exempted from tagged construction", async () => {
   const result = await lint(
-    'export const expected = { _tag: "BadRequest", error: "Invalid request" };',
+    'export const expected = { _tag: "ProviderRefused", message: "Invalid request" };',
     "anti-slop-effect/no-manual-tagged-construction", "contract.test.ts",
   );
   assert.equal(result.status, 1);

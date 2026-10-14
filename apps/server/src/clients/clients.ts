@@ -3,7 +3,10 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   administrationIdentifier,
   CurrentOwner,
-  NotFound,
+  ClientIsAutomatic,
+  ClientNotFound,
+  InternalServerError,
+  type ProviderRefused,
   type ClientAccessInput,
   type ClientAccessResult,
   type ClientBlockInput,
@@ -15,10 +18,9 @@ import {
   type ClientUpdateInput,
   type Client,
   type Connection,
-  type OwnerError,
 } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
-import { provider } from "../issuer/errors.ts";
+import { internal, provider, refused, refusedOrMissing } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { clearCodes, clearAuthorization, referencePrefix } from "../authorization/authorization.ts";
@@ -52,9 +54,15 @@ const ClientRow = Schema.Struct({
 
 const decodeClients = persisted(Schema.Array(ClientRow));
 
-type Refusal = OwnerError | Action.InvalidInput;
+const clientOwners = persisted(
+  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) })),
+);
 
-type Owned<A> = Effect.Effect<A, Refusal, CurrentOwner | Scope.Scope>;
+type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
+
+type Owned<A, E = never> = Effect.Effect<A, Refusal | E, CurrentOwner | Scope.Scope>;
+
+type Editing = ClientNotFound | ClientIsAutomatic;
 
 /**
  * Owner policy over provider client rows: blocking uses the provider's own `disabled`
@@ -64,34 +72,44 @@ export class Clients extends Context.Service<
   Clients,
   {
     /** Clients, resources, managed clients' access and every client's connections. */
-    readonly list: () => Effect.Effect<typeof ClientListResult.Type, OwnerError, CurrentOwner>;
+    readonly list: () => Effect.Effect<
+      typeof ClientListResult.Type,
+      InternalServerError,
+      CurrentOwner
+    >;
     /** Registers a first-party client, linked to `resources`; its secret is returned once. */
     readonly create: (input: typeof ClientInput.Type) => Owned<typeof ClientCredentials.Type>;
-    readonly update: (input: typeof ClientUpdateInput.Type) => Owned<typeof Client.Type>;
-    readonly rotate: (input: typeof ClientId.Type) => Owned<typeof ClientCredentials.Type>;
+    readonly update: (input: typeof ClientUpdateInput.Type) => Owned<typeof Client.Type, Editing>;
+    readonly rotate: (input: typeof ClientId.Type) => Owned<typeof ClientCredentials.Type, Editing>;
     /**
      * What each client holds, per resource: a consent, a live refresh token, or both. A
      * managed client skips consent, so only its refresh tokens show. Scopes are the
      * consent's, else the newest token's; rotation revokes the replaced token.
      */
-    readonly connections: () => Effect.Effect<ReadonlyArray<typeof Connection.Type>, OwnerError>;
+    readonly connections: () => Effect.Effect<
+      ReadonlyArray<typeof Connection.Type>,
+      InternalServerError
+    >;
     readonly setAccess: (
       input: typeof ClientAccessInput.Type,
-    ) => Effect.Effect<typeof ClientAccessResult.Type, Refusal>;
+    ) => Effect.Effect<
+      typeof ClientAccessResult.Type,
+      InternalServerError | Action.InvalidInput | Editing
+    >;
     /** Without a resource, every authorization the client holds. */
     readonly revoke: (
       input: typeof ClientRevokeInput.Type,
-    ) => Effect.Effect<{ revoked: boolean }, OwnerError>;
+    ) => Effect.Effect<{ revoked: boolean }, InternalServerError | ClientNotFound>;
     /**
      * Forgets any client, managed or automatic; an automatic one can register again.
      * Its links, consents and tokens cascade with the row.
      */
     readonly delete: (
       input: typeof ClientId.Type,
-    ) => Effect.Effect<{ deleted: boolean }, OwnerError>;
+    ) => Effect.Effect<{ deleted: boolean }, InternalServerError | ClientNotFound>;
     readonly block: (
       input: typeof ClientBlockInput.Type,
-    ) => Effect.Effect<{ blocked: boolean }, OwnerError>;
+    ) => Effect.Effect<{ blocked: boolean }, InternalServerError | ClientNotFound>;
   }
 >()("clankerauth/Clients") {
   static readonly layer = Layer.effect(
@@ -105,7 +123,18 @@ export class Clients extends Context.Service<
 
       const exists = Effect.fn("Clients.exists")(function* (clientId: string, query: Sql) {
         if (!(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`).length)
-          return yield* Effect.fail(new NotFound({ error: "Client not found" }));
+          return yield* Effect.fail(ClientNotFound.of(clientId));
+      });
+
+      /** A client the owner registered, which the owner may edit; refuses any other. */
+      const managedClient = Effect.fn("Clients.managed")(function* (clientId: string) {
+        const [client] = yield* clientOwners(
+          yield* sql`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
+        );
+
+        if (!client) return yield* Effect.fail(ClientNotFound.of(clientId));
+
+        if (isAutomatic(client)) return yield* Effect.fail(ClientIsAutomatic.of(clientId));
       });
 
       const revoke = Effect.fn("Clients.revoke")(function* (
@@ -154,7 +183,7 @@ export class Clients extends Context.Service<
 
       return {
         connections,
-        list: Effect.fn("Administration.list")(function* () {
+        list: Effect.fn("Clients.list")(function* () {
           const { email } = yield* CurrentOwner;
 
           const rows = yield* sql`
@@ -198,67 +227,79 @@ export class Clients extends Context.Service<
             issuer: `${baseURL}/api/auth`,
           };
         }),
-        create: Effect.fn("Administration.create")(function* (input: typeof ClientInput.Type) {
+        create: Effect.fn("Clients.create")(function* (input: typeof ClientInput.Type) {
           const { providerHeaders } = yield* CurrentOwner;
 
           const scopes = yield* catalog.scopesFor(input.resources);
 
           const headers = yield* providerHeaders;
 
-          const client = yield* provider(() =>
-            // The administrative endpoint accepts skip_consent; the plain one drops it.
-            auth.api.adminCreateOAuthClient({
-              headers,
-              body: {
-                client_name: input.client_name,
-                redirect_uris: [...input.redirect_uris],
-                token_endpoint_auth_method: input.token_endpoint_auth_method,
-                application_type: input.application_type,
-                grant_types: ["authorization_code", "refresh_token"],
-                scope: scopes.join(" "),
-                // Owner-registered clients are first party: no consent screen.
-                skip_consent: true,
-              },
-            }),
+          const client = yield* refused(
+            provider(() =>
+              // The administrative endpoint accepts skip_consent; the plain one drops it.
+              auth.api.adminCreateOAuthClient({
+                headers,
+                body: {
+                  client_name: input.client_name,
+                  redirect_uris: [...input.redirect_uris],
+                  token_endpoint_auth_method: input.token_endpoint_auth_method,
+                  application_type: input.application_type,
+                  grant_types: ["authorization_code", "refresh_token"],
+                  scope: scopes.join(" "),
+                  // Owner-registered clients are first party: no consent screen.
+                  skip_consent: true,
+                },
+              }),
+            ),
           );
 
           yield* resources
             .setAccess({ client_id: client.client_id, resources: input.resources })
             .pipe(
+              Effect.catchTags({
+                ClientNotFound: (error) => Effect.fail(InternalServerError.of(error)),
+                ClientIsAutomatic: (error) => Effect.fail(InternalServerError.of(error)),
+              }),
               Effect.tapError(() =>
-                provider(() =>
-                  auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+                internal(
+                  provider(() =>
+                    auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
+                  ),
                 ),
               ),
             );
 
           return client;
         }),
-        update: Effect.fn("Administration.update")(function* (
-          input: typeof ClientUpdateInput.Type,
-        ) {
+        update: Effect.fn("Clients.update")(function* (input: typeof ClientUpdateInput.Type) {
+          yield* managedClient(input.client_id);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          return yield* provider(() =>
-            auth.api.updateOAuthClient({
-              headers,
-              body: {
-                client_id: input.client_id,
-                update: {
-                  client_name: input.client_name,
-                  redirect_uris: [...input.redirect_uris],
-                  application_type: input.application_type,
+          return yield* refusedOrMissing(() => ClientNotFound.of(input.client_id))(
+            provider(() =>
+              auth.api.updateOAuthClient({
+                headers,
+                body: {
+                  client_id: input.client_id,
+                  update: {
+                    client_name: input.client_name,
+                    redirect_uris: [...input.redirect_uris],
+                    application_type: input.application_type,
+                  },
                 },
-              },
-            }),
+              }),
+            ),
           );
         }),
-        rotate: Effect.fn("Administration.rotate")(function* (body: typeof ClientId.Type) {
+        rotate: Effect.fn("Clients.rotate")(function* (body: typeof ClientId.Type) {
+          yield* managedClient(body.client_id);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          return yield* provider(() => auth.api.rotateClientSecret({ headers, body }));
+          return yield* refusedOrMissing(() => ClientNotFound.of(body.client_id))(
+            provider(() => auth.api.rotateClientSecret({ headers, body })),
+          );
         }),
         setAccess: Effect.fn("Clients.setAccess")(function* (input: typeof ClientAccessInput.Type) {
           return { clientAccess: yield* resources.setAccess(input) };

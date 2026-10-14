@@ -1127,7 +1127,7 @@ describe("dashboard resources and client access", () => {
     expect(authorize.status).toBe(500);
     expect(await authorize.json()).toEqual(
       Schema.encodeSync(InternalServerError)(
-        new InternalServerError({ error: "Request could not be completed" }),
+        new InternalServerError({ message: "Request could not be completed" }),
       ),
     );
   });

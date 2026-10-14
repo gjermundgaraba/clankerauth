@@ -1,5 +1,5 @@
 import { Effect, Exit } from "effect";
-import { BadRequest, NotFound } from "@clankerauth/admin-api";
+import { ClientIsAutomatic, ClientNotFound } from "@clankerauth/admin-api";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { createHash } from "node:crypto";
 import { convertSetCookieToCookie } from "better-auth/test";
@@ -296,11 +296,7 @@ test("automatic clients have no configurable resource access", async () => {
     await Effect.runPromise(
       Effect.flip(issuer.get(Resources).setAccess({ client_id: client.client_id, resources: [] })),
     ),
-  ).toEqual(
-    new BadRequest({
-      error: "Automatic Clients may ask for any Resource; revoke or block them instead",
-    }),
-  );
+  ).toEqual(ClientIsAutomatic.of(client.client_id));
   expect(await Effect.runPromise(issuer.get(ResourceCatalog).access())).toEqual([]);
 });
 
@@ -342,7 +338,7 @@ test("blocking a dynamically registered client rejects authorization until unblo
 });
 
 test("block and revoke report unknown clients", async () => {
-  const missing = new NotFound({ error: "Client not found" });
+  const missing = ClientNotFound.of("missing");
   expect(
     await Effect.runPromise(Effect.flip(issuer.get(Clients).revoke({ client_id: "missing" }))),
   ).toEqual(missing);
@@ -426,7 +422,7 @@ test("the owner can delete an automatic client, which may register again", async
     await Effect.runPromise(
       Effect.flip(issuer.get(Clients).delete({ client_id: client.client_id })),
     ),
-  ).toEqual(new NotFound({ error: "Client not found" }));
+  ).toEqual(ClientNotFound.of(client.client_id));
 
   expect(await consentRequired(clientId)).toContain("/consent");
   await Effect.runPromise(issuer.get(Clients).delete({ client_id: clientId }));

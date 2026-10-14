@@ -30,6 +30,10 @@ that captures its dependencies; a method requires only request-scoped context, s
 it is given. `http/` is the HTTP and MCP surface over every domain. Layers are chosen in three
 places: `main.ts` for the process, `tests/open-issuer.ts` for tests, and the development package.
 
+The contract's `CurrentOwner` carries `providerHeaders`, the provider session administration
+acts through: effect-actions' authentication provides one service per request, and the
+dashboard's session reuses the request's own cookie rather than opening a session per call.
+
 `embed.ts` is the server's one public entry, `@clankerauth/server/embed`, for the development
 package. Nothing else imports server source from outside `apps/server`.
 
@@ -55,3 +59,8 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
 - **Operations as contracts**: every administration operation is an effect-actions action in
   `packages/admin-api`; HTTP, MCP, the CLI and the dashboard are derived from it.
 - **Service and Layer together**: a service's Layer is a static member of its class.
+- **Errors that carry context**: each contract error names its subject (`clientId`,
+  `identifier`, `keyId`) and carries its sentence as a declared `message`, built once in the
+  error's `of`; each action lists only the failures it can produce, which `Action.implement`
+  checks. A provider call fails with `ProviderFailure`, keeping the provider's status, and its
+  caller names what that status means (`refused`, `missing`, `internal` in `issuer/errors.ts`).

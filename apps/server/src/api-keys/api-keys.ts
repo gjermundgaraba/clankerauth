@@ -9,13 +9,22 @@ import {
   type ApiKeyInput,
   type ApiKeyUpdate,
   type ApiKey,
-  type OwnerError,
+  ApiKeyNotFound,
+  type InternalServerError,
+  type ProviderRefused,
 } from "@clankerauth/admin-api";
 import { Database } from "../platform/sqlite.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
-import { invalidInput, provider } from "../issuer/errors.ts";
+import {
+  internal,
+  invalidInput,
+  missing,
+  provider,
+  refused,
+  refusedOrMissing,
+} from "../issuer/errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
 
@@ -61,7 +70,7 @@ const summary = Effect.fnUntraced(function* (key: {
   };
 });
 
-type Refusal = OwnerError | Action.InvalidInput;
+type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
 type Summary = typeof ApiKey.Type;
 
@@ -71,7 +80,7 @@ export class ApiKeys extends Context.Service<
   {
     readonly list: () => Effect.Effect<
       { keys: ReadonlyArray<Summary> },
-      Refusal,
+      InternalServerError,
       CurrentOwner | Scope.Scope
     >;
     /** Creates a key; its secret is returned once. */
@@ -80,16 +89,20 @@ export class ApiKeys extends Context.Service<
     ) => Effect.Effect<Summary & { key: string }, Refusal, CurrentOwner>;
     readonly update: (
       input: typeof ApiKeyUpdate.Type,
-    ) => Effect.Effect<Summary, Refusal, CurrentOwner>;
+    ) => Effect.Effect<Summary, Refusal | ApiKeyNotFound, CurrentOwner>;
     readonly delete: (
       input: typeof ApiKeyId.Type,
-    ) => Effect.Effect<{ deleted: boolean }, Refusal, CurrentOwner | Scope.Scope>;
+    ) => Effect.Effect<
+      { deleted: boolean },
+      InternalServerError | ApiKeyNotFound,
+      CurrentOwner | Scope.Scope
+    >;
     /**
      * Every enabled, unexpired key granted on the resource, with the scopes it still
      * defines, sealed and signed for offline verification. An unknown resource, and the
      * administration resource, which keys never reach, get a list with no entries.
      */
-    readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, OwnerError>;
+    readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, InternalServerError>;
   }
 >()("clankerauth/ApiKeys") {
   static readonly layer = Layer.effect(
@@ -129,11 +142,13 @@ export class ApiKeys extends Context.Service<
           const headers = yield* providerHeaders;
 
           // The plugin pages in memory over one database read, so listings stop at its page size.
-          const result = yield* provider(() =>
-            auth.api.listApiKeys({
-              headers,
-              query: { sortBy: "createdAt", sortDirection: "asc" },
-            }),
+          const result = yield* internal(
+            provider(() =>
+              auth.api.listApiKeys({
+                headers,
+                query: { sortBy: "createdAt", sortDirection: "asc" },
+              }),
+            ),
           );
 
           return { keys: yield* Effect.forEach(result.apiKeys, summary) };
@@ -150,17 +165,19 @@ export class ApiKeys extends Context.Service<
           if (expiresIn !== null && expiresIn < 1)
             return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
 
-          const key = yield* provider(() =>
-            auth.api.createApiKey({
-              body: {
-                userId: owner.userId,
-                name: input.name.trim(),
-                permissions: Object.fromEntries(
-                  Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
-                ),
-                expiresIn,
-              },
-            }),
+          const key = yield* refused(
+            provider(() =>
+              auth.api.createApiKey({
+                body: {
+                  userId: owner.userId,
+                  name: input.name.trim(),
+                  permissions: Object.fromEntries(
+                    Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
+                  ),
+                  expiresIn,
+                },
+              }),
+            ),
           );
 
           return { ...(yield* summary(key)), key: key.key };
@@ -170,27 +187,34 @@ export class ApiKeys extends Context.Service<
           yield* validate(input.permissions);
 
           return yield* summary(
-            yield* provider(() =>
-              auth.api.updateApiKey({
-                body: {
-                  userId: owner.userId,
-                  keyId: input.keyId,
-                  name: input.name?.trim(),
-                  enabled: input.enabled,
-                  permissions: input.permissions
-                    ? Object.fromEntries(
-                        Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
-                      )
-                    : undefined,
-                },
-              }),
+            yield* refusedOrMissing(() => ApiKeyNotFound.of(input.keyId))(
+              provider(() =>
+                auth.api.updateApiKey({
+                  body: {
+                    userId: owner.userId,
+                    keyId: input.keyId,
+                    name: input.name?.trim(),
+                    enabled: input.enabled,
+                    permissions: input.permissions
+                      ? Object.fromEntries(
+                          Object.entries(input.permissions).map(([id, scopes]) => [
+                            id,
+                            [...scopes],
+                          ]),
+                        )
+                      : undefined,
+                  },
+                }),
+              ),
             ),
           );
         }),
         delete: Effect.fn("ApiKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
-          yield* provider(() => auth.api.deleteApiKey({ headers, body: { keyId } }));
+          yield* missing(() => ApiKeyNotFound.of(keyId))(
+            provider(() => auth.api.deleteApiKey({ headers, body: { keyId } })),
+          );
 
           return { deleted: true };
         }),
@@ -250,18 +274,20 @@ export class ApiKeys extends Context.Service<
 
           const iat = Math.floor(now / 1000);
 
-          const { token } = yield* provider(() =>
-            auth.api.signDocument({
-              body: {
-                typ: KeyList.type,
-                payload: {
-                  aud: identifier,
-                  iat,
-                  exp: iat + KeyList.lifetime,
-                  keys: entries.flat(),
+          const { token } = yield* internal(
+            provider(() =>
+              auth.api.signDocument({
+                body: {
+                  typ: KeyList.type,
+                  payload: {
+                    aud: identifier,
+                    iat,
+                    exp: iat + KeyList.lifetime,
+                    keys: entries.flat(),
+                  },
                 },
-              },
-            }),
+              }),
+            ),
           );
 
           return { list: token };

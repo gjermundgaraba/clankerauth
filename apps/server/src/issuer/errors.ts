@@ -1,34 +1,22 @@
-import { Effect, Option, Predicate, Schema, SchemaAST } from "effect";
+import { Data, Effect, Option, Predicate, Schema, SchemaAST } from "effect";
 import { HttpServerError, HttpServerResponse } from "effect/http";
 import { type APIError, isAPIError } from "better-auth/api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
-  ownerErrors,
-  BadRequest,
-  Conflict,
+  errors,
   InternalServerError,
-  NotFound,
+  ProviderRefused,
   ServiceUnavailable,
-  TooManyRequests,
+  UnreadableRequest,
+  type IssuerError,
 } from "@clankerauth/admin-api";
-import type { OwnerError } from "@clankerauth/admin-api";
 
-const statuses = new Map<unknown, number>(
-  ownerErrors.map(
-    (schema) => [schema, SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500] as const,
-  ),
-);
-
-const isOwnerError = (cause: unknown): cause is OwnerError =>
-  ownerErrors.some((schema) => Schema.is(schema)(cause));
-
-/** This issuer's own fault: a failed query, an unreadable row, an unexpected rejection. */
-export const internalError = (cause: unknown) => {
-  const error = new InternalServerError({ error: "Request could not be completed" });
-  error.cause = cause;
-
-  return error;
-};
+/** A provider API call that answered with an error status. Its caller names what it means. */
+export class ProviderFailure extends Data.TaggedError("ProviderFailure")<{
+  readonly status: number;
+  readonly message: string;
+  readonly cause: APIError;
+}> {}
 
 // Better Auth core errors carry `message`; the OAuth provider uses `error_description`.
 const ProviderErrorBody = Schema.Struct({
@@ -38,54 +26,76 @@ const ProviderErrorBody = Schema.Struct({
 
 const describe = Schema.decodeUnknownOption(ProviderErrorBody);
 
-const providerBody = (cause: APIError) => ({
-  error: Option.getOrElse(
-    Option.flatMap(describe(cause.body), (value) =>
-      Option.fromNullishOr(value.message ?? value.error_description),
+const sentence = (cause: APIError) =>
+  Option.getOrElse(
+    Option.flatMap(describe(cause.body), (body) =>
+      Option.fromNullishOr(body.message ?? body.error_description),
     ),
     () => "Request could not be completed",
-  ),
-});
+  );
 
-/**
- * Every refusal this issuer answers with is administration's own, an `OwnerError`. Domain code
- * fails with these directly; only foreign failures — the provider SDK, SQLite, a persisted row —
- * are translated, here. Idempotent: already-public errors pass through unchanged.
- */
-export function apiError(cause: unknown): OwnerError {
-  if (isOwnerError(cause)) return cause;
+/** Provider SDK calls. A refusal keeps its status for the caller; anything else is the issuer's. */
+export const provider = <A>(operation: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: operation,
+    catch: (cause) =>
+      isAPIError(cause)
+        ? new ProviderFailure({ status: cause.statusCode, message: sentence(cause), cause })
+        : InternalServerError.of(cause),
+  });
 
-  if (isAPIError(cause)) {
-    const body = providerBody(cause);
+const isProviderFailure = (cause: unknown): cause is ProviderFailure =>
+  cause instanceof ProviderFailure;
 
-    switch (cause.statusCode) {
-      case 400:
-      case 422:
-        return new BadRequest(body);
-      // Owner routes are already authenticated: a provider 401 refuses an operation.
-      case 401:
-      case 403:
-        return new Action.Forbidden({ message: body.error });
-      case 404:
-        return new NotFound(body);
-      case 409:
-        return new Conflict(body);
-      case 429:
-        return new TooManyRequests(body);
-      case 503:
-        return new ServiceUnavailable(body);
-    }
-  }
+const isRefusal = (failure: ProviderFailure) => failure.status === 400 || failure.status === 422;
 
-  // A request body this issuer could not read — truncated, oversized, an abandoned
-  // upload — is the caller's, not a failure of its own.
-  if (HttpServerError.isHttpServerError(cause) && isRequestParseError(cause.reason))
-    return new BadRequest({ error: "Request body could not be read" });
+/** A provider refusal of the input, or else the issuer's own fault. */
+export const refused = <A, E, R>(effect: Effect.Effect<A, E | ProviderFailure, R>) =>
+  Effect.catchIf(effect, isProviderFailure, (failure) =>
+    Effect.fail(
+      isRefusal(failure)
+        ? new ProviderRefused({ message: failure.message })
+        : InternalServerError.of(failure),
+    ),
+  );
 
-  return internalError(cause);
-}
+/** As `refused`, with a provider 404 named by `notFound`. */
+export const refusedOrMissing =
+  <N>(notFound: () => N) =>
+  <A, E, R>(effect: Effect.Effect<A, E | ProviderFailure, R>) =>
+    Effect.catchIf(effect, isProviderFailure, (failure) =>
+      Effect.fail(
+        failure.status === 404
+          ? notFound()
+          : isRefusal(failure)
+            ? new ProviderRefused({ message: failure.message })
+            : InternalServerError.of(failure),
+      ),
+    );
 
-const isRequestParseError = Predicate.isTagged("RequestParseError");
+/** A provider 404 named by `notFound`; anything else the issuer's own fault. */
+export const missing =
+  <N>(notFound: () => N) =>
+  <A, E, R>(effect: Effect.Effect<A, E | ProviderFailure, R>) =>
+    Effect.catchIf(effect, isProviderFailure, (failure) =>
+      Effect.fail(failure.status === 404 ? notFound() : InternalServerError.of(failure)),
+    );
+
+/** Whatever the provider answered, the issuer's own fault. */
+export const internal = <A, E, R>(effect: Effect.Effect<A, E | ProviderFailure, R>) =>
+  Effect.catchIf(effect, isProviderFailure, (failure) =>
+    Effect.fail(InternalServerError.of(failure)),
+  );
+
+/** A provider that cannot decide now, or else the issuer's own fault. */
+export const undecided = <A, E, R>(effect: Effect.Effect<A, E | ProviderFailure, R>) =>
+  Effect.catchIf(effect, isProviderFailure, (failure) =>
+    Effect.fail(
+      failure.status === 503
+        ? new ServiceUnavailable({ message: failure.message })
+        : InternalServerError.of(failure),
+    ),
+  );
 
 /**
  * Input that decodes but cannot be served: effect-actions' built-in 400, which every endpoint
@@ -94,20 +104,51 @@ const isRequestParseError = Predicate.isTagged("RequestParseError");
 export const invalidInput = (path: Action.Issue["path"], message: string) =>
   new Action.InvalidInput({ message, issues: [{ path, message }] });
 
-/** Provider SDK calls fail with public API errors. */
-export const provider = <A>(operation: () => Promise<A>) =>
-  Effect.tryPromise({ try: operation, catch: apiError });
+type RouteError = IssuerError | Action.Forbidden;
 
-const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(ownerErrors));
+const routeErrors = [...errors, Action.Forbidden] as const;
 
-/** Encode only public error fields, with the error's own status. */
-export const apiErrorResponse = (error: OwnerError) => {
-  const schema = ownerErrors.find((schema) => Schema.is(schema)(error));
+const statuses = new Map<unknown, number>(
+  routeErrors.map(
+    (schema) => [schema, SchemaAST.resolveAt<number>("httpApiStatus")(schema.ast) ?? 500] as const,
+  ),
+);
 
-  if (schema === undefined) return Effect.die(new Error("Undeclared API error"));
+const isRouteError = (cause: unknown): cause is RouteError =>
+  routeErrors.some((schema) => Schema.is(schema)(cause));
+
+const isRequestParseError = Predicate.isTagged("RequestParseError");
+
+/**
+ * What a route that is not an action answers a failure with: forward auth, the provider
+ * bridge and `/healthz`. A provider 401 or 403 there refuses the operation.
+ */
+const routeError = (cause: unknown): RouteError => {
+  if (isRouteError(cause)) return cause;
+
+  if (cause instanceof ProviderFailure) {
+    if (isRefusal(cause)) return new ProviderRefused({ message: cause.message });
+
+    if (cause.status === 401 || cause.status === 403)
+      return new Action.Forbidden({ message: cause.message });
+
+    if (cause.status === 503) return new ServiceUnavailable({ message: cause.message });
+  }
+
+  // A request body this issuer could not read — truncated, oversized, an abandoned
+  // upload — is the caller's, not a failure of its own.
+  if (HttpServerError.isHttpServerError(cause) && isRequestParseError(cause.reason))
+    return new UnreadableRequest({ message: "Request body could not be read" });
+
+  return InternalServerError.of(cause);
+};
+
+const encodeResponse = HttpServerResponse.schemaJson(Schema.Union(routeErrors));
+
+/** Translate whatever a route failed with, once, into its public response. */
+export const respond = (cause: unknown) => {
+  const error = routeError(cause);
+  const schema = routeErrors.find((candidate) => Schema.is(candidate)(error));
 
   return encodeResponse(error, { status: statuses.get(schema) ?? 500 }).pipe(Effect.orDie);
 };
-
-/** Translate whatever a route failed with, once, into its public response. */
-export const respond = (cause: unknown) => apiErrorResponse(apiError(cause));

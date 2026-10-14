@@ -4,8 +4,7 @@ import { Kysely, sql as query } from "kysely";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { OwnerError } from "@clankerauth/admin-api";
-import { internalError } from "../issuer/errors.ts";
+import { InternalServerError } from "@clankerauth/admin-api";
 
 /** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
@@ -25,8 +24,8 @@ export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
   const decode = Schema.decodeUnknownEffect(schema);
 
   // eslint-disable-next-line anti-slop/no-unknown-parameters -- Persisted-row boundary: this is where the schema runs.
-  return (value: unknown): Effect.Effect<T, OwnerError, RD> =>
-    Effect.mapError(decode(value), internalError);
+  return (value: unknown): Effect.Effect<T, InternalServerError, RD> =>
+    Effect.mapError(decode(value), InternalServerError.of);
 };
 
 /** Run Effect queries through the same Kysely connection or transaction as Better Auth. */
@@ -34,10 +33,10 @@ export function makeSql(database: Kysely<DatabaseSchema>) {
   return <Row = SqliteRow>(
     strings: TemplateStringsArray,
     ...parameters: readonly unknown[]
-  ): Effect.Effect<readonly Row[], OwnerError> =>
+  ): Effect.Effect<readonly Row[], InternalServerError> =>
     Effect.tryPromise({
       try: async () => (await query<Row>(strings, ...parameters).execute(database)).rows,
-      catch: internalError,
+      catch: InternalServerError.of,
     });
 }
 
@@ -50,21 +49,21 @@ export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>
 ) {
   const trx = yield* Effect.tryPromise({
     try: () => database.startTransaction().execute(),
-    catch: internalError,
+    catch: InternalServerError.of,
   });
 
   const exit = yield* Effect.exit(operation(makeSql(trx)));
 
   // The body's own outcome is what callers see; a failed ROLLBACK cannot improve on it.
   const settle = Effect.ignore(
-    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: internalError }),
+    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: InternalServerError.of }),
   );
 
   // A failed COMMIT, such as a deferred constraint, leaves the transaction open on the
   // shared connection; roll it back before surfacing the failure.
   const commit = Effect.tryPromise({
     try: () => trx.commit().execute(),
-    catch: internalError,
+    catch: InternalServerError.of,
   }).pipe(Effect.tapError(() => settle));
 
   yield* Exit.isSuccess(exit) ? commit : settle;
@@ -103,7 +102,7 @@ export class Database extends Context.Service<
     readonly sql: Sql;
     readonly transaction: <A, E, R>(
       operation: (sql: Sql) => Effect.Effect<A, E, R>,
-    ) => Effect.Effect<A, E | OwnerError, R>;
+    ) => Effect.Effect<A, E | InternalServerError, R>;
   }
 >()("clankerauth/Database") {
   /** Opens `filename`, creating its directory, and closes the connection with the scope. */

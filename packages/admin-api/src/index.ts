@@ -4,77 +4,115 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
-export class BadRequest extends Schema.TaggedError<BadRequest>()(
-  "BadRequest",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 400 },
-) {}
-
-export class NotFound extends Schema.TaggedError<NotFound>()(
-  "NotFound",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 404 },
-) {}
-
-export class Conflict extends Schema.TaggedError<Conflict>()(
-  "Conflict",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 409 },
-) {}
-
-export class TooManyRequests extends Schema.TaggedError<TooManyRequests>()(
-  "TooManyRequests",
-  {
-    error: Schema.String,
-  },
-  { httpApiStatus: 429 },
-) {}
-
-/** The schema defines the public response; the diagnostic cause reaches logs, never a caller. */
+/**
+ * This issuer's own fault: a failed query, an unreadable row, an unexpected provider failure.
+ * The schema defines the public response; the diagnostic cause reaches logs, never a caller.
+ */
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
-  {
-    error: Schema.String,
-  },
+  { message: Schema.String },
   { httpApiStatus: 500 },
 ) {
   override cause?: unknown;
+
+  static readonly of = (cause: unknown) => {
+    const error = new InternalServerError({ message: "Request could not be completed" });
+    error.cause = cause;
+
+    return error;
+  };
 }
 
+/** The issuer could not decide the request now, such as when its session store is unreachable. */
 export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
   "ServiceUnavailable",
-  {
-    error: Schema.String,
-  },
+  { message: Schema.String },
   { httpApiStatus: 503 },
 ) {}
 
+export class ClientNotFound extends Schema.TaggedError<ClientNotFound>()(
+  "ClientNotFound",
+  { clientId: Schema.String, message: Schema.String },
+  { httpApiStatus: 404 },
+) {
+  static readonly of = (clientId: string) =>
+    new ClientNotFound({ clientId, message: `No client ${clientId} is registered` });
+}
+
+export class ResourceNotFound extends Schema.TaggedError<ResourceNotFound>()(
+  "ResourceNotFound",
+  { identifier: Schema.String, message: Schema.String },
+  { httpApiStatus: 404 },
+) {
+  static readonly of = (identifier: string) =>
+    new ResourceNotFound({ identifier, message: `No resource ${identifier} exists` });
+}
+
+export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
+  "ApiKeyNotFound",
+  { keyId: Schema.String, message: Schema.String },
+  { httpApiStatus: 404 },
+) {
+  static readonly of = (keyId: string) =>
+    new ApiKeyNotFound({ keyId, message: `No API key ${keyId} exists` });
+}
+
 /**
- * What every action may fail with, beside effect-actions' built-in `InvalidInput`,
- * `Unauthenticated` and `Forbidden`, which every endpoint and tool declares.
+ * The client registered itself, through DCR or CIMD: the owner can revoke, block or delete it,
+ * but its access and registration are its own, and consent decides what it gets.
  */
+export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
+  "ClientIsAutomatic",
+  { clientId: Schema.String, message: Schema.String },
+  { httpApiStatus: 409 },
+) {
+  static readonly of = (clientId: string) =>
+    new ClientIsAutomatic({
+      clientId,
+      message: `Client ${clientId} registered itself; revoke, block or delete it instead`,
+    });
+}
+
+/** First-run setup has already created the owner. */
+export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
+  "OwnerExists",
+  { message: Schema.String },
+  { httpApiStatus: 409 },
+) {
+  static readonly of = () => new OwnerExists({ message: "Setup already completed" });
+}
+
+/** The provider refused the request's input on a rule of its own, which `message` states. */
+export class ProviderRefused extends Schema.TaggedError<ProviderRefused>()(
+  "ProviderRefused",
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
+/** A request body the issuer could not read, on a route that is not an action. */
+export class UnreadableRequest extends Schema.TaggedError<UnreadableRequest>()(
+  "UnreadableRequest",
+  { message: Schema.String },
+  { httpApiStatus: 400 },
+) {}
+
+/** Every error of this contract. */
 export const errors = [
-  BadRequest,
-  NotFound,
-  Conflict,
-  TooManyRequests,
   InternalServerError,
   ServiceUnavailable,
+  ClientNotFound,
+  ResourceNotFound,
+  ApiKeyNotFound,
+  ClientIsAutomatic,
+  OwnerExists,
+  ProviderRefused,
+  UnreadableRequest,
 ] as const;
 
-/**
- * What administration refuses with, and the issuer answers its own routes with: the
- * contract's errors and the built-in `Forbidden`.
- */
-export const ownerErrors = [...errors, Action.Forbidden] as const;
+export type IssuerError = (typeof errors)[number]["Type"];
 
-export type OwnerError = (typeof ownerErrors)[number]["Type"];
+/** What authentication fails with when it cannot decide who is calling. */
+const undecided = [ServiceUnavailable, InternalServerError] as const;
 
 /**
  * The owner administering the issuer, as its authentication verified the request: what every
@@ -90,7 +128,7 @@ export interface Owner {
   readonly email: string;
   /** Whether the caller may change anything; the dashboard session always may. */
   readonly writable: boolean;
-  readonly providerHeaders: Effect.Effect<Headers, OwnerError, Scope.Scope>;
+  readonly providerHeaders: Effect.Effect<Headers, InternalServerError, Scope.Scope>;
 }
 
 /**
@@ -100,13 +138,12 @@ export interface Owner {
  * both its binding and its `Authentication.layer` from it: that layer serves only a binding
  * built from that very descriptor, not another naming the same cookie. A browser's binding,
  * from `OwnerSession`, only calls. Its verifier reads the session through the provider, so it
- * may fail as an action does, with any of `errors`, such as `ServiceUnavailable`, answered with
- * its own status.
+ * may fail with `ServiceUnavailable` or `InternalServerError`, answered with its own status.
  */
 export const ownerSession = (cookie: string) =>
   Authentication.make("clankerauth.OwnerSession", CurrentOwner, {
     security: HttpApiSecurity.apiKey({ in: "cookie", key: cookie }),
-    error: errors,
+    error: undecided,
   });
 
 /**
@@ -119,11 +156,11 @@ export const OwnerSession = ownerSession("better-auth.session_token");
 /**
  * An administration client's OAuth access token for the issuer's origin root, `<baseURL>/`,
  * over MCP or `OwnerHttp`. Its verifier reads the token's owner and client from the database,
- * so it may fail as an action does, with any of `errors`: `ServiceUnavailable` when the token
- * cannot be decided, or `InternalServerError`.
+ * so it may fail with `ServiceUnavailable` when the token cannot be decided, or
+ * `InternalServerError`.
  */
 export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentOwner, {
-  error: errors,
+  error: undecided,
 });
 
 /**
@@ -141,7 +178,15 @@ export const MINIMUM_PASSWORD_LENGTH = 8;
 
 export const MAXIMUM_PASSWORD_LENGTH = 128;
 
-export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
+const passwordRule = `Passwords have ${MINIMUM_PASSWORD_LENGTH} to ${MAXIMUM_PASSWORD_LENGTH} characters`;
+
+export const SetupInput = Schema.Struct({
+  email: Schema.String.check(Schema.isPattern(/\S/u, { message: "Setup requires an email" })),
+  password: Schema.String.check(
+    Schema.isMinLength(MINIMUM_PASSWORD_LENGTH, { message: passwordRule }),
+    Schema.isMaxLength(MAXIMUM_PASSWORD_LENGTH, { message: passwordRule }),
+  ),
+});
 
 export const ClientAuthMethod = Schema.Literals([
   "none",
@@ -312,11 +357,9 @@ export const ApiKey = Schema.Struct({
   createdAt: Timestamp,
 });
 
-/** What every issuer action shares: any caller, and the contract's errors. */
-const anyone = { caller: Action.Anyone, error: errors } as const;
+const anyone = { caller: Action.Anyone } as const;
 
-/** What every administration action shares: the owner as its caller, and the contract's errors. */
-const owned = { caller: CurrentOwner, error: errors } as const;
+const owned = { caller: CurrentOwner } as const;
 
 // These actions have their own access rules, not an owner-session requirement.
 // They are HTTP-only: bootstrap and key lists are not MCP administration tools.
@@ -325,12 +368,14 @@ export const IssuerActions = [
     description: "Check whether the issuer needs its first owner account.",
     readOnly: true,
     ...anyone,
+    error: [InternalServerError],
     success: Schema.Struct({ required: Schema.Boolean }),
   }),
   Action.make("setupOwner", {
     description: "Create the first owner account.",
     readOnly: false,
     ...anyone,
+    error: [OwnerExists, ProviderRefused, InternalServerError],
     input: SetupInput,
     success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
   }),
@@ -339,6 +384,7 @@ export const IssuerActions = [
       "The signed list a resource server verifies API keys against: one sealed entry per key granted on the resource, readable only with that key.",
     readOnly: true,
     ...anyone,
+    error: [InternalServerError],
     input: Schema.Struct({ resource: Schema.String }),
     success: Schema.Struct({ list: Schema.String }),
   }),
@@ -359,12 +405,14 @@ export const Administration = [
       "List clients, resources, managed clients' resource access (what they may obtain), and every client's connections (what it holds).",
     readOnly: true,
     ...owned,
+    error: [InternalServerError],
     success: ClientListResult,
   }),
   Action.make("createClient", {
     description: "Register a first-party OAuth client. Returns its secret once when confidential.",
     readOnly: false,
     ...owned,
+    error: [ProviderRefused, InternalServerError],
     input: ClientInput,
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
   }),
@@ -372,6 +420,7 @@ export const Administration = [
     description: "Rename a first-party client or change its redirect URIs and application type.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, ClientIsAutomatic, ProviderRefused, InternalServerError],
     input: ClientUpdateInput,
     success: Client,
   }),
@@ -380,6 +429,7 @@ export const Administration = [
       "Delete a client and its stored authorization. An automatic client can register again; block it to keep it out.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, InternalServerError],
     input: ClientId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
@@ -388,6 +438,7 @@ export const Administration = [
       "Revoke a client’s stored authorization, for one resource or all. It must authorize again; an automatic client asks for consent.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, InternalServerError],
     input: ClientRevokeInput,
     success: Schema.Struct({ revoked: Schema.Boolean }),
   }),
@@ -395,6 +446,7 @@ export const Administration = [
     description: "Block or unblock OAuth authorization for a client.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, InternalServerError],
     input: ClientBlockInput,
     success: Schema.Struct({ blocked: Schema.Boolean }),
   }),
@@ -402,6 +454,7 @@ export const Administration = [
     description: "Rotate a confidential client secret. Returns the new secret once.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, ClientIsAutomatic, ProviderRefused, InternalServerError],
     input: ClientId,
     success: ClientCredentials,
   }),
@@ -410,6 +463,7 @@ export const Administration = [
       "Set the resources a managed client may obtain. Removing one revokes its authorization for it. Automatic clients may ask for any resource with consent.",
     readOnly: false,
     ...owned,
+    error: [ClientNotFound, ClientIsAutomatic, InternalServerError],
     input: ClientAccessInput,
     success: ClientAccessResult,
   }),
@@ -417,6 +471,7 @@ export const Administration = [
     description: "Create an OAuth resource and its scopes.",
     readOnly: false,
     ...owned,
+    error: [ProviderRefused, InternalServerError],
     input: ResourceInput,
     success: Resource.pipe(HttpApiSchema.status(201)),
   }),
@@ -424,6 +479,7 @@ export const Administration = [
     description: "Update an OAuth resource and its scopes.",
     readOnly: false,
     ...owned,
+    error: [ResourceNotFound, ProviderRefused, InternalServerError],
     input: ResourceInput,
     success: Resource,
   }),
@@ -432,6 +488,7 @@ export const Administration = [
       "Delete a resource, its client access and every client’s authorization for it. API-key permissions are retained; recreating the resource restores them.",
     readOnly: false,
     ...owned,
+    error: [ResourceNotFound, InternalServerError],
     input: ResourceId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),
@@ -439,12 +496,14 @@ export const Administration = [
     description: "List API key metadata without secret values.",
     readOnly: true,
     ...owned,
+    error: [InternalServerError],
     success: Schema.Struct({ keys: Schema.Array(ApiKey) }),
   }),
   Action.make("createApiKey", {
     description: "Create a scoped API key. Returns its secret once.",
     readOnly: false,
     ...owned,
+    error: [ProviderRefused, InternalServerError],
     input: ApiKeyInput,
     success: ApiKey.pipe(Schema.fieldsAssign({ key: Schema.String }), HttpApiSchema.status(201)),
   }),
@@ -452,6 +511,7 @@ export const Administration = [
     description: "Update an API key’s name, permissions or enabled state.",
     readOnly: false,
     ...owned,
+    error: [ApiKeyNotFound, ProviderRefused, InternalServerError],
     input: ApiKeyUpdate,
     success: ApiKey,
   }),
@@ -459,6 +519,7 @@ export const Administration = [
     description: "Delete an API key.",
     readOnly: false,
     ...owned,
+    error: [ApiKeyNotFound, InternalServerError],
     input: ApiKeyId,
     success: Schema.Struct({ deleted: Schema.Boolean }),
   }),

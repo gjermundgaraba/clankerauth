@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { sql as query } from "kysely";
-import { ClientAccess, type OwnerError, type Resource } from "@clankerauth/admin-api";
+import { ClientAccess, type InternalServerError, type Resource } from "@clankerauth/admin-api";
 import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
 
@@ -69,19 +69,24 @@ export const accessForClient = Effect.fn("Resources.accessForClient")(function* 
 export class ResourceCatalog extends Context.Service<
   ResourceCatalog,
   {
-    readonly list: () => Effect.Effect<ResourceValue[], OwnerError>;
-    readonly get: (identifier: string) => Effect.Effect<ResourceValue | undefined, OwnerError>;
+    readonly list: () => Effect.Effect<ResourceValue[], InternalServerError>;
+    readonly get: (
+      identifier: string,
+    ) => Effect.Effect<ResourceValue | undefined, InternalServerError>;
     /** Every managed client's resource links; automatic clients have none. */
-    readonly access: () => Effect.Effect<ReadonlyArray<typeof ClientAccess.Type>, OwnerError>;
+    readonly access: () => Effect.Effect<
+      ReadonlyArray<typeof ClientAccess.Type>,
+      InternalServerError
+    >;
     /** An automatic client may ask for any resource; a managed one only for its own. */
     readonly hasAccess: (
       clientId: string,
       identifier: string,
-    ) => Effect.Effect<boolean, OwnerError>;
+    ) => Effect.Effect<boolean, InternalServerError>;
     /** The scopes `identifiers` define, refusing an unknown one as invalid input. */
     readonly scopesFor: (
       identifiers: readonly string[],
-    ) => Effect.Effect<string[], OwnerError | ReturnType<typeof invalidInput>>;
+    ) => Effect.Effect<string[], InternalServerError | ReturnType<typeof invalidInput>>;
   }
 >()("clankerauth/ResourceCatalog") {
   static readonly layer = Layer.effect(

@@ -58,7 +58,7 @@ describe("API integration", () => {
 
       const repeatedSetup = yield* Effect.flip(api.setupOwner({ email, password }));
 
-      expect(repeatedSetup._tag).toBe("Conflict");
+      expect(repeatedSetup._tag).toBe("OwnerExists");
 
       const anonymous = yield* Effect.flip(api.listClients());
       expect(anonymous._tag).toBe("Unauthenticated");
@@ -197,7 +197,7 @@ describe("API integration", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual(
       Schema.encodeSync(ServiceUnavailable)(
-        new ServiceUnavailable({ error: "Session store unavailable" }),
+        new ServiceUnavailable({ message: "Session store unavailable" }),
       ),
     );
 
@@ -278,9 +278,9 @@ describe("API integration", () => {
       expect(listing.clientAccess).toEqual([]);
       expect(listing.connections).toEqual([]);
       expect((yield* Effect.flip(api.setClientAccess({ client_id, resources: [] })))._tag).toBe(
-        "BadRequest",
+        "ClientIsAutomatic",
       );
-      // The provider refuses to edit clients the owner does not own.
+      // The owner edits only the clients the owner registered.
       expect(
         (yield* Effect.flip(
           api.updateClient({
@@ -290,7 +290,7 @@ describe("API integration", () => {
             application_type: "native",
           }),
         ))._tag,
-      ).toBe("Forbidden");
+      ).toBe("ClientIsAutomatic");
       expect(yield* api.revokeClient({ client_id })).toEqual({
         revoked: true,
       });
@@ -360,11 +360,11 @@ describe("API integration", () => {
         .map((value) => value.split(";")[0])
         .join("; ");
       const missing = { client_id: "missing-client" };
-      expect((yield* Effect.flip(api.revokeClient(missing)))._tag).toBe("NotFound");
+      expect((yield* Effect.flip(api.revokeClient(missing)))._tag).toBe("ClientNotFound");
 
       for (const blocked of [true, false]) {
         expect((yield* Effect.flip(api.blockClient({ ...missing, blocked })))._tag).toBe(
-          "NotFound",
+          "ClientNotFound",
         );
       }
 

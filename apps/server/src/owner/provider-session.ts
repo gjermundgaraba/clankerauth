@@ -1,6 +1,6 @@
 import { serializeSignedCookie } from "better-call";
 import { Clock, Effect } from "effect";
-import { provider } from "../issuer/errors.ts";
+import { internal, provider } from "../issuer/errors.ts";
 import type { ProviderContext } from "../issuer/issuer.ts";
 
 /** The pinned provider's administration APIs require a signed session cookie.
@@ -12,24 +12,32 @@ export const providerSessionFor = (context: ProviderContext, origin: string) =>
     const expiresAt = new Date((yield* Clock.currentTimeMillis) + 60_000);
 
     const session = yield* Effect.acquireRelease(
-      provider(() => context.internalAdapter.createSession(userId, true, { expiresAt }, true)),
+      internal(
+        provider(() => context.internalAdapter.createSession(userId, true, { expiresAt }, true)),
+      ),
       (session) => Effect.promise(() => context.internalAdapter.deleteSession(session.token)),
     );
 
-    const cookie = yield* provider(async () =>
-      (
-        await Promise.all([
-          serializeSignedCookie(
-            context.authCookies.sessionToken.name,
-            session.token,
-            context.secret,
-          ),
-          // Prevent getSession from extending this request-local session's expiry.
-          serializeSignedCookie(context.authCookies.dontRememberToken.name, "true", context.secret),
-        ])
-      )
-        .map((cookie) => cookie.split(";")[0])
-        .join("; "),
+    const cookie = yield* internal(
+      provider(async () =>
+        (
+          await Promise.all([
+            serializeSignedCookie(
+              context.authCookies.sessionToken.name,
+              session.token,
+              context.secret,
+            ),
+            // Prevent getSession from extending this request-local session's expiry.
+            serializeSignedCookie(
+              context.authCookies.dontRememberToken.name,
+              "true",
+              context.secret,
+            ),
+          ])
+        )
+          .map((cookie) => cookie.split(";")[0])
+          .join("; "),
+      ),
     );
 
     return new Headers({ origin, cookie });

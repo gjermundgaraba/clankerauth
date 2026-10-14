@@ -10,7 +10,7 @@ import { Array, Effect, Option, Schema, pipe } from "effect";
 /** The issuer's administration actions, each an Effect a Command runs. */
 export const issuer = ActionHttp.fetchClient(Http);
 
-/** The issuer's own errors, which every action declares: their sentence is `error`. */
+/** The issuer's own errors, each of which names its subject: their sentence is `message`. */
 const isIssuerError = Schema.is(Schema.Union(errors));
 
 /** effect-actions' own errors, which every endpoint declares: their sentence is `message`. */
@@ -26,7 +26,7 @@ const UNKNOWN_FAILURE = "Request could not be completed. Please try again.";
  */
 const reasonOf = <E>(error: E): string => {
   if (isIssuerError(error)) {
-    return error.error;
+    return error.message;
   }
 
   if (error instanceof Action.InvalidInput) {

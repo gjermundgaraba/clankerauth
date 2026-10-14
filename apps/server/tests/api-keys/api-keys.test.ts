@@ -466,14 +466,14 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
   expect(listing.status).toBe(500);
 
   const expected = Schema.encodeSync(InternalServerError)(
-    new InternalServerError({ error: "Request could not be completed" }),
+    new InternalServerError({ message: "Request could not be completed" }),
   );
 
   expect(await listing.json()).toEqual(expected);
 
   const administration = await ownerTools();
   const tool = await Effect.runPromise(Effect.flip(administration.listClients()));
-  expect(tool).toEqual(new InternalServerError({ error: "Request could not be completed" }));
+  expect(tool).toEqual(new InternalServerError({ message: "Request could not be completed" }));
 });
 
 test("a key with malformed stored permissions grants nothing, stays listed and can be deleted", async () => {
