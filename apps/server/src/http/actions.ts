@@ -8,45 +8,44 @@ import {
   Administration,
   binding,
   IssuerActions,
-  InternalServerError,
   ownerSession,
   OwnerHttp,
   OwnerToken,
 } from "@clankerauth/admin-api";
 import manifest from "../../package.json" with { type: "json" };
-import { clientActions } from "../clients/actions.ts";
-import { resourceActions } from "../resources/actions.ts";
+import { Clients } from "../clients/clients.ts";
+import { Resources } from "../resources/resources.ts";
 import { setupActions } from "../owner/setup.ts";
 import { administrationResource } from "../owner/administration-resource.ts";
-import { machineKeys } from "../api-keys/api-keys.ts";
+import { ApiKeys } from "../api-keys/api-keys.ts";
 import { authorizeOwner, bearerOwner, sessionOwner } from "../owner/authentication.ts";
-import { administrationScopes } from "../resources/resources.ts";
+import { administrationScopes } from "../resources/catalog.ts";
 import { responseCookies } from "./response-cookies.ts";
-import { Auth } from "../issuer/issuer.ts";
+import { Issuer } from "../issuer/issuer.ts";
 
 export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
   return Layer.unwrap(
     Effect.gen(function* () {
-      const service = yield* Auth;
-      const admin = yield* clientActions;
-      const resources = yield* resourceActions;
+      const { context } = yield* Issuer;
+      const clients = yield* Clients;
+      const resources = yield* Resources;
       const setup = yield* setupActions;
-      const keys = yield* machineKeys;
+      const keys = yield* ApiKeys;
 
       const owner = Action.implement(
         Administration,
         {
-          listClients: admin.list,
-          createClient: admin.create,
-          updateClient: admin.update,
-          deleteClient: admin.delete,
-          revokeClient: admin.revoke,
-          blockClient: admin.block,
-          rotateClientSecret: admin.rotate,
-          setClientAccess: admin.access,
-          createResource: resources.createResource,
-          updateResource: resources.updateResource,
-          deleteResource: resources.deleteResource,
+          listClients: clients.list,
+          createClient: clients.create,
+          updateClient: clients.update,
+          deleteClient: clients.delete,
+          revokeClient: clients.revoke,
+          blockClient: clients.block,
+          rotateClientSecret: clients.rotate,
+          setClientAccess: clients.setAccess,
+          createResource: resources.create,
+          updateResource: resources.update,
+          deleteResource: resources.delete,
           listApiKeys: keys.list,
           createApiKey: keys.create,
           updateApiKey: keys.update,
@@ -57,13 +56,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
 
       // Public: their handlers hold their own access rules, and no identity reaches them.
       const issuer = Action.implement(IssuerActions, {
-        setupStatus: () =>
-          service.owner().pipe(
-            Effect.map((owner) => ({ required: !owner })),
-            Effect.mapError(
-              () => new InternalServerError({ error: "Request could not be completed" }),
-            ),
-          ),
+        setupStatus: setup.setupStatus,
         setupOwner: setup.setupOwner,
         keyList: ({ resource }) => keys.keyList(resource),
       });
@@ -72,7 +65,7 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
 
       // The session cookie as this deployment names it, `__Secure-` prefixed over HTTPS, which
       // the binding's routes read and its OpenAPI document names.
-      const session = ownerSession(service.context.authCookies.sessionToken.name);
+      const session = ownerSession(context.authCookies.sessionToken.name);
       const Http = binding(session);
 
       // Owner administration needs the dashboard session; issuer actions are public, with

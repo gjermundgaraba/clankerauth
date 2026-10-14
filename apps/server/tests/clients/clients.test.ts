@@ -3,8 +3,13 @@ import { BadRequest, NotFound } from "@clankerauth/admin-api";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { createHash } from "node:crypto";
 import { convertSetCookieToCookie } from "better-auth/test";
-import { createOwner } from "../../src/owner/setup.ts";
-import { openIssuer, type Issuer } from "../open-issuer.ts";
+import { openIssuer, type OpenedIssuer, withOwnerHeaders } from "../open-issuer.ts";
+import { Database } from "../../src/platform/sqlite.ts";
+import { OwnerAccount } from "../../src/owner/owner.ts";
+import { Issuer } from "../../src/issuer/issuer.ts";
+import { ResourceCatalog } from "../../src/resources/catalog.ts";
+import { Resources } from "../../src/resources/resources.ts";
+import { Clients } from "../../src/clients/clients.ts";
 
 const baseURL = "http://localhost:4183";
 
@@ -27,7 +32,7 @@ type ClientMetadata = {
   response_types?: string[];
 };
 
-let issuer: Issuer;
+let issuer: OpenedIssuer;
 
 let cookie: string;
 
@@ -67,7 +72,7 @@ async function request(path: string, body?: AuthRequestBody, authenticated = fal
         : JSON.stringify(body);
   }
 
-  return issuer.service.auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
+  return issuer.get(Issuer).auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
 }
 
 function authorization(
@@ -143,7 +148,9 @@ const refresh = (id: string, token: string, identifier = resource) =>
   });
 
 const blocked = (id: string) =>
-  Effect.runPromise(issuer.service.sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`);
+  Effect.runPromise(
+    issuer.get(Database).sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`,
+  );
 
 const consentRequired = async (id: string, identifier = resource, scope?: string) =>
   (await request(authorization(id, identifier, 4184, scope), undefined, true)).headers.get(
@@ -154,15 +161,15 @@ const second = "https://second.example/mcp";
 
 const addSecond = () =>
   Effect.runPromise(
-    issuer.service.resources.create(
-      { identifier: second, name: "Second", scopes: ["second:read"] },
-      ownerHeaders(),
-    ),
+    issuer
+      .get(Resources)
+      .create({ identifier: second, name: "Second", scopes: ["second:read"] })
+      .pipe(withOwnerHeaders(ownerHeaders())),
   );
 
 /** A first-party public client with access to the test resource, which skips consent. */
 async function managed() {
-  const client = await issuer.service.auth.api.adminCreateOAuthClient({
+  const client = await issuer.get(Issuer).auth.api.adminCreateOAuthClient({
     headers: ownerHeaders(),
     body: {
       client_name: "Managed client",
@@ -175,7 +182,9 @@ async function managed() {
     },
   });
 
-  await Effect.runPromise(issuer.service.resources.setAccess(client.client_id, [resource]));
+  await Effect.runPromise(
+    issuer.get(Resources).setAccess({ client_id: client.client_id, resources: [resource] }),
+  );
 
   return client.client_id;
 }
@@ -197,9 +206,9 @@ beforeEach(async () => {
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
   };
-  issuer = await openIssuer({ baseURL }, { cimdTransport });
+  issuer = await openIssuer({ baseURL }, cimdTransport);
   await issuer.run(
-    createOwner(issuer.service, {
+    issuer.get(OwnerAccount).create({
       email: "owner@example.com",
       password: "test-password-long-enough",
     }),
@@ -213,10 +222,10 @@ beforeEach(async () => {
   expect(login.status).toBe(200);
   cookie = convertSetCookieToCookie(login.headers).get("cookie") ?? "";
   await Effect.runPromise(
-    issuer.service.resources.create(
-      { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
-      ownerHeaders(),
-    ),
+    issuer
+      .get(Resources)
+      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
+      .pipe(withOwnerHeaders(ownerHeaders())),
   );
 });
 
@@ -231,7 +240,9 @@ test("DCR infers native callbacks, keeps PKCE and consent, and revocation ends r
   expect(alternate.headers.get("location")).toContain("/consent");
   const tokens = await grant(client.client_id);
   expect(tokens.access_token).toBeTypeOf("string");
-  expect(await Effect.runPromise(issuer.service.clients.revoke(client.client_id))).toEqual({
+  expect(
+    await Effect.runPromise(issuer.get(Clients).revoke({ client_id: client.client_id })),
+  ).toEqual({
     revoked: true,
   });
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
@@ -270,7 +281,9 @@ test.each(["dcr", "cimd"])(
     expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
       "/consent",
     );
-    await Effect.runPromise(issuer.service.resources.delete(resource, ownerHeaders()));
+    await Effect.runPromise(
+      issuer.get(Resources).delete({ identifier: resource }).pipe(withOwnerHeaders(ownerHeaders())),
+    );
     expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
     expect(await consentRequired(client.client_id)).not.toContain("/consent");
   },
@@ -280,20 +293,24 @@ test("automatic clients have no configurable resource access", async () => {
   const client = await register();
 
   expect(
-    await Effect.runPromise(Effect.flip(issuer.service.resources.setAccess(client.client_id, []))),
+    await Effect.runPromise(
+      Effect.flip(issuer.get(Resources).setAccess({ client_id: client.client_id, resources: [] })),
+    ),
   ).toEqual(
     new BadRequest({
       error: "Automatic Clients may ask for any Resource; revoke or block them instead",
     }),
   );
-  expect(await Effect.runPromise(issuer.service.resources.access())).toEqual([]);
+  expect(await Effect.runPromise(issuer.get(ResourceCatalog).access())).toEqual([]);
 });
 
 test("blocking uses the provider's disabled flag and survives CIMD metadata rediscovery", async () => {
   expect(await consentRequired(clientId)).toContain("/consent");
   expect(fetches).toBe(1);
   const tokens = await grant(clientId);
-  expect(await Effect.runPromise(issuer.service.clients.block(clientId, true))).toEqual({
+  expect(
+    await Effect.runPromise(issuer.get(Clients).block({ client_id: clientId, blocked: true })),
+  ).toEqual({
     blocked: true,
   });
   expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
@@ -303,7 +320,9 @@ test("blocking uses the provider's disabled flag and survives CIMD metadata redi
   expect(await consentRequired(clientId)).not.toContain("/consent");
   expect(fetches).toBe(2);
   expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
-  expect(await Effect.runPromise(issuer.service.clients.block(clientId, false))).toEqual({
+  expect(
+    await Effect.runPromise(issuer.get(Clients).block({ client_id: clientId, blocked: false })),
+  ).toEqual({
     blocked: false,
   });
   expect(await consentRequired(clientId)).toContain("/consent");
@@ -311,20 +330,26 @@ test("blocking uses the provider's disabled flag and survives CIMD metadata redi
 
 test("blocking a dynamically registered client rejects authorization until unblocked", async () => {
   const client = await register();
-  await Effect.runPromise(issuer.service.clients.block(client.client_id, true));
+  await Effect.runPromise(
+    issuer.get(Clients).block({ client_id: client.client_id, blocked: true }),
+  );
   const blocked = await request(authorization(client.client_id), undefined, true);
   expect(blocked.headers.get("location") ?? "").not.toContain("/consent");
-  await Effect.runPromise(issuer.service.clients.block(client.client_id, false));
+  await Effect.runPromise(
+    issuer.get(Clients).block({ client_id: client.client_id, blocked: false }),
+  );
   expect(await consentRequired(client.client_id)).toContain("/consent");
 });
 
 test("block and revoke report unknown clients", async () => {
   const missing = new NotFound({ error: "Client not found" });
-  expect(await Effect.runPromise(Effect.flip(issuer.service.clients.revoke("missing")))).toEqual(
-    missing,
-  );
   expect(
-    await Effect.runPromise(Effect.flip(issuer.service.clients.block("missing", true))),
+    await Effect.runPromise(Effect.flip(issuer.get(Clients).revoke({ client_id: "missing" }))),
+  ).toEqual(missing);
+  expect(
+    await Effect.runPromise(
+      Effect.flip(issuer.get(Clients).block({ client_id: "missing", blocked: true })),
+    ),
   ).toEqual(missing);
 });
 
@@ -340,7 +365,7 @@ test("CIMD rejects malformed metadata before persisting a client", async () => {
   expect(await consentRequired(clientId)).not.toContain("/consent");
   expect(
     await Effect.runPromise(
-      issuer.service.sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
+      issuer.get(Database).sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
     ),
   ).toEqual([]);
 });
@@ -365,7 +390,7 @@ test("revoking one resource leaves the client's other authorization", async () =
   );
 
   expect(consent.status, await consent.clone().text()).toBe(200);
-  const listed = await Effect.runPromise(issuer.service.clients.connections());
+  const listed = await Effect.runPromise(issuer.get(Clients).connections());
   expect(listed.map((connection) => [connection.resource, connection.scopes])).toEqual([
     [resource, ["resource:read"]],
     [second, ["second:read"]],
@@ -375,9 +400,11 @@ test("revoking one resource leaves the client's other authorization", async () =
   // Approved but the code was never exchanged, so no refresh token exists.
   expect(listed[1]?.refreshedAt).toBeNull();
 
-  await Effect.runPromise(issuer.service.clients.revoke(client.client_id, second));
+  await Effect.runPromise(
+    issuer.get(Clients).revoke({ client_id: client.client_id, resource: second }),
+  );
   expect(
-    (await Effect.runPromise(issuer.service.clients.connections())).map((c) => c.resource),
+    (await Effect.runPromise(issuer.get(Clients).connections())).map((c) => c.resource),
   ).toEqual([resource]);
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
   expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
@@ -388,29 +415,35 @@ test("revoking one resource leaves the client's other authorization", async () =
 test("the owner can delete an automatic client, which may register again", async () => {
   const client = await register();
   const tokens = await grant(client.client_id);
-  expect(await Effect.runPromise(issuer.service.clients.delete(client.client_id))).toEqual({
+  expect(
+    await Effect.runPromise(issuer.get(Clients).delete({ client_id: client.client_id })),
+  ).toEqual({
     deleted: true,
   });
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
   expect(
-    await Effect.runPromise(Effect.flip(issuer.service.clients.delete(client.client_id))),
+    await Effect.runPromise(
+      Effect.flip(issuer.get(Clients).delete({ client_id: client.client_id })),
+    ),
   ).toEqual(new NotFound({ error: "Client not found" }));
 
   expect(await consentRequired(clientId)).toContain("/consent");
-  await Effect.runPromise(issuer.service.clients.delete(clientId));
+  await Effect.runPromise(issuer.get(Clients).delete({ client_id: clientId }));
   expect(await consentRequired(clientId)).toContain("/consent");
 });
 
 test("a recreated resource does not revive authorization given for the deleted one", async () => {
   const client = await register();
   const tokens = await grant(client.client_id);
-  await Effect.runPromise(issuer.service.resources.delete(resource, ownerHeaders()));
   await Effect.runPromise(
-    issuer.service.resources.create(
-      { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
-      ownerHeaders(),
-    ),
+    issuer.get(Resources).delete({ identifier: resource }).pipe(withOwnerHeaders(ownerHeaders())),
+  );
+  await Effect.runPromise(
+    issuer
+      .get(Resources)
+      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
+      .pipe(withOwnerHeaders(ownerHeaders())),
   );
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
   expect(await consentRequired(client.client_id)).toContain("/consent");
@@ -420,22 +453,27 @@ test("creating a resource clears authorization a failed deletion left behind", a
   const client = await register();
   const tokens = await grant(client.client_id);
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`CREATE TRIGGER fail_clear BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`,
   );
   expect(
     Exit.isFailure(
-      await Effect.runPromiseExit(issuer.service.resources.delete(resource, ownerHeaders())),
+      await Effect.runPromiseExit(
+        issuer
+          .get(Resources)
+          .delete({ identifier: resource })
+          .pipe(withOwnerHeaders(ownerHeaders())),
+      ),
     ),
   ).toBe(true);
-  await Effect.runPromise(issuer.service.sql`DROP TRIGGER fail_clear`);
-  expect(await Effect.runPromise(issuer.service.resources.get(resource))).toBeUndefined();
+  await Effect.runPromise(issuer.get(Database).sql`DROP TRIGGER fail_clear`);
+  expect(await Effect.runPromise(issuer.get(ResourceCatalog).get(resource))).toBeUndefined();
 
   await Effect.runPromise(
-    issuer.service.resources.create(
-      { identifier: resource, name: "Test resource", scopes: ["resource:read"] },
-      ownerHeaders(),
-    ),
+    issuer
+      .get(Resources)
+      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
+      .pipe(withOwnerHeaders(ownerHeaders())),
   );
   expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
   expect(await consentRequired(client.client_id)).toContain("/consent");
@@ -443,7 +481,7 @@ test("creating a resource clears authorization a failed deletion left behind", a
 
 test("a managed client, which skips consent, shows a connection while it holds a refresh token", async () => {
   const id = await managed();
-  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
 
   const response = await request(authorization(id), undefined, true);
   expect(response.status, await response.clone().text()).toBe(302);
@@ -460,7 +498,7 @@ test("a managed client, which skips consent, shows a connection while it holds a
   });
 
   expect(tokens.status, await tokens.clone().text()).toBe(200);
-  const [connection, ...rest] = await Effect.runPromise(issuer.service.clients.connections());
+  const [connection, ...rest] = await Effect.runPromise(issuer.get(Clients).connections());
   expect(rest).toEqual([]);
   expect(connection).toMatchObject({
     client_id: id,
@@ -470,6 +508,6 @@ test("a managed client, which skips consent, shows a connection while it holds a
   });
   expect(connection?.refreshedAt).not.toBeNull();
 
-  await Effect.runPromise(issuer.service.clients.revoke(id, resource));
-  expect(await Effect.runPromise(issuer.service.clients.connections())).toEqual([]);
+  await Effect.runPromise(issuer.get(Clients).revoke({ client_id: id, resource: resource }));
+  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
 });

@@ -3,9 +3,9 @@ import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { Effect, Schema } from "effect";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { webApplication as application } from "../web-application.ts";
-import { createOwner } from "../../src/owner/setup.ts";
 import { forwardClientId, forwardCookie } from "../../src/forward-auth/forward-auth.ts";
-import { openIssuer, type Issuer } from "../open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "../open-issuer.ts";
+import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const origin = "https://clankerauth.home.example";
 
@@ -15,7 +15,7 @@ const page = "https://notes.home.example/docs?x=1";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-let issuer: Issuer;
+let issuer: OpenedIssuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -72,8 +72,8 @@ const continueURL = (original = page) =>
 
 beforeEach(async () => {
   issuer = await openIssuer({ baseURL: origin, cookieDomain: "home.example" });
-  handle = application(issuer.service);
-  await issuer.run(createOwner(issuer.service, owner));
+  handle = application(issuer);
+  await issuer.run(issuer.get(OwnerAccount).create(owner));
   session = "";
   const login = await call("/api/auth/sign-in/email", owner);
   expect(login.status).toBe(200);
@@ -132,7 +132,7 @@ test("the signed-in owner continues to the app with a domain-wide forward cookie
   });
 
   expect(protectedHeader.alg).toBe("EdDSA");
-  expect(payload.sub).toBe(await Effect.runPromise(issuer.service.owner()));
+  expect(payload.sub).toBe(await Effect.runPromise(issuer.get(OwnerAccount).find()));
   expect(payload.client_id).toBe(forwardClientId);
   expect(payload.scope).toBe("notes:read notes:write");
   expect(payload.exp! - payload.iat!).toBe(15 * 60);

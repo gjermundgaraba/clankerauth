@@ -8,9 +8,12 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { nodeHandler } from "../src/http/application.ts";
 import { createNodeServer } from "../src/platform/node-http.ts";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner } from "../src/owner/setup.ts";
-import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
 import { administrationResource, mcpOAuthGrant, oauthToken } from "./mcp-oauth-helper.ts";
+import { Database } from "../src/platform/sqlite.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
+import { Issuer } from "../src/issuer/issuer.ts";
+import { Resources } from "../src/resources/resources.ts";
 
 const baseURL = "http://localhost:3000";
 
@@ -36,7 +39,7 @@ type PrivateKeyRegistration = {
   jwks?: { keys: object[] };
 };
 
-let issuer: Issuer;
+let issuer: OpenedIssuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -75,9 +78,9 @@ const neitherScope = Schema.encodeSync(Action.Forbidden)(
 
 beforeEach(async () => {
   issuer = await openIssuer({ baseURL });
-  handle = application(issuer.service);
+  handle = application(issuer);
   await issuer.run(
-    createOwner(issuer.service, {
+    issuer.get(OwnerAccount).create({
       email: "owner@example.internal",
       password: "test-only password123",
     }),
@@ -181,7 +184,7 @@ test("anonymous discovery leads to PKCE owner consent, bearer administration, an
 
 test("an aborted MCP tool call settles its provider work and compensation before shutdown", async () => {
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
-  const { api } = issuer.service.auth;
+  const { api } = issuer.get(Issuer).auth;
   const createClient = api.adminCreateOAuthClient;
   const deleteClient = api.deleteOAuthClient;
   const entered = Promise.withResolvers<void>();
@@ -196,7 +199,7 @@ test("an aborted MCP tool call settles its provider work and compensation before
     return createClient(context);
   });
   // Fail once the provider has created the client, so the handler has to remove it again.
-  vi.spyOn(issuer.service.resources, "setAccess").mockReturnValue(
+  vi.spyOn(issuer.get(Resources), "setAccess").mockReturnValue(
     Effect.fail(new InternalServerError({ error: "Request could not be completed" })),
   );
   vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
@@ -260,7 +263,8 @@ test("an aborted MCP tool call settles its provider work and compensation before
 
   expect(
     await Effect.runPromise(
-      issuer.service.sql`SELECT clientId FROM oauthClient WHERE name = ${"Aborted through MCP"}`,
+      issuer.get(Database)
+        .sql`SELECT clientId FROM oauthClient WHERE name = ${"Aborted through MCP"}`,
     ),
   ).toEqual([]);
 });
@@ -331,12 +335,12 @@ test("the administration resource is fixed, and every start restores it", async 
   expect((await admin("updateResource", { ...resource, name: "Renamed" })).status).toBe(400);
   expect((await admin("deleteResource", { identifier: resource.identifier })).status).toBe(400);
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE oauthResource SET name = 'Tampered', allowedScopes = ${JSON.stringify(["offline_access"])} WHERE identifier = ${resource.identifier}`,
   );
   await handle.dispose();
   issuer = await issuer.reopen();
-  handle = application(issuer.service);
+  handle = application(issuer);
   expect((await (await admin("listClients", {})).json()).resources).toEqual([resource]);
 });
 
@@ -482,7 +486,7 @@ test("MCP protocol and owner-identity operations do not acquire provider session
   ).toBe(201);
   const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   const target = await mcpOAuthGrant(handle, baseURL, cookie);
-  const { context } = issuer.service;
+  const { context } = issuer.get(Issuer);
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
@@ -542,9 +546,12 @@ test("MCP protocol and owner-identity operations do not acquire provider session
 
 test("provider-backed MCP writes release temporary sessions and offline grants survive owner sign-out", async () => {
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
-  const sessions = () => Effect.runPromise(issuer.service.sql`SELECT id FROM session ORDER BY id`);
+
+  const sessions = () =>
+    Effect.runPromise(issuer.get(Database).sql`SELECT id FROM session ORDER BY id`);
+
   const before = await sessions();
-  const { context } = issuer.service;
+  const { context } = issuer.get(Issuer);
   const createSession = vi.spyOn(context.internalAdapter, "createSession");
   const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
   await withMcpClient(
@@ -603,8 +610,9 @@ test("deleting a client ends MCP access and refresh", async () => {
   expect((await mcp(tokens.access_token)).status).toBe(200);
   await Effect.runPromise(
     Effect.gen(function* () {
-      yield* issuer.service.sql`DELETE FROM oauthClientResource WHERE clientId = ${client_id}`;
-      yield* issuer.service.sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
+      yield* issuer.get(Database)
+        .sql`DELETE FROM oauthClientResource WHERE clientId = ${client_id}`;
+      yield* issuer.get(Database).sql`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
     }),
   );
   expect((await mcp(tokens.access_token)).status).toBe(401);
@@ -615,7 +623,7 @@ test("offline MCP access and refresh survive browser-session expiry and cleanup"
   const { client_id, tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
   expect((await mcp(tokens.access_token)).status).toBe(200);
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE session SET expiresAt = ${new Date(Date.now() - 60_000).toISOString()}`,
   );
   expect((await mcp(tokens.access_token)).status).toBe(200);
@@ -623,7 +631,7 @@ test("offline MCP access and refresh survive browser-session expiry and cleanup"
   expect(refreshed.status, await refreshed.clone().text()).toBe(200);
   const replacement = await refreshed.json();
   expect((await mcp(replacement.access_token)).status).toBe(200);
-  await Effect.runPromise(issuer.service.sql`DELETE FROM session`);
+  await Effect.runPromise(issuer.get(Database).sql`DELETE FROM session`);
   const afterCleanup = await refresh(client_id, replacement.refresh_token);
   expect(afterCleanup.status, await afterCleanup.clone().text()).toBe(200);
   expect((await mcp((await afterCleanup.json()).access_token)).status).toBe(200);

@@ -5,9 +5,12 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, ServiceUnavailable } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
 import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
+import { Database } from "../src/platform/sqlite.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
+import { Issuer } from "../src/issuer/issuer.ts";
 
 /** A typed client of the issuer's binding, as an HTTP caller of the issuer builds one. */
 const apiClient = (baseUrl: string) => ActionHttp.client(Http, { baseUrl });
@@ -16,15 +19,15 @@ describe("API integration", () => {
   const email = "owner@example.internal";
   const password = "test-only owner password 8rS!";
   const resource = "https://example.internal/mcp";
-  let issuer: Issuer;
+  let issuer: OpenedIssuer;
   let handle: ReturnType<typeof application>;
-  let settings: Issuer["settings"];
+  let settings: OpenedIssuer["settings"];
   let cookie: string;
 
   beforeEach(async () => {
     issuer = await openIssuer({ baseURL: "http://localhost:3000" });
     settings = issuer.settings;
-    handle = application(issuer.service);
+    handle = application(issuer);
     cookie = "";
   });
 
@@ -156,7 +159,7 @@ describe("API integration", () => {
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
       // Persisted values must satisfy the outgoing contract; corrupt data is a
       // server failure, not a bad request from this correctly typed caller.
-      yield* issuer.service
+      yield* issuer.get(Database)
         .sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
       const invalidResponse = yield* Effect.flip(api.listClients());
       expect(invalidResponse._tag).toBe("InternalServerError");
@@ -180,10 +183,10 @@ describe("API integration", () => {
   test("a session the provider cannot read answers the declared 503, which the client decodes", async () => {
     // The owner session's verifier fails with an error `OwnerSession` declares, not a refusal:
     // signing in again cannot help.
-    vi.spyOn(issuer.service.auth.api, "getSession").mockRejectedValue(
+    vi.spyOn(issuer.get(Issuer).auth.api, "getSession").mockRejectedValue(
       new APIError("SERVICE_UNAVAILABLE", { message: "Session store unavailable" }),
     );
-    cookie = `${issuer.service.context.authCookies.sessionToken.name}=unreadable`;
+    cookie = `${issuer.get(Issuer).context.authCookies.sessionToken.name}=unreadable`;
 
     const response = await appFetch(`${settings.baseURL}/api/listClients`, {
       method: "POST",
@@ -308,7 +311,7 @@ describe("API integration", () => {
 
       // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
       // and nullable live metadata is omitted rather than invented.
-      yield* issuer.service
+      yield* issuer.get(Database)
         .sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
       expect((yield* api.listClients()).clients).toEqual([
         {
@@ -321,7 +324,7 @@ describe("API integration", () => {
       ]);
 
       for (const invalidRedirects of ["null", "[42]"]) {
-        yield* issuer.service
+        yield* issuer.get(Database)
           .sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
         expect((yield* Effect.flip(api.listClients()))._tag).toBe("InternalServerError");
       }
@@ -374,9 +377,9 @@ describe("API integration", () => {
       });
 
       const client_id = client.client_id;
-      yield* issuer.service
-        .sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* issuer.service.owner()}, '[]', ${Date.now()}, ${Date.now()})`;
-      yield* issuer.service
+      yield* issuer.get(Database)
+        .sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* issuer.get(OwnerAccount).find()}, '[]', ${Date.now()}, ${Date.now()})`;
+      yield* issuer.get(Database)
         .sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
       expect((yield* Effect.flip(api.revokeClient({ client_id })))._tag).toBe(
         "InternalServerError",
@@ -387,7 +390,7 @@ describe("API integration", () => {
       // Failed revocation also rolls back the disabled flag written by block.
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
       expect(
-        yield* issuer.service.sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`,
+        yield* issuer.get(Database).sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`,
       ).toEqual([{ id: "failure-consent" }]);
     }).pipe(
       Effect.provide(FetchHttpClient.layer),
@@ -406,6 +409,6 @@ describe("API integration", () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(response.status).toBeLessThan(500);
     expect(await response.text()).not.toContain(password);
-    expect(await Effect.runPromise(issuer.service.owner())).toBeUndefined();
+    expect(await Effect.runPromise(issuer.get(OwnerAccount).find())).toBeUndefined();
   });
 });

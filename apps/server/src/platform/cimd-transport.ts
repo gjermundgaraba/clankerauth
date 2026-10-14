@@ -1,4 +1,5 @@
 import { fetchClientMetadataResource as secureFetch } from "@better-auth/cimd/node";
+import { Context, Layer } from "effect";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 
 // The secure Node transport pins validated DNS answers, but its initial DNS
@@ -60,4 +61,13 @@ export function createAbortAwareTransport(
   };
 }
 
-export const fetchClientMetadataResource = createAbortAwareTransport(secureFetch);
+/** Outbound retrieval of Client ID Metadata Documents. */
+export class CimdTransport extends Context.Service<
+  CimdTransport,
+  { readonly fetch: ClientMetadataResourceFetch }
+>()("clankerauth/CimdTransport") {
+  /** The provider's secure Node transport, which pins validated DNS answers. */
+  static readonly layer = Layer.succeed(CimdTransport, {
+    fetch: createAbortAwareTransport(secureFetch),
+  });
+}

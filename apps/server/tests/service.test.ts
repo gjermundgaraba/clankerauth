@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { createHash, randomBytes } from "node:crypto";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
+import { Database } from "../src/platform/sqlite.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
+import { Issuer } from "../src/issuer/issuer.ts";
+import { ResourceCatalog } from "../src/resources/catalog.ts";
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
 
@@ -25,16 +29,14 @@ const resourceA = "https://notes.internal/mcp";
 
 const resourceB = "https://reports.internal/api";
 
-let issuer: Issuer;
-
-let service: Issuer["service"];
+let issuer: OpenedIssuer;
 
 let handle: ReturnType<typeof application>;
 
 let applications: ReturnType<typeof application>[];
 
 function createApplication() {
-  const app = application(service);
+  const app = application(issuer);
   applications.push(app);
 
   return app;
@@ -58,7 +60,7 @@ async function stopCurrentGeneration() {
   if (failures.length) throw new AggregateError(failures, "Failed to stop service generation");
 }
 
-let settings: Issuer["settings"];
+let settings: OpenedIssuer["settings"];
 
 let cookies: Map<string, string>;
 
@@ -252,7 +254,6 @@ async function tokens(
 beforeEach(async () => {
   applications = [];
   issuer = await openIssuer({ baseURL: "http://localhost:3000" });
-  service = issuer.service;
   settings = issuer.settings;
   handle = createApplication();
   cookies = new Map();
@@ -276,7 +277,6 @@ async function setupOwner() {
 async function restart() {
   await stopCurrentGeneration();
   issuer = await issuer.reopen();
-  service = issuer.service;
   handle = createApplication();
 }
 
@@ -308,17 +308,23 @@ describe("first-run setup", () => {
         .find((cookie) => cookie.startsWith("better-auth.session_token=")),
     ).not.toMatch(/;\s*Secure/iu);
     expect(created.headers.getSetCookie().join(";")).toContain("HttpOnly");
-    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM session`))[0]).toEqual({
+    expect(
+      (await Effect.runPromise(issuer.get(Database).sql`SELECT count(*) AS n FROM session`))[0],
+    ).toEqual({
       n: 1,
     });
     expect(
-      (await Effect.runPromise(service.sql`SELECT name, email, emailVerified FROM user`))[0],
+      (
+        await Effect.runPromise(
+          issuer.get(Database).sql`SELECT name, email, emailVerified FROM user`,
+        )
+      )[0],
     ).toEqual({
       name: "Owner",
       email,
       emailVerified: 0,
     });
-    const owner = await Effect.runPromise(service.owner());
+    const owner = await Effect.runPromise(issuer.get(OwnerAccount).find());
     expect(owner).toBeTypeOf("string");
     expect(await (await request("/api/setupStatus", {})).json()).toEqual({
       required: false,
@@ -328,7 +334,7 @@ describe("first-run setup", () => {
     expect((await request("/api/listClients", {}, { anonymous: true })).status).toBe(401);
     expect((await login()).status).toBe(200);
     await restart();
-    expect(await Effect.runPromise(service.owner())).toBe(owner);
+    expect(await Effect.runPromise(issuer.get(OwnerAccount).find())).toBe(owner);
     expect(await (await request("/api/setupStatus", {})).json()).toEqual({
       required: false,
     });
@@ -336,11 +342,13 @@ describe("first-run setup", () => {
     expect((await request("/api/setupOwner", { email, password })).status).toBe(409);
     // The provider's own sign-up is closed by the user-creation hook once the account exists.
     await expect(
-      service.auth.api.signUpEmail({
+      issuer.get(Issuer).auth.api.signUpEmail({
         body: { email: "second@example.internal", password, name: "Owner" },
       }),
     ).rejects.toMatchObject({ statusCode: 409, message: "Setup already completed" });
-    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM user`))[0]).toEqual({
+    expect(
+      (await Effect.runPromise(issuer.get(Database).sql`SELECT count(*) AS n FROM user`))[0],
+    ).toEqual({
       n: 1,
     });
   });
@@ -384,10 +392,12 @@ describe("first-run setup", () => {
       expect(await response.text()).not.toContain(password);
     }
 
-    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM user`))[0]).toEqual({
+    expect(
+      (await Effect.runPromise(issuer.get(Database).sql`SELECT count(*) AS n FROM user`))[0],
+    ).toEqual({
       n: 0,
     });
-    expect(await Effect.runPromise(service.owner())).toBeUndefined();
+    expect(await Effect.runPromise(issuer.get(OwnerAccount).find())).toBeUndefined();
     await setupOwner();
   });
 
@@ -399,7 +409,7 @@ describe("first-run setup", () => {
     const response = await request("/api/setupOwner", { email: input, password });
     expect(response.status).toBe(201);
     const normalized = input.trim().toLowerCase();
-    expect((await Effect.runPromise(service.sql`SELECT email FROM user`))[0]).toEqual({
+    expect((await Effect.runPromise(issuer.get(Database).sql`SELECT email FROM user`))[0]).toEqual({
       email: normalized,
     });
     expect((await request("/api/auth/sign-in/email", { email: normalized, password })).status).toBe(
@@ -417,7 +427,11 @@ describe("first-run setup", () => {
 
     for (const table of ["user", "account", "session"])
       expect(
-        (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${query.table(table)}`))[0],
+        (
+          await Effect.runPromise(
+            issuer.get(Database).sql`SELECT count(*) AS n FROM ${query.table(table)}`,
+          )
+        )[0],
       ).toEqual({ n: 1 });
   });
 
@@ -428,14 +442,16 @@ describe("first-run setup", () => {
     ]);
 
     expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([201, 409]);
-    expect((await Effect.runPromise(service.sql`SELECT count(*) AS n FROM user`))[0]).toEqual({
+    expect(
+      (await Effect.runPromise(issuer.get(Database).sql`SELECT count(*) AS n FROM user`))[0],
+    ).toEqual({
       n: 1,
     });
   });
 
   test("a failed credential insert rolls back the account and permits retry", async () => {
     await Effect.runPromise(
-      service.sql`CREATE TRIGGER fail_setup BEFORE INSERT ON account
+      issuer.get(Database).sql`CREATE TRIGGER fail_setup BEFORE INSERT ON account
       BEGIN SELECT RAISE(ABORT, 'Injected credential failure'); END`,
     );
     const failed = await request("/api/setupOwner", { email, password });
@@ -446,12 +462,16 @@ describe("first-run setup", () => {
 
     for (const table of ["user", "account", "session"])
       expect(
-        (await Effect.runPromise(service.sql`SELECT count(*) AS n FROM ${query.table(table)}`))[0],
+        (
+          await Effect.runPromise(
+            issuer.get(Database).sql`SELECT count(*) AS n FROM ${query.table(table)}`,
+          )
+        )[0],
       ).toEqual({ n: 0 });
     expect(await (await request("/api/setupStatus", {})).json()).toEqual({
       required: true,
     });
-    await Effect.runPromise(service.sql`DROP TRIGGER fail_setup`);
+    await Effect.runPromise(issuer.get(Database).sql`DROP TRIGGER fail_setup`);
     await setupOwner();
     expect((await login()).status).toBe(200);
   });
@@ -518,7 +538,7 @@ describe("owner boundary", () => {
       ).status,
     ).toBe(404);
     await expect(
-      service.auth.api.signUpEmail({
+      issuer.get(Issuer).auth.api.signUpEmail({
         body: { email: "stranger@example.internal", password, name: "Intruder" },
       }),
     ).rejects.toMatchObject({ statusCode: 409 });
@@ -531,7 +551,7 @@ describe("owner boundary", () => {
     const session = await request("/api/auth/get-session");
     expect(session.status).toBe(200);
     const current = await session.json();
-    expect(current.user.id).toBe(await Effect.runPromise(service.owner()));
+    expect(current.user.id).toBe(await Effect.runPromise(issuer.get(OwnerAccount).find()));
     expect(session.headers.has("set-auth-jwt")).toBe(false);
     expect((await request("/api/listClients", {})).status).toBe(200);
     expect(
@@ -587,7 +607,7 @@ describe("OAuth boundaries and lifecycle", () => {
     expect(redirect.searchParams.get("state")).toBe("state-to-validate");
     expect(
       await Effect.runPromise(
-        service.sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`,
+        issuer.get(Database).sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`,
       ),
     ).toEqual([]);
 
@@ -1040,8 +1060,8 @@ describe("dashboard resources and client access", () => {
 
     expect((await request("/api/createResource", valid, { anonymous: true })).status).toBe(401);
     expect((await listing()).resources).toEqual([administrationResource(settings.baseURL)]);
-    const { context } = service;
-    const ownerId = await Effect.runPromise(service.owner());
+    const { context } = issuer.get(Issuer);
+    const ownerId = await Effect.runPromise(issuer.get(OwnerAccount).find());
 
     if (ownerId === undefined) throw new Error("Missing test owner");
     await context.adapter.update({
@@ -1093,7 +1113,8 @@ describe("dashboard resources and client access", () => {
     // The provider bridge declares no refusal of its own. A catalogue row this issuer
     // can no longer read is its own failure, answered exactly as the action API answers.
     await Effect.runPromise(
-      service.sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`,
+      issuer.get(Database)
+        .sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`,
     );
 
     const authorize = await request(
@@ -1251,13 +1272,15 @@ describe("dashboard resources and client access", () => {
       { client_id: first.client_id, resource: resourceA },
       { client_id: first.client_id, resource: resourceB },
     ]);
-    expect(await Effect.runPromise(service.resources.hasAccess(first.client_id, resourceB))).toBe(
-      true,
-    );
-    expect(await Effect.runPromise(service.resources.hasAccess(second.client_id, resourceB))).toBe(
-      false,
-    );
-    expect(await Effect.runPromise(service.resources.hasAccess("missing", resourceA))).toBe(false);
+    expect(
+      await Effect.runPromise(issuer.get(ResourceCatalog).hasAccess(first.client_id, resourceB)),
+    ).toBe(true);
+    expect(
+      await Effect.runPromise(issuer.get(ResourceCatalog).hasAccess(second.client_id, resourceB)),
+    ).toBe(false);
+    expect(
+      await Effect.runPromise(issuer.get(ResourceCatalog).hasAccess("missing", resourceA)),
+    ).toBe(false);
     expect((await access(first.client_id, [])).status).toBe(200);
     expect((await listing()).clientAccess).toEqual([
       { client_id: second.client_id, resource: resourceA },
@@ -1284,7 +1307,8 @@ describe("dashboard resources and client access", () => {
     ).toBe(200);
 
     const consents = await Effect.runPromise(
-      service.sql`SELECT referenceId, resources FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
+      issuer.get(Database)
+        .sql`SELECT referenceId, resources FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
     );
 
     expect(consents).toEqual(
@@ -1378,7 +1402,8 @@ describe("dashboard resources and client access", () => {
 
     const consents = () =>
       Effect.runPromise(
-        service.sql`SELECT referenceId FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
+        issuer.get(Database)
+          .sql`SELECT referenceId FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`,
       );
 
     const consentsBefore = await consents();
@@ -1416,7 +1441,8 @@ describe("dashboard resources and client access", () => {
     ).json();
 
     await Effect.runPromise(
-      service.sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
+      issuer.get(Database)
+        .sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
     );
 
     try {
@@ -1429,7 +1455,7 @@ describe("dashboard resources and client access", () => {
 
       expect(metadataAfter.scopes_supported).toEqual(metadataBefore.scopes_supported);
     } finally {
-      await Effect.runPromise(service.sql`DROP TRIGGER reject_scope_update`);
+      await Effect.runPromise(issuer.get(Database).sql`DROP TRIGGER reject_scope_update`);
     }
 
     expect((await tokens(app.client_id)).access_token).toBeTypeOf("string");

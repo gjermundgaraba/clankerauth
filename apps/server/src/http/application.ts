@@ -4,7 +4,10 @@ import { Effect, Layer, Schema } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpPlatform, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { provider, respond } from "../issuer/errors.ts";
-import { Auth } from "../issuer/issuer.ts";
+import { Issuer } from "../issuer/issuer.ts";
+import { Settings } from "../issuer/settings.ts";
+import { Database } from "../platform/sqlite.ts";
+import { ResourceCatalog } from "../resources/catalog.ts";
 import { actionRoutes } from "./actions.ts";
 import { forwardAuthRoutes } from "../forward-auth/forward-auth.ts";
 import { requestPolicy } from "../platform/node-http.ts";
@@ -73,8 +76,11 @@ export const application = (
   ),
 ) =>
   Layer.unwrap(
-    Effect.map(Auth, (service) => {
-      const { auth, settings } = service;
+    Effect.gen(function* () {
+      const settings = yield* Settings;
+      const { auth } = yield* Issuer;
+      const { sql } = yield* Database;
+      const catalog = yield* ResourceCatalog;
       const mcpAllowedOrigins = [...new Set([settings.baseURL, ...settings.mcpAllowedOrigins])];
 
       const bridge = Effect.gen(function* () {
@@ -93,7 +99,7 @@ export const application = (
               ? url.searchParams.getAll("resource")
               : new URLSearchParams(yield* request.text).getAll("resource");
 
-          if (resources.length !== 1 || !(yield* service.resources.get(resources[0] ?? "")))
+          if (resources.length !== 1 || !(yield* catalog.get(resources[0] ?? "")))
             return json(
               {
                 error: "invalid_target",
@@ -277,7 +283,7 @@ export const application = (
         HttpRouter.add(
           "GET",
           "/healthz",
-          service.sql`SELECT 1`.pipe(Effect.as(json({ status: "ok" })), Effect.catch(respond)),
+          sql`SELECT 1`.pipe(Effect.as(json({ status: "ok" })), Effect.catch(respond)),
         ),
         HttpRouter.add("*", "/api/auth/*", bridge),
         HttpRouter.add("*", "/.well-known/*", bridge),

@@ -11,10 +11,10 @@
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import { Cookies, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
-import { allowedScheme, withinDomain } from "../issuer/settings.ts";
+import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
 import { provider, respond } from "../issuer/errors.ts";
-import { administrationIdentifier } from "../resources/resources.ts";
-import { accessTokenLifetime, Auth } from "../issuer/issuer.ts";
+import { administrationIdentifier, ResourceCatalog } from "../resources/catalog.ts";
+import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
 
 /** The `client_id` claim of forward-auth tokens. Not a registered client: administration
  * MCP joins tokens to the client table, so these tokens can never administer the issuer. */
@@ -28,8 +28,10 @@ const json = (status: number, error: string) =>
 /** Forward auth exists to share one owner session across a cookie domain, so it needs one. */
 export const forwardAuthRoutes = (cookieDomain: string) =>
   Layer.unwrap(
-    Effect.map(Auth, (service) => {
-      const { settings } = service;
+    Effect.gen(function* () {
+      const settings = yield* Settings;
+      const { auth, context } = yield* Issuer;
+      const catalog = yield* ResourceCatalog;
 
       /** Return only where the forward cookie reaches, under the issuer's own scheme policy. */
       const allowedReturnURL = (value: string) => {
@@ -56,7 +58,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         sameSite: "lax",
       } as const;
 
-      const sessionCookieName = service.context.authCookies.sessionToken.name;
+      const sessionCookieName = context.authCookies.sessionToken.name;
 
       const withReturn = (path: string, returnTo: URL) => {
         const url = new URL(path, settings.baseURL);
@@ -66,7 +68,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
       };
 
       const session = (cookie: string) =>
-        provider(() => service.auth.api.getSession({ headers: new Headers({ cookie }) }));
+        provider(() => auth.api.getSession({ headers: new Headers({ cookie }) }));
 
       const check = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
@@ -83,8 +85,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         if (!returnTo) return json(400, "invalid_forwarded_request");
         const identifier = new URL(request.url, settings.baseURL).searchParams.get("resource");
 
-        const resource =
-          identifier && identifier !== reserved && (yield* service.resources.get(identifier));
+        const resource = identifier && identifier !== reserved && (yield* catalog.get(identifier));
 
         if (!resource) return json(403, "unknown_resource");
         const sealed = request.cookies[forwardCookie];
@@ -111,7 +112,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         const iat = Math.floor((yield* Clock.currentTimeMillis) / 1000);
 
         const { token } = yield* provider(() =>
-          service.auth.api.signDocument({
+          auth.api.signDocument({
             body: {
               typ: "at+jwt",
               payload: {
@@ -166,7 +167,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
         // Sign-out ends the session and clears its cookie whether or not one exists.
         const { headers } = yield* provider(() =>
-          service.auth.api.signOut({
+          auth.api.signOut({
             headers: new Headers({ cookie: request.headers.cookie ?? "" }),
             returnHeaders: true,
           }),

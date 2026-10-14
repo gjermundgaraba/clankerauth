@@ -6,6 +6,9 @@
     "dist"
   ],
   "type": "module",
+  "exports": {
+    "./embed": "./src/embed.ts"
+  },
   "scripts": {
     "build": "vp pack",
     "test": "vp test && node scripts/browser-oauth-smoke.mjs",

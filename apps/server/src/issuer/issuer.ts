@@ -1,73 +1,51 @@
-import { Context, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
-import { openDatabase, persisted } from "../platform/sqlite.ts";
+import { Context, Effect, Layer, Redacted } from "effect";
+import type { Kysely } from "kysely";
 import { getCurrentAdapter } from "@better-auth/core/context";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey } from "@better-auth/api-key";
 import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
-import { MAXIMUM_PASSWORD_LENGTH, MINIMUM_PASSWORD_LENGTH } from "@clankerauth/admin-api";
-import { signer } from "./signing.ts";
-import { fetchClientMetadataResource } from "../platform/cimd-transport.ts";
-import { clientStore } from "../clients/clients.ts";
-import { resourceReference } from "../authorization/authorization.ts";
 import {
   getOAuthProviderState,
   oauthProvider,
   type ClientMetadataResourceFetch,
 } from "@better-auth/oauth-provider";
 import { getMigrations } from "better-auth/db/migration";
-import type { Settings } from "./settings.ts";
+import { MAXIMUM_PASSWORD_LENGTH, MINIMUM_PASSWORD_LENGTH } from "@clankerauth/admin-api";
+import { Database, type DatabaseSchema } from "../platform/sqlite.ts";
+import { CimdTransport } from "../platform/cimd-transport.ts";
+import { resourceReference } from "../authorization/authorization.ts";
 import {
-  administrationScopes,
   administrationIdentifier,
+  administrationScopes,
   protocolScopes,
-  resourceStore,
-} from "../resources/resources.ts";
+  ResourceCatalog,
+} from "../resources/catalog.ts";
+import { signer } from "./signing.ts";
+import { Settings, type IssuerSettings } from "./settings.ts";
 
 const isString = (value: unknown): value is string => typeof value === "string";
-
-const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
 
 /** Access tokens from OAuth flows and forward auth alike expire after fifteen minutes. */
 export const accessTokenLifetime = 15 * 60;
 
-/** Outbound transports a test replaces; production uses the secure Node implementations. */
-export interface Integrations {
-  readonly cimdTransport?: ClientMetadataResourceFetch;
-}
+type RunCallback = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
-const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrations: Integrations) {
+const providerOptions = (
+  settings: IssuerSettings,
+  kysely: Kysely<DatabaseSchema>,
+  catalog: ResourceCatalog["Service"],
+  cimdTransport: ClientMetadataResourceFetch,
+  runCallback: RunCallback,
+  ownerExists: () => Promise<boolean>,
+) => {
   // The provider and forward auth both name the OAuth issuer, which is the provider's own default.
   const jwtOptions = {
     disableSettingJwtHeader: true,
     jwt: { issuer: `${settings.baseURL}/api/auth` },
     jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
   } satisfies JwtOptions;
-
-  // Construction is application-scoped. Provider callbacks inherit these services,
-  // never a later request's identity or scope.
-  const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
-  yield* Effect.try(() => mkdirSync(dirname(settings.database), { recursive: true, mode: 0o700 }));
-
-  const database = yield* Effect.acquireRelease(
-    Effect.tryPromise(() => openDatabase(settings.database)),
-    (open) => Effect.promise(() => open.close()),
-  );
-
-  const { sql } = database;
-  const clients = clientStore(database.kysely, sql);
-
-  // Setup creates the only account, so the owner is whichever user exists.
-  const owner = Effect.fn("Auth.owner")(function* () {
-    const rows = yield* sql`SELECT id FROM user LIMIT 1`;
-
-    if (!rows.length) return undefined;
-
-    return (yield* decodeOwnerRow(rows[0])).id;
-  });
 
   const oauthPlugin = oauthProvider({
     loginPage: "/login",
@@ -91,19 +69,19 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
         const query = new URLSearchParams(state?.query);
         const identifiers = query.getAll("resource");
 
-        if (identifiers.length !== 1 || !(await runCallback(resources.get(identifiers[0]))))
+        if (identifiers.length !== 1 || !(await runCallback(catalog.get(identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Choose exactly one Resource",
           });
         const clientId = query.get("client_id");
 
-        if (!clientId || !(await runCallback(resources.hasAccess(clientId, identifiers[0]))))
+        if (!clientId || !(await runCallback(catalog.hasAccess(clientId, identifiers[0]))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
           });
-        const allowed = await runCallback(resources.scopesFor(identifiers));
+        const allowed = await runCallback(catalog.scopesFor(identifiers));
 
         if (scopes.some((scope) => !allowed.includes(scope)))
           throw new APIError("BAD_REQUEST", {
@@ -133,21 +111,11 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     resourcePrivileges: async ({ user }) => !!user,
   });
 
-  const resources = yield* resourceStore(
-    database.kysely,
-    sql,
-    () => auth,
-    (scopes) => {
-      oauthPlugin.options.scopes = scopes;
-    },
-    administrationIdentifier(settings.baseURL),
-  );
-
   const options = {
     appName: "clankerauth",
     baseURL: settings.baseURL,
     secret: Redacted.value(settings.secret),
-    database: { db: database.kysely, type: "sqlite", transaction: true },
+    database: { db: kysely, type: "sqlite", transaction: true },
     trustedOrigins: [settings.baseURL],
     logger: { disabled: true },
     disabledPaths: ["/token"],
@@ -159,11 +127,8 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     databaseHooks: {
       user: {
         create: {
-          // Runs inside the provider's sign-up transaction, so it must use that adapter.
           before: async () => {
-            const adapter = await getCurrentAdapter((await auth.$context).adapter);
-
-            if (await adapter.count({ model: "user" }))
+            if (await ownerExists())
               throw new APIError("CONFLICT", { message: "Setup already completed" });
           },
         },
@@ -221,8 +186,7 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
       signer(jwtOptions),
       oauthPlugin,
       cimd({
-        fetchClientMetadataResource: (input, init) =>
-          (integrations.cimdTransport ?? fetchClientMetadataResource)(input, init),
+        fetchClientMetadataResource: cimdTransport,
         metadataProfile: "mcp-2026-07-28",
         metadataRevalidationInterval: 300,
         maxCacheEntries: 1000,
@@ -236,46 +200,80 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     ],
   } satisfies BetterAuthOptions;
 
-  // Migrations and provider initialization cannot be cancelled; they settle here so the
-  // layer never hands out a service whose database finalizer could outrun them. The
-  // provider is constructed after migrating, since its initialization reads the schema.
-  const { auth, context } = yield* Effect.fn("Auth.initialize")(function* () {
-    const plan = yield* Effect.tryPromise(() => getMigrations(options));
+  return { options, oauthPlugin };
+};
 
-    if (plan.schemaProblems.length)
-      return yield* Effect.fail(new Error("Database schema requires manual repair"));
-    yield* Effect.tryPromise(() => plan.runMigrations());
-    const auth = betterAuth(options);
-    // Provider initialization seeds the administration resource; publish the catalog after it.
-    const context = yield* Effect.tryPromise(() => auth.$context);
+type ProviderOptions = ReturnType<typeof providerOptions>["options"];
 
-    return { auth, context };
-  }, Effect.uninterruptible)();
+/** The Better Auth instance this issuer is built on. */
+export type ProviderAuth = Auth<ProviderOptions>;
 
-  yield* resources.synchronize();
-
-  return {
-    auth,
-    /** The provider's resolved context: its adapter, cookie names and secret. */
-    context,
-    sql,
-    database: database.kysely,
-    owner,
-    settings,
-    resources,
-    clients,
-    setup: yield* Semaphore.make(1),
-  };
-});
+/** The provider's resolved context: its adapter, cookie names and secret. */
+export type ProviderContext = Awaited<ProviderAuth["$context"]>;
 
 /**
- * The issuer: one SQLite connection and the Better Auth instance that owns it. Its scope
- * must outlive the HTTP server's: request fibers settle before the connection closes.
+ * The authorization server: Better Auth with its plugins, migrated and initialized on the
+ * issuer's database. Its scope must outlive the HTTP server's: request fibers settle
+ * before the connection closes.
  */
-export class Auth extends Context.Service<Auth, Effect.Success<ReturnType<typeof openAuth>>>()(
-  "clankerauth/Auth",
-) {
-  /** Opens the database, runs the provider's migrations, and closes both with the scope. */
-  static readonly layer = (settings: Settings, integrations: Integrations = {}) =>
-    Layer.effect(Auth, openAuth(settings, integrations));
+export class Issuer extends Context.Service<
+  Issuer,
+  {
+    readonly auth: ProviderAuth;
+    readonly context: ProviderContext;
+    /** Replaces the scopes the provider accepts, which are every resource's. */
+    readonly publishScopes: (scopes: readonly string[]) => Effect.Effect<void>;
+  }
+>()("clankerauth/Issuer") {
+  static readonly layer = Layer.effect(
+    Issuer,
+    Effect.gen(function* () {
+      const settings = yield* Settings;
+      const { kysely } = yield* Database;
+      const catalog = yield* ResourceCatalog;
+      const { fetch } = yield* CimdTransport;
+      // Construction is application-scoped. Provider callbacks inherit these services,
+      // never a later request's identity or scope.
+      const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
+
+      const { options, oauthPlugin } = providerOptions(
+        settings,
+        kysely,
+        catalog,
+        fetch,
+        runCallback,
+        // Runs inside the provider's sign-up transaction, so it must use that adapter.
+        async () => {
+          const adapter = await getCurrentAdapter((await auth.$context).adapter);
+
+          return (await adapter.count({ model: "user" })) > 0;
+        },
+      );
+
+      // Migrations and provider initialization cannot be cancelled; they settle here so the
+      // layer never hands out a service whose database finalizer could outrun them. The
+      // provider is constructed after migrating, since its initialization reads the schema.
+      const { auth, context } = yield* Effect.fn("Auth.initialize")(function* () {
+        const plan = yield* Effect.tryPromise(() => getMigrations(options));
+
+        if (plan.schemaProblems.length)
+          return yield* Effect.fail(new Error("Database schema requires manual repair"));
+        yield* Effect.tryPromise(() => plan.runMigrations());
+        const auth = betterAuth(options);
+        // Provider initialization seeds the administration resource; publish the catalog after it.
+        const context = yield* Effect.tryPromise(() => auth.$context);
+
+        return { auth, context };
+      }, Effect.uninterruptible)();
+
+      return {
+        auth,
+        context,
+        publishScopes: (scopes) =>
+          Effect.sync(() => {
+            oauthPlugin.options.scopes = [...scopes];
+          }),
+      };
+    }),
+  );
 }

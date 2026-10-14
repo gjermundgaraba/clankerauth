@@ -8,10 +8,10 @@ import { CurrentOwner, OwnerToken, ServiceUnavailable } from "@clankerauth/admin
 import type { OwnerSession } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
 import { provider } from "../issuer/errors.ts";
-import { persisted } from "../platform/sqlite.ts";
-import { providerSession } from "./provider-session.ts";
-import { administrationScopes } from "../resources/resources.ts";
-import { Auth } from "../issuer/issuer.ts";
+import { Database, persisted } from "../platform/sqlite.ts";
+import { OwnerAccount } from "./owner.ts";
+import { administrationScopes } from "../resources/catalog.ts";
+import { Issuer } from "../issuer/issuer.ts";
 
 /**
  * Dashboard HTTP: the owner session's provider, the issuer's SameSite session cookie, which
@@ -23,13 +23,13 @@ export const sessionOwner = (authentication: typeof OwnerSession) =>
   Authentication.layer(
     authentication,
     Effect.map(
-      Auth,
-      (service) => () =>
+      Issuer,
+      (issuer) => () =>
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const headers = new Headers(request.headers);
 
-          const session = yield* provider(() => service.auth.api.getSession({ headers }));
+          const session = yield* provider(() => issuer.auth.api.getSession({ headers }));
 
           if (!session)
             return yield* new Action.Unauthenticated({ message: "Owner session required" });
@@ -54,7 +54,10 @@ const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String, email: Schem
 export const bearerOwner = (resource: AdministrationResource) =>
   Authentication.layer(
     OwnerToken,
-    Effect.map(Auth, (service) => {
+    Effect.gen(function* () {
+      const { sql } = yield* Database;
+      const owner = yield* OwnerAccount;
+
       /** The token was accepted, its owner or client was not: a 401 naming `invalid_token`. */
       const rejected = () =>
         new Action.Unauthenticated({ message: "Owner authorization required" });
@@ -81,20 +84,15 @@ export const bearerOwner = (resource: AdministrationResource) =>
               scopes: [administrationScopes.read],
             });
 
-          const rows = yield* service.sql`SELECT u.id, u.email FROM user u
+          const rows = yield* sql`SELECT u.id, u.email FROM user u
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
       WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`;
 
           if (!rows[0]) return yield* rejected();
 
-          const owner = yield* decodeOwnerRow(rows[0]);
+          const row = yield* decodeOwnerRow(rows[0]);
 
-          return {
-            userId: owner.id,
-            email: owner.email,
-            writable,
-            providerHeaders: providerSession(service, owner.id),
-          };
+          return owner.caller(row.id, row.email, writable);
         });
     }),
     { protectedResource: resource.protectedResource },

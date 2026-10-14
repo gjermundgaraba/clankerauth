@@ -6,12 +6,12 @@ import { Effect, Exit, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { webMcpRequest } from "./mcp.ts";
 import { nodeHandler } from "../src/http/application.ts";
-import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
 import { createNodeServer } from "../src/platform/node-http.ts";
+import { Database } from "../src/platform/sqlite.ts";
+import { Issuer } from "../src/issuer/issuer.ts";
 
-let issuer: Issuer;
-
-let service: Issuer["service"];
+let issuer: OpenedIssuer;
 
 let scope: Scope.Closeable;
 
@@ -23,7 +23,6 @@ let closing: Promise<void> | undefined;
 
 beforeEach(async () => {
   issuer = await openIssuer({ baseURL: "https://issuer.example" });
-  service = issuer.service;
   scope = Scope.makeUnsafe();
 
   const listener = await issuer.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)));
@@ -52,12 +51,12 @@ afterEach(async () => {
 test("shutdown waits for a provider request to settle after its client disconnects", async () => {
   const entered = Promise.withResolvers<Request>();
   const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(service.database, "destroy");
-  vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
+  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
+  vi.spyOn(issuer.get(Issuer).auth, "handler").mockImplementation(async (request) => {
     entered.resolve(request);
     await release.promise;
     // Work still owned by the provider must not encounter a closed database.
-    await Effect.runPromise(service.sql`SELECT 1`);
+    await Effect.runPromise(issuer.get(Database).sql`SELECT 1`);
 
     return Response.json({ keys: [] });
   });
@@ -83,8 +82,8 @@ test("shutdown waits for a provider request to settle after its client disconnec
 test("disconnect does not abandon an uncancellable SDK call in an action route", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(service.database, "destroy");
-  const { context } = service;
+  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
+  const { context } = issuer.get(Issuer);
   const hash = context.password.hash;
   // Sign-up hashes inside the provider's transaction, which holds the connection.
   vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
@@ -125,16 +124,16 @@ test("disconnect does not abandon an uncancellable SDK call in an action route",
 test("an in-process JWKS read is awaited by its request, so shutdown waits for it", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(service.database, "destroy");
-  const handler = service.auth.handler;
+  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
+  const handler = issuer.get(Issuer).auth.handler;
   let stalledCallFailed: unknown;
 
-  vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
+  vi.spyOn(issuer.get(Issuer).auth, "handler").mockImplementation(async (request) => {
     if (new URL(request.url).pathname.endsWith("/jwks")) {
       entered.resolve();
       await release.promise;
       // Work still owned by the provider must not encounter a closed database.
-      await Effect.runPromise(service.sql`SELECT 1`).catch((cause: unknown) => {
+      await Effect.runPromise(issuer.get(Database).sql`SELECT 1`).catch((cause: unknown) => {
         stalledCallFailed = cause;
       });
     }
@@ -193,12 +192,14 @@ test("an in-process JWKS read is awaited by its request, so shutdown waits for i
 }, 15000);
 
 test.each(["GET", "HEAD"])("%s reaches the provider without a body", async (method) => {
-  const handler = vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
-    expect(request.method).toBe(method);
-    expect(request.body).toBeNull();
+  const handler = vi
+    .spyOn(issuer.get(Issuer).auth, "handler")
+    .mockImplementation(async (request) => {
+      expect(request.method).toBe(method);
+      expect(request.body).toBeNull();
 
-    return new Response("provider response");
-  });
+      return new Response("provider response");
+    });
 
   const response = await fetch(`${url}/api/auth/jwks`, { method });
   expect(response.status).toBe(200);
@@ -209,13 +210,15 @@ test.each(["GET", "HEAD"])("%s reaches the provider without a body", async (meth
 test("POST preserves provider body bytes and content type", async () => {
   const body = ' { "email": "owner@example.internal" }\n';
 
-  const handler = vi.spyOn(service.auth, "handler").mockImplementation(async (request) => {
-    expect(request.method).toBe("POST");
-    expect(request.headers.get("content-type")).toBe("application/json; charset=utf-8");
-    expect(new Uint8Array(await request.arrayBuffer())).toEqual(new TextEncoder().encode(body));
+  const handler = vi
+    .spyOn(issuer.get(Issuer).auth, "handler")
+    .mockImplementation(async (request) => {
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("content-type")).toBe("application/json; charset=utf-8");
+      expect(new Uint8Array(await request.arrayBuffer())).toEqual(new TextEncoder().encode(body));
 
-    return new Response("ok");
-  });
+      return new Response("ok");
+    });
 
   const response = await fetch(`${url}/api/auth/sign-in/email`, {
     method: "POST",
@@ -239,7 +242,10 @@ test.each([
   ],
   ["known resource", "?resource=https://issuer.example/", 200, true],
 ])("authorization resource admission: %s", async (_name, query, status, admitted) => {
-  const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
+  const handler = vi
+    .spyOn(issuer.get(Issuer).auth, "handler")
+    .mockResolvedValue(new Response("provider"));
+
   const response = await fetch(`${url}/api/auth/oauth2/authorize${query}`);
   expect(response.status).toBe(status);
   await response.text();
@@ -247,7 +253,9 @@ test.each([
 });
 
 test("bodies above 64 KiB are disconnected before reaching the provider", async () => {
-  const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
+  const handler = vi
+    .spyOn(issuer.get(Issuer).auth, "handler")
+    .mockResolvedValue(new Response("provider"));
 
   await expect(
     fetch(`${url}/api/auth/oauth2/token`, {
@@ -260,7 +268,9 @@ test("bodies above 64 KiB are disconnected before reaching the provider", async 
 });
 
 test("token requests reach the provider without resource pre-checks", async () => {
-  const handler = vi.spyOn(service.auth, "handler").mockResolvedValue(new Response("provider"));
+  const handler = vi
+    .spyOn(issuer.get(Issuer).auth, "handler")
+    .mockResolvedValue(new Response("provider"));
 
   const response = await fetch(`${url}/api/auth/oauth2/token`, {
     method: "POST",

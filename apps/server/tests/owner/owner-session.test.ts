@@ -4,13 +4,13 @@
  * with, end to end from sign-in.
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import { createOwner } from "../../src/owner/setup.ts";
-import { openIssuer, type Issuer } from "../open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "../open-issuer.ts";
 import { webApplication } from "../web-application.ts";
+import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-let issuer: Issuer | undefined;
+let issuer: OpenedIssuer | undefined;
 
 let handle: ReturnType<typeof webApplication> | undefined;
 
@@ -24,9 +24,9 @@ afterEach(async () => {
 /** Opens an issuer at `origin`, signs the owner in, and reads the session cookie it set. */
 const signIn = async (origin: string) => {
   issuer = await openIssuer({ baseURL: origin });
-  const app = webApplication(issuer.service);
+  const app = webApplication(issuer);
   handle = app;
-  await issuer.run(createOwner(issuer.service, owner));
+  await issuer.run(issuer.get(OwnerAccount).create(owner));
 
   const post = (path: string, body: Readonly<Record<string, string>>, cookie?: string) => {
     const headers = new Headers({ origin, "content-type": "application/json" });

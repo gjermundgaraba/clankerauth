@@ -1,21 +1,21 @@
 import { webMcpRequest } from "./mcp.ts";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner } from "../src/owner/setup.ts";
-import { openIssuer, type Issuer } from "./open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
 
 const baseURL = "http://localhost:3000";
 
 const clientOrigin = "https://mcp-client.example.test";
 
-let issuer: Issuer;
+let issuer: OpenedIssuer;
 
 let handle: ReturnType<typeof application>;
 
 beforeEach(async () => {
   issuer = await openIssuer({ baseURL, mcpAllowedOrigins: [clientOrigin] });
-  handle = application(issuer.service);
+  handle = application(issuer);
 });
 
 afterEach(async () => {
@@ -122,7 +122,7 @@ test("MCP rejects unlisted origins before authentication and accepts originless 
 
 test("an allowed external browser uses bearer MCP while the dashboard API exposes no CORS grant", async () => {
   const credentials = { email: "owner@example.internal", password: "test-only password123" };
-  await issuer.run(createOwner(issuer.service, credentials));
+  await issuer.run(issuer.get(OwnerAccount).create(credentials));
 
   const login = await handle(
     new Request(`${baseURL}/api/auth/sign-in/email`, {

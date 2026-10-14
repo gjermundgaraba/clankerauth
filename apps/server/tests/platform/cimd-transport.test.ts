@@ -1,8 +1,13 @@
+import { Effect } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
-import {
-  createAbortAwareTransport,
-  fetchClientMetadataResource,
-} from "../../src/platform/cimd-transport.ts";
+import { CimdTransport, createAbortAwareTransport } from "../../src/platform/cimd-transport.ts";
+
+const fetchClientMetadataResource = Effect.runSync(
+  Effect.provide(
+    Effect.map(CimdTransport, ({ fetch }) => fetch),
+    CimdTransport.layer,
+  ),
+);
 
 const url = "https://client.example/metadata.json";
 
