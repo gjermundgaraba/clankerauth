@@ -8,14 +8,14 @@ import test from "node:test";
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 
 // why: fixtures run the installed linter on the repository's real policy, overrides included.
-async function ruleLines(rule, folder, source) {
+async function ruleLines(rule, folder, source, cwd = root) {
   const directory = await mkdtemp(join(root, folder, "lint-fixture-"));
 
   try {
     await writeFile(join(directory, "fixture.ts"), source);
 
     const result = spawnSync("vp", ["lint", join(directory, "fixture.ts"), "--format", "json"], {
-      cwd: root,
+      cwd,
       encoding: "utf8",
       timeout: 30_000,
     });
@@ -170,6 +170,27 @@ await test("outside the server, only its embed entry is importable", async () =>
       ),
     ),
     [3, 5],
+  );
+});
+
+await test("the fence judges the same from inside a package as from the root", async () => {
+  assert.deepEqual(
+    await ruleLines(
+      "import-fence",
+      "apps/server/src/clients",
+      imports("../../platform/sqlite.ts", "kysely"),
+      join(root, "apps/server"),
+    ),
+    [3],
+  );
+  assert.deepEqual(
+    await ruleLines(
+      "import-fence",
+      "packages/dev/src",
+      imports("../../../../apps/server/src/services.ts"),
+      join(root, "packages/dev"),
+    ),
+    [1],
   );
 });
 

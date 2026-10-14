@@ -1,95 +1,57 @@
 # clankerauth
 
-How the code is laid out, and the rules that keep it so. The README says what the product does.
+Layout and house rules; the README says what the product does. `vp run ready` checks everything.
 
-## Server (`apps/server`)
+## Server (`apps/server/src`)
 
-Source is grouped by domain. Each domain folder holds its services, whose methods are the action
-handlers; the wire schemas are `packages/admin-api`'s. Tests mirror the folders under `tests/`,
-and suites over the composed application sit at the root of `tests/`.
+Grouped by domain. `tests/` mirrors it, with suites over the whole application at its root.
 
-- `owner/`: the sole account: setup, sessions, owner authentication for the dashboard, MCP and
-  `/api/owner`, and the temporary provider sessions administration acts through.
-- `clients/`: OAuth clients: listing, registration, editing, blocking, revocation and connections;
-  `managed.ts` tells a managed client from one that registered itself.
-- `resources/`: the resource catalog (`catalog.ts`: reads, and which resource is built in) and its
-  writes and client access (`resources.ts`).
-- `authorization/`: stored authorization (consents, codes and tokens), keyed by resource reference.
-- `api-keys/`: API keys and the signed key lists resource servers verify them against.
-- `forward-auth/`: the reverse-proxy forward-auth routes.
-- `issuer/`: settings, and the Better Auth instance the issuer is built on, with its plugins,
-  the translation of its errors into the contract's, and its cookie signing and sealing.
+- `owner/`: the account: setup, sessions, owner authentication, temporary provider sessions.
+- `clients/`: OAuth clients; `managed.ts` tells a managed client from a self-registered one.
+- `resources/`: the catalog (`catalog.ts`, which knows the built-in resource), its writes and
+  client access (`resources.ts`).
+- `authorization/`: consents, codes and tokens, keyed by resource reference.
+- `api-keys/`: API keys and the signed key lists resource servers verify them with.
+- `forward-auth/`: forward-auth routes for a reverse proxy.
+- `issuer/`: settings, the Better Auth instance (`Issuer`), provider errors and cookies.
+- `platform/`: SQLite, the Node listener and request policy, the CIMD transport.
+- `http/`: the HTTP and MCP surface over every domain.
 
-Better Auth is the framework the issuer is built on, as Foldkit is the web app's: domains call its
-API through the `Issuer` service. Other technology enters only through `platform/`: SQLite
-(`sqlite.ts`), Node's HTTP listener and request policy (`node-http.ts`), and the CIMD transport
-(`cimd-transport.ts`).
+Technology enters only through `platform/`, `issuer/` and, to serve HTTP, `http/`. Each service is a `Context.Service`
+with a static `layer` that captures its dependencies; a method requires only request context,
+such as `CurrentOwner`. `services.ts` builds the graph, and Layers are chosen in `main.ts`,
+`tests/test-issuer.ts` and `packages/dev`. `embed.ts` (`@clankerauth/server/embed`) is the only
+server source importable from outside `apps/server`.
 
-Every domain service is a `Context.Service` with a declared interface, built by a Layer beside it
-that captures its dependencies; a method requires only request-scoped context, such as
-`CurrentOwner`. `services.ts` builds the whole graph from the `Settings` and `CimdTransport` Layers
-it is given. `http/` is the HTTP and MCP surface over every domain. Layers are chosen in three
-places: `main.ts` for the process, `tests/test-issuer.ts` for tests, and the development package.
+`CurrentOwner.providerHeaders` is the provider session administration acts through, so the
+dashboard reuses its request's cookie instead of opening a session per call.
 
-The contract's `CurrentOwner` carries `providerHeaders`, the provider session administration
-acts through: effect-actions' authentication provides one service per request, and the
-dashboard's session reuses the request's own cookie rather than opening a session per call.
+## Web (`apps/web/src`)
 
-`embed.ts` is the server's one public entry, `@clankerauth/server/embed`, for the development
-package. Nothing else imports server source from outside `apps/server`.
-
-## Web (`apps/web`)
-
-A Foldkit application, laid out as Foldkit's guidance says: the root files (`entry`, `main`,
-`model`, `message`, `route`, `view`) at `src/`, and each page under `src/page/`, with the
-dashboard's several files in `src/page/dashboard/`. `api.ts` is the issuer client. The paths the
-issuer serves the document at are `src/document-paths.ts`, exported to the server.
+Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `page/dashboard/`.
+`api.ts` is the issuer client.
 
 ## Packages
 
-- `packages/admin-api`: the administration contract every surface is derived from: actions,
-  schemas, errors, and the administration resource's identifier and scopes.
-- `packages/sdk`: the published SDK, one folder-less module per entry. It owns the protocol
-  constants resource servers share with the issuer, such as the API-key prefix, the sign-out
-  path and the return-to query parameter, which the web app's login page reads too.
-- `packages/dev`: the published development issuer, built from `@clankerauth/server/embed`.
-- `apps/cli`: the published CLI; `oauth.ts` is its only OAuth adapter.
+- `packages/admin-api`: the administration contract: actions, schemas and errors.
+- `packages/sdk` (published): one module per entry; owns the protocol constants resource
+  servers share with the issuer.
+- `packages/dev` (published): the development issuer, built on the embed entry.
+- `apps/cli` (published): the CLI; `oauth.ts` is its OAuth adapter.
 
-## House style
+## Rules
 
-- **Operations as contracts**: every administration operation is an effect-actions action in
-  `packages/admin-api`; HTTP, MCP, the CLI and the dashboard are derived from it.
-- **Service and Layer together**: a service's Layer is a static member of its class.
-- **Errors that carry context**: each contract error names its subject (`clientId`,
-  `identifier`, `keyId`) and carries its sentence as a declared `message`, built once in the
-  error's `of`; each action lists only the failures it can produce, which `Action.implement`
-  checks. A provider call names what each provider status means to it (`provider` in
-  `issuer/errors.ts`, such as `{ refused: refusal, missing: … }`); any other failure is
-  `InternalServerError`.
-- **Effect-aware tests**: the server's and the SDK's tests are `@effect/vitest` tests that return
-  Effects. Server tests take the issuer from the Layers in `tests/test-issuer.ts`, built fresh for
-  each test; a test that reads wall-clock time, directly or through a library, is `it.live`.
-  Effect is run by hand only inside a callback that non-Effect code calls (a mock, a Kysely
-  transaction, a Node event, `expect.poll`), with the test's own services. Exempt: suites that
-  drive a real process (`main.test.ts`, the CLI's, the development package's lifecycle) and the
-  web app's, which use Foldkit's test harness.
-- **No prose comments**: a reason goes where the code can enforce or reveal it: a type, a test,
-  or the commit message. What remains: tool directives with their reason inline; a one-line
-  `// SAFETY:` above a type assertion; `/** */` documentation of types and schemas and their members; the
-  published API's documentation in `packages/sdk/src` and `packages/dev/src`; Foldkit's section
-  headers in `apps/web/src`; and one-line `// why:` comments for a reason no type or test can
-  carry, such as a provider workaround or a shutdown order. `clankerauth/no-prose-comments`
-  (`tools/oxlint/clankerauth`) enforces it.
-- **A lint fence**: `tools/oxlint/clankerauth` holds the repository's own rules, configured in the
-  root `vite.config.ts` and proved by `tools/oxlint/clankerauth/tests/policy.test.mjs`.
-  `import-fence` is an allow-list per folder: a server domain folder imports only `effect`,
-  effect-actions, the SDK, `@clankerauth/admin-api` and the other folders of `src` except
-  `http/`; `http/` adds the Node platform, the web app's document paths, `node:path`,
-  `node:url` and the server's `package.json`; `platform/`, `issuer/` and the root files are
-  unfenced. Outside `apps/server`, server source is reachable only as
-  `@clankerauth/server/embed`. `no-manual-effect-run` refuses `Effect.run*`, `runMain` and
-  `ManagedRuntime` except in the entries (`apps/server/src/main.ts`, `apps/cli/src/main.ts`,
-  `packages/dev/src/index.ts`, scripts), and allows only `Effect.runPromiseWith` in the
-  provider bridge (`issuer/issuer.ts`) and the server's and the SDK's tests. The rules read
-  syntax: they do not prove that a test's `runPromiseWith` sits inside a callback, and an
-  import through a re-export is judged by the file that writes it.
+- Every administration operation is an action in `packages/admin-api`; HTTP, MCP, the CLI and
+  the dashboard derive from it.
+- A contract error names its subject and carries its `message`; an action declares only the
+  failures it can produce. A provider call names what each status means to it
+  (`provider(call, { refused, missing, … })`); any other failure is `InternalServerError`.
+- Server and SDK tests return Effects (`@effect/vitest`), `it.live` when wall-clock time is
+  read. Effect is run by hand only in a callback foreign code calls. Suites that drive a real
+  process, and the web app's Foldkit tests, are exempt.
+- No prose comments. Allowed: tool directives with a reason, one-line `// SAFETY:` and
+  `// why:`, `/** */` on types and schemas, the published packages' API docs, and Foldkit's
+  section headers.
+- `tools/oxlint/clankerauth` enforces the comment rule, each folder's import allow-list and
+  where Effect may be run by hand. The root `vite.config.ts` holds the lists and
+  `tests/policy.test.mjs` proves them; the rules read syntax only.
