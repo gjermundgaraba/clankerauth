@@ -66,7 +66,7 @@ describe("application view", () => {
     );
   });
 
-  test("setup names a confirmation that does not match, and moves focus to it", () => {
+  test("setup says under the confirmation that it does not match, and moves focus to it", () => {
     scene(
       { update, view },
       given(checkedAt(urlAt("/setup"), Access.SetupRequired())),
@@ -77,6 +77,8 @@ describe("application view", () => {
       click(role("button", { name: "create account" })),
       Command.resolve(Focus.Focus({ id: "setup-confirmation" }), Setup.Message.CompletedFocus()),
       expect(label("Confirm password")).toHaveAttr("aria-invalid", "true"),
+      expect(label("Confirm password")).toHaveAccessibleDescription("Passwords do not match."),
+      expect(text("Not created")).toBeAbsent(),
     );
   });
 

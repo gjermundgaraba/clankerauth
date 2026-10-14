@@ -1,5 +1,4 @@
 import { ClientAuthMethod, type ResourceSummary } from "@clankerauth/admin-api";
-import { Textarea } from "@foldkit/ui";
 import { Array, Option, Record, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";
@@ -12,6 +11,7 @@ import {
   PropsList,
   Rows,
   SelectField,
+  TextareaField,
 } from "@gjermundgaraba-designs/pixel-paper";
 
 import { ClientMode, KeyMode, Message, Model, ResourceMode } from "./form.ts";
@@ -264,26 +264,18 @@ const resourceChoicesView = (
       ),
   });
 
-// NOTE: pixel-paper gap: TextareaField has no required, mono, placeholder or attribute
-// options yet, so this wraps @foldkit/ui's Textarea directly.
 const redirectUrisField = (value: string, h: HtmlBuilder<Message>): Html =>
-  Textarea.view(
+  TextareaField.view(
     {
       id: "form-redirect-uris",
+      label: "Redirect URIs",
       value,
-      rows: REDIRECT_URI_ROWS,
-      placeholder: "https://app.internal/callback",
-      hasDescription: true,
       onInput: (nextValue) => Message.UpdatedClientRedirectUris({ value: nextValue }),
-      toView: (attributes) =>
-        h.div(
-          [h.Class("field mono")],
-          [
-            h.label(attributes.label, ["Redirect URIs"]),
-            h.textarea([...attributes.textarea, h.AriaRequired(true), h.Spellcheck(false)]),
-            h.p([...attributes.description, h.Class("field-help")], ["One per line."]),
-          ],
-        ),
+      help: "One per line.",
+      isRequired: true,
+      isMono: true,
+      rows: REDIRECT_URI_ROWS,
+      textareaAttributes: [h.Placeholder("https://app.internal/callback"), h.Spellcheck(false)],
     },
     h,
   );
