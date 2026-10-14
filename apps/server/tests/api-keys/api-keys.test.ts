@@ -12,8 +12,9 @@ import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import { Administration, InternalServerError } from "@clankerauth/admin-api";
 import { createNodeServer } from "../../src/platform/node-http.ts";
 import { webApplication as application } from "../web-application.ts";
-import { createOwner } from "../../src/owner/setup.ts";
-import { openIssuer, type Issuer } from "../open-issuer.ts";
+import { openIssuer, type OpenedIssuer } from "../open-issuer.ts";
+import { Database } from "../../src/platform/sqlite.ts";
+import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const origin = "http://localhost:3000";
 
@@ -29,7 +30,7 @@ type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]
 
 type TestRequestBody = { readonly [key: string]: JsonValue };
 
-let issuer: Issuer;
+let issuer: OpenedIssuer;
 
 let handle: ReturnType<typeof application>;
 
@@ -74,9 +75,9 @@ const verify = async (key: string, target = resource) => {
 beforeEach(async () => {
   bearer = undefined;
   issuer = await openIssuer({ baseURL: origin });
-  handle = application(issuer.service);
+  handle = application(issuer);
   await issuer.run(
-    createOwner(issuer.service, {
+    issuer.get(OwnerAccount).create({
       email: "owner@example.internal",
       password: "test-only password123",
     }),
@@ -125,7 +126,7 @@ test("hash-only storage, explicit scopes, one-time display and next-list disable
   expect(key.key.startsWith("clankerauth_")).toBe(true);
 
   const stored = await Effect.runPromise(
-    issuer.service.sql`SELECT key FROM apikey WHERE id = ${key.keyId}`,
+    issuer.get(Database).sql`SELECT key FROM apikey WHERE id = ${key.keyId}`,
   );
 
   // The digest the provider stores is the one a resource server derives from the key.
@@ -133,7 +134,7 @@ test("hash-only storage, explicit scopes, one-time display and next-list disable
   const list = await call("/api/listApiKeys", {});
   expect(await list.text()).not.toContain(key.key);
   expect(await verify(key.key)).toEqual({
-    subject: await Effect.runPromise(issuer.service.owner()),
+    subject: await Effect.runPromise(issuer.get(OwnerAccount).find()),
     scopes: ["example:read"],
     actor: { kind: "key", keyId: key.keyId },
     expiresAt: undefined,
@@ -149,7 +150,7 @@ test("hash-only storage, explicit scopes, one-time display and next-list disable
 
 test("a key list is signed for its resource, never cached, and reveals nothing without the key", async () => {
   const key = await create();
-  const owner = await Effect.runPromise(issuer.service.owner());
+  const owner = await Effect.runPromise(issuer.get(OwnerAccount).find());
   const response = await keyList();
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
@@ -169,7 +170,7 @@ test("a key list is signed for its resource, never cached, and reveals nothing w
 
   // Unknown resources and administration have no entries, and say nothing more.
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: ["example:read"], [`${origin}/`]: ["clankerauth:write"] })} WHERE id = ${key.keyId}`,
   );
 
@@ -255,7 +256,7 @@ test("expired keys leave the key list", async () => {
   expect(await verify(key.key)).toMatchObject({ scopes: ["example:read"] });
   expect(decodeJwt((await (await keyList()).json()).list).keys).toHaveLength(1);
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE apikey SET expiresAt = ${new Date(Date.now() - 1000).toISOString()} WHERE id = ${key.keyId}`,
   );
   expect(decodeJwt((await (await keyList()).json()).list).keys).toEqual([]);
@@ -457,7 +458,7 @@ test("HTTP and MCP sanitize invalid managed-client output", async () => {
   expect(created.status).toBe(201);
   const { client_id } = await created.json();
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${client_id}`,
   );
 
@@ -479,7 +480,7 @@ test("a key with malformed stored permissions grants nothing, stays listed and c
   const key = await create();
   const intact = await create();
   await Effect.runPromise(
-    issuer.service
+    issuer.get(Database)
       .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: [42] })} WHERE id = ${key.keyId}`,
   );
 
@@ -500,16 +501,16 @@ test("a key row that decodes but cannot be sealed is left out on its own", async
   const key = await create();
   const intact = await create();
   await Effect.runPromise(
-    issuer.service.sql`UPDATE apikey SET referenceId = '' WHERE id = ${key.keyId}`,
+    issuer.get(Database).sql`UPDATE apikey SET referenceId = '' WHERE id = ${key.keyId}`,
   );
 
   expect(await verify(key.key)).toBe("Unauthorized");
   expect(await verify(intact.key)).toMatchObject({ actor: { kind: "key", keyId: intact.keyId } });
-  await Effect.runPromise(issuer.service.sql`DELETE FROM apikey WHERE id = ${key.keyId}`);
+  await Effect.runPromise(issuer.get(Database).sql`DELETE FROM apikey WHERE id = ${key.keyId}`);
 });
 
 test("HTTP administration requires the owner session; MCP requires bearer authorization", async () => {
-  const userId = await Effect.runPromise(issuer.service.owner());
+  const userId = await Effect.runPromise(issuer.get(OwnerAccount).find());
 
   if (userId === undefined) throw new Error("Expected an owner for spoofed-session checks");
   const spoofedOwner = { userId, cookie };

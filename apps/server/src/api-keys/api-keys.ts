@@ -1,4 +1,5 @@
-import { Clock, DateTime, Effect, Schema } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
   CurrentOwner,
@@ -6,9 +7,13 @@ import {
   type ApiKeyId,
   type ApiKeyInput,
   type ApiKeyUpdate,
+  type MachineKey,
+  type OwnerError,
 } from "@clankerauth/admin-api";
-import { Auth } from "../issuer/issuer.ts";
-import { administrationIdentifier } from "../resources/resources.ts";
+import { Database } from "../platform/sqlite.ts";
+import { Issuer } from "../issuer/issuer.ts";
+import { Settings } from "../issuer/settings.ts";
+import { administrationIdentifier, ResourceCatalog } from "../resources/catalog.ts";
 import { invalidInput, provider } from "../issuer/errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
@@ -55,169 +60,212 @@ const summary = Effect.fnUntraced(function* (key: {
   };
 });
 
-export const machineKeys = Effect.map(Auth, (service) => {
-  // The contract's schemas check the name and that each grant names scopes, once each; what
-  // remains depends on the stored resources.
-  const validate = Effect.fn("MachineKeys.validate")(function* (
-    grants: typeof KeyPermissions.Type | undefined,
-  ) {
-    if (grants === undefined) return;
+type Refusal = OwnerError | Action.InvalidInput;
 
-    for (const [identifier, scopes] of Object.entries(grants)) {
-      if (identifier === administrationIdentifier(service.settings.baseURL))
-        return yield* invalidInput(
-          ["permissions", identifier],
-          "Administration requires OAuth access tokens, not API keys",
-        );
-      const resource = yield* service.resources.get(identifier);
+type Summary = typeof MachineKey.Type;
 
-      if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
-        return yield* invalidInput(
-          ["permissions", identifier],
-          "Select explicitly granted, currently available Resource scopes",
-        );
-    }
-  });
-
-  return {
-    list: Effect.fn("MachineKeys.list")(function* () {
-      const { providerHeaders } = yield* CurrentOwner;
-      const headers = yield* providerHeaders;
-
-      // The plugin pages in memory over one database read, so listings stop at its page size.
-      const result = yield* provider(() =>
-        service.auth.api.listApiKeys({
-          headers,
-          query: { sortBy: "createdAt", sortDirection: "asc" },
-        }),
-      );
-
-      return { keys: yield* Effect.forEach(result.apiKeys, summary) };
-    }),
-    create: Effect.fn("MachineKeys.create")(function* (input: typeof ApiKeyInput.Type) {
-      const owner = yield* CurrentOwner;
-      yield* validate(input.permissions);
-
-      const expiresIn =
-        input.expiresAt === null
-          ? null
-          : (DateTime.toEpochMillis(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
-
-      if (expiresIn !== null && expiresIn < 1)
-        return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
-
-      const key = yield* provider(() =>
-        service.auth.api.createApiKey({
-          body: {
-            userId: owner.userId,
-            name: input.name.trim(),
-            permissions: Object.fromEntries(
-              Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
-            ),
-            expiresIn,
-          },
-        }),
-      );
-
-      return { ...(yield* summary(key)), key: key.key };
-    }),
-    update: Effect.fn("MachineKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
-      const owner = yield* CurrentOwner;
-      yield* validate(input.permissions);
-
-      return yield* summary(
-        yield* provider(() =>
-          service.auth.api.updateApiKey({
-            body: {
-              userId: owner.userId,
-              keyId: input.keyId,
-              name: input.name?.trim(),
-              enabled: input.enabled,
-              permissions: input.permissions
-                ? Object.fromEntries(
-                    Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
-                  )
-                : undefined,
-            },
-          }),
-        ),
-      );
-    }),
-    delete: Effect.fn("MachineKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
-      const { providerHeaders } = yield* CurrentOwner;
-      const headers = yield* providerHeaders;
-      yield* provider(() => service.auth.api.deleteApiKey({ headers, body: { keyId } }));
-
-      return { deleted: true };
-    }),
+/** The owner's API keys, and the signed key lists resource servers verify them against. */
+export class ApiKeys extends Context.Service<
+  ApiKeys,
+  {
+    readonly list: () => Effect.Effect<
+      { keys: ReadonlyArray<Summary> },
+      Refusal,
+      CurrentOwner | Scope.Scope
+    >;
+    /** Creates a key; its secret is returned once. */
+    readonly create: (
+      input: typeof ApiKeyInput.Type,
+    ) => Effect.Effect<Summary & { key: string }, Refusal, CurrentOwner>;
+    readonly update: (
+      input: typeof ApiKeyUpdate.Type,
+    ) => Effect.Effect<Summary, Refusal, CurrentOwner>;
+    readonly delete: (
+      input: typeof ApiKeyId.Type,
+    ) => Effect.Effect<{ deleted: boolean }, Refusal, CurrentOwner | Scope.Scope>;
     /**
      * Every enabled, unexpired key granted on the resource, with the scopes it still
      * defines, sealed and signed for offline verification. An unknown resource, and the
      * administration resource, which keys never reach, get a list with no entries.
      */
-    keyList: Effect.fn("MachineKeys.keyList")(function* (identifier: string) {
-      const now = yield* Clock.currentTimeMillis;
-      const resource = yield* service.resources.get(identifier);
+    readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, OwnerError>;
+  }
+>()("clankerauth/ApiKeys") {
+  static readonly layer = Layer.effect(
+    ApiKeys,
+    Effect.gen(function* () {
+      const { auth } = yield* Issuer;
+      const { baseURL } = yield* Settings;
+      const { sql } = yield* Database;
+      const catalog = yield* ResourceCatalog;
 
-      const available =
-        resource === undefined || identifier === administrationIdentifier(service.settings.baseURL)
-          ? []
-          : resource.scopes;
+      // The contract's schemas check the name and that each grant names scopes, once each; what
+      // remains depends on the stored resources.
+      const validate = Effect.fn("MachineKeys.validate")(function* (
+        grants: typeof KeyPermissions.Type | undefined,
+      ) {
+        if (grants === undefined) return;
 
-      const rows = available.length
-        ? yield* service.sql`
-            SELECT id, key, referenceId, expiresAt, permissions FROM apikey
-            WHERE enabled = 1 AND (expiresAt IS NULL OR expiresAt > ${new Date(now).toISOString()})
-          `
-        : [];
+        for (const [identifier, scopes] of Object.entries(grants)) {
+          if (identifier === administrationIdentifier(baseURL))
+            return yield* invalidInput(
+              ["permissions", identifier],
+              "Administration requires OAuth access tokens, not API keys",
+            );
+          const resource = yield* catalog.get(identifier);
 
-      // A row that does not decode or seal fails closed on its own: that key is left out,
-      // and every other key, on every resource, is listed as before. Its digest is the
-      // entry's secret, so only the key's ID reaches the log.
-      const entries = yield* Effect.forEach(rows, (row) =>
-        Effect.gen(function* () {
-          const key = yield* storedKey(row);
+          if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
+            return yield* invalidInput(
+              ["permissions", identifier],
+              "Select explicitly granted, currently available Resource scopes",
+            );
+        }
+      });
 
-          const scopes = (key.permissions?.[identifier] ?? []).filter((scope) =>
-            available.includes(scope),
-          );
+      return {
+        list: Effect.fn("MachineKeys.list")(function* () {
+          const { providerHeaders } = yield* CurrentOwner;
+          const headers = yield* providerHeaders;
 
-          if (!scopes.length) return [];
-
-          const entry = yield* Effect.tryPromise(() =>
-            KeyList.seal(new Uint8Array(Buffer.from(key.key, "base64url")), identifier, {
-              keyId: key.id,
-              ownerId: key.referenceId,
-              scopes,
-              expiresAt: key.expiresAt === null ? null : DateTime.toEpochMillis(key.expiresAt),
+          // The plugin pages in memory over one database read, so listings stop at its page size.
+          const result = yield* provider(() =>
+            auth.api.listApiKeys({
+              headers,
+              query: { sortBy: "createdAt", sortDirection: "asc" },
             }),
           );
 
-          return [entry];
-        }).pipe(
-          Effect.catch(() =>
-            Effect.as(
-              Effect.logWarning("An API key row cannot be listed; it is left out of key lists", {
-                keyId: row.id,
-              }),
-              [],
-            ),
-          ),
-        ),
-      );
-
-      const iat = Math.floor(now / 1000);
-
-      const { token } = yield* provider(() =>
-        service.auth.api.signDocument({
-          body: {
-            typ: KeyList.type,
-            payload: { aud: identifier, iat, exp: iat + KeyList.lifetime, keys: entries.flat() },
-          },
+          return { keys: yield* Effect.forEach(result.apiKeys, summary) };
         }),
-      );
+        create: Effect.fn("MachineKeys.create")(function* (input: typeof ApiKeyInput.Type) {
+          const owner = yield* CurrentOwner;
+          yield* validate(input.permissions);
 
-      return { list: token };
+          const expiresIn =
+            input.expiresAt === null
+              ? null
+              : (DateTime.toEpochMillis(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
+
+          if (expiresIn !== null && expiresIn < 1)
+            return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
+
+          const key = yield* provider(() =>
+            auth.api.createApiKey({
+              body: {
+                userId: owner.userId,
+                name: input.name.trim(),
+                permissions: Object.fromEntries(
+                  Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
+                ),
+                expiresIn,
+              },
+            }),
+          );
+
+          return { ...(yield* summary(key)), key: key.key };
+        }),
+        update: Effect.fn("MachineKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
+          const owner = yield* CurrentOwner;
+          yield* validate(input.permissions);
+
+          return yield* summary(
+            yield* provider(() =>
+              auth.api.updateApiKey({
+                body: {
+                  userId: owner.userId,
+                  keyId: input.keyId,
+                  name: input.name?.trim(),
+                  enabled: input.enabled,
+                  permissions: input.permissions
+                    ? Object.fromEntries(
+                        Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
+                      )
+                    : undefined,
+                },
+              }),
+            ),
+          );
+        }),
+        delete: Effect.fn("MachineKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
+          const { providerHeaders } = yield* CurrentOwner;
+          const headers = yield* providerHeaders;
+          yield* provider(() => auth.api.deleteApiKey({ headers, body: { keyId } }));
+
+          return { deleted: true };
+        }),
+        keyList: Effect.fn("MachineKeys.keyList")(function* (identifier: string) {
+          const now = yield* Clock.currentTimeMillis;
+          const resource = yield* catalog.get(identifier);
+
+          const available =
+            resource === undefined || identifier === administrationIdentifier(baseURL)
+              ? []
+              : resource.scopes;
+
+          const rows = available.length
+            ? yield* sql`
+            SELECT id, key, referenceId, expiresAt, permissions FROM apikey
+            WHERE enabled = 1 AND (expiresAt IS NULL OR expiresAt > ${new Date(now).toISOString()})
+          `
+            : [];
+
+          // A row that does not decode or seal fails closed on its own: that key is left out,
+          // and every other key, on every resource, is listed as before. Its digest is the
+          // entry's secret, so only the key's ID reaches the log.
+          const entries = yield* Effect.forEach(rows, (row) =>
+            Effect.gen(function* () {
+              const key = yield* storedKey(row);
+
+              const scopes = (key.permissions?.[identifier] ?? []).filter((scope) =>
+                available.includes(scope),
+              );
+
+              if (!scopes.length) return [];
+
+              const entry = yield* Effect.tryPromise(() =>
+                KeyList.seal(new Uint8Array(Buffer.from(key.key, "base64url")), identifier, {
+                  keyId: key.id,
+                  ownerId: key.referenceId,
+                  scopes,
+                  expiresAt: key.expiresAt === null ? null : DateTime.toEpochMillis(key.expiresAt),
+                }),
+              );
+
+              return [entry];
+            }).pipe(
+              Effect.catch(() =>
+                Effect.as(
+                  Effect.logWarning(
+                    "An API key row cannot be listed; it is left out of key lists",
+                    {
+                      keyId: row.id,
+                    },
+                  ),
+                  [],
+                ),
+              ),
+            ),
+          );
+
+          const iat = Math.floor(now / 1000);
+
+          const { token } = yield* provider(() =>
+            auth.api.signDocument({
+              body: {
+                typ: KeyList.type,
+                payload: {
+                  aud: identifier,
+                  iat,
+                  exp: iat + KeyList.lifetime,
+                  keys: entries.flat(),
+                },
+              },
+            }),
+          );
+
+          return { list: token };
+        }),
+      };
     }),
-  };
-});
+  );
+}

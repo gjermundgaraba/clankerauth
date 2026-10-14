@@ -5,16 +5,20 @@ import { fileURLToPath } from "node:url";
 import { Context, Effect, Exit, Fiber, FileSystem, Layer, Redacted, Schema, Scope } from "effect";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Cookies, FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { clientActions } from "../../../apps/server/src/clients/actions.ts";
-import { resourceActions } from "../../../apps/server/src/resources/actions.ts";
-import { nodeHandler } from "../../../apps/server/src/http/application.ts";
-import { Auth } from "../../../apps/server/src/issuer/issuer.ts";
-import { createOwner } from "../../../apps/server/src/owner/setup.ts";
-import { validateSettings } from "../../../apps/server/src/issuer/settings.ts";
+import {
+  ApiKeys,
+  CimdTransport,
+  Clients,
+  createNodeServer,
+  issuerServices,
+  nodeHandler,
+  OwnerAccount,
+  ResourceCatalog,
+  Resources,
+  Settings,
+  validateSettings,
+} from "@clankerauth/server/embed";
 import { CurrentOwner } from "@clankerauth/admin-api";
-import { machineKeys } from "../../../apps/server/src/api-keys/api-keys.ts";
-import { providerSession } from "../../../apps/server/src/owner/provider-session.ts";
-import { createNodeServer } from "../../../apps/server/src/platform/node-http.ts";
 import type { DisposableIssuer, DisposableIssuerOptions, Identity } from "./types.d.ts";
 
 const credentialsFile = "credentials.json";
@@ -207,8 +211,17 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     cookieDomain: options.cookieDomain,
   });
 
-  const issuer = yield* Layer.build(Auth.layer(settings, { cimdTransport: options.cimdTransport }));
-  const service = Context.get(issuer, Auth);
+  const cimdTransport =
+    options.cimdTransport === undefined
+      ? CimdTransport.layer
+      : Layer.succeed(CimdTransport, { fetch: options.cimdTransport });
+
+  const issuer = yield* Layer.build(
+    issuerServices(Layer.succeed(Settings, settings), cimdTransport),
+  );
+
+  const account = Context.get(issuer, OwnerAccount);
+  const catalog = Context.get(issuer, ResourceCatalog);
 
   const requests = yield* Scope.fork(yield* Effect.scope);
 
@@ -222,9 +235,9 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   const owner = { email: identity.email, password: identity.password };
 
   // Seed in-process: the owner's provider session authorizes administration directly.
-  const admin = yield* Effect.provide(clientActions, issuer);
-  const resourceAdmin = yield* Effect.provide(resourceActions, issuer);
-  const keys = yield* Effect.provide(machineKeys, issuer);
+  const clients = Context.get(issuer, Clients);
+  const resources = Context.get(issuer, Resources);
+  const keys = Context.get(issuer, ApiKeys);
 
   /**
    * Run administration as the owner, the way the dashboard's session does. No code path
@@ -237,31 +250,25 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     Effect.uninterruptible(
       Effect.scoped(
         Effect.gen(function* () {
-          const userId = yield* service.owner();
+          const userId = yield* account.find();
 
           if (userId === undefined) return yield* Effect.die(new Error("Owner setup failed"));
-          const headers = yield* providerSession(service, userId);
 
           return yield* operation(userId).pipe(
-            Effect.provideService(CurrentOwner, {
-              userId,
-              email: owner.email,
-              writable: true,
-              providerHeaders: Effect.succeed(headers),
-            }),
+            Effect.provideService(CurrentOwner, account.caller(userId, owner.email, true)),
           );
         }),
       ),
     ).pipe(Effect.mapError(provisioningFailed));
 
   // Every step is idempotent, so a persistent workspace restarts onto its own state.
-  if (!(yield* service.owner()))
-    yield* createOwner(service, owner).pipe(Effect.mapError(provisioningFailed));
+  if (!(yield* account.find()))
+    yield* account.create(owner).pipe(Effect.mapError(provisioningFailed));
 
   yield* asOwner(() =>
     Effect.forEach(options.resources, (resource) =>
-      Effect.flatMap(service.resources.get(resource.identifier), (existing) =>
-        existing ? Effect.void : Effect.asVoid(resourceAdmin.createResource(resource)),
+      Effect.flatMap(catalog.get(resource.identifier), (existing) =>
+        existing ? Effect.void : Effect.asVoid(resources.create(resource)),
       ),
     ),
   );
@@ -269,13 +276,13 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   const registered = yield* asOwner(() =>
     Effect.gen(function* () {
       if (identity.clientId !== undefined && identity.clientSecret !== undefined) {
-        const { clients } = yield* admin.list();
+        const { clients: known } = yield* clients.list();
 
-        if (clients.some((known) => known.client_id === identity.clientId))
+        if (known.some((client) => client.client_id === identity.clientId))
           return { client_id: identity.clientId, client_secret: identity.clientSecret };
       }
 
-      return yield* admin.create({
+      return yield* clients.create({
         client_name: options.client.name,
         redirect_uris: [options.client.redirect],
         resources: options.client.resources,

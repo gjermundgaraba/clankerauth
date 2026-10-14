@@ -1,6 +1,8 @@
 import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-dialect";
-import { Effect, Exit, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { Kysely, sql as query } from "kysely";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OwnerError } from "@clankerauth/admin-api";
 import { internalError } from "../issuer/errors.ts";
@@ -90,4 +92,37 @@ export async function openDatabase(filename: string) {
     database.close();
     throw error;
   }
+}
+
+/** The issuer's one SQLite connection, shared by Better Auth and every domain's queries. */
+export class Database extends Context.Service<
+  Database,
+  {
+    /** The connection Better Auth runs on, for the provider's own adapter. */
+    readonly kysely: Kysely<DatabaseSchema>;
+    readonly sql: Sql;
+    readonly transaction: <A, E, R>(
+      operation: (sql: Sql) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | OwnerError, R>;
+  }
+>()("clankerauth/Database") {
+  /** Opens `filename`, creating its directory, and closes the connection with the scope. */
+  static readonly layer = (filename: string) =>
+    Layer.effect(
+      Database,
+      Effect.gen(function* () {
+        yield* Effect.try(() => mkdirSync(dirname(filename), { recursive: true, mode: 0o700 }));
+
+        const open = yield* Effect.acquireRelease(
+          Effect.tryPromise(() => openDatabase(filename)),
+          (database) => Effect.promise(() => database.close()),
+        );
+
+        return {
+          kysely: open.kysely,
+          sql: open.sql,
+          transaction: (operation) => transaction(open.kysely, operation),
+        };
+      }),
+    );
 }

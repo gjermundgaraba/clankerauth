@@ -11,13 +11,15 @@ import { Effect, Layer } from "effect";
 import type * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
-import { administrationScopes, administrationIdentifier } from "../resources/resources.ts";
-import { Auth } from "../issuer/issuer.ts";
+import { administrationScopes, administrationIdentifier } from "../resources/catalog.ts";
+import { Issuer } from "../issuer/issuer.ts";
+import { Settings } from "../issuer/settings.ts";
 
 export const administrationResource = Effect.fn("AdministrationResource.make")(function* () {
-  const service = yield* Auth;
-  const issuer = `${service.settings.baseURL}/api/auth`;
-  const resource = administrationIdentifier(service.settings.baseURL);
+  const { auth } = yield* Issuer;
+  const { baseURL } = yield* Settings;
+  const issuer = `${baseURL}/api/auth`;
+  const resource = administrationIdentifier(baseURL);
 
   // Published, and named in every challenge, by the authentication around the endpoint.
   // Clients ask for what a 401 names. Naming both scopes lets the owner decide at consent
@@ -37,7 +39,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
     // Better Auth reads the client address from this header (see ipAddressHeaders in auth.ts).
     request.headers.set("x-clankerauth-peer", "127.0.0.1");
 
-    return service.auth.handler(request);
+    return auth.handler(request);
   };
 
   const verifier = yield* Verifier.make({

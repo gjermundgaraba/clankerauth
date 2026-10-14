@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
-import { Config, Effect, Redacted, Schema } from "effect";
+import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 
-export interface Settings {
+export interface IssuerSettings {
   baseURL: string;
   secret: Redacted.Redacted<string>;
   database: string;
@@ -48,7 +48,7 @@ const validOrigin = (value: string, allowInsecureHttp: boolean) =>
   allowedScheme(new URL(value), allowInsecureHttp);
 
 /** The rules between settings, for the environment and for embedders that build them directly. */
-export const validateSettings = Effect.fnUntraced(function* (settings: Settings) {
+export const validateSettings = Effect.fnUntraced(function* (settings: IssuerSettings) {
   const { allowInsecureHttp, baseURL, cookieDomain } = settings;
 
   if (!validOrigin(baseURL, allowInsecureHttp))
@@ -79,7 +79,7 @@ export const validateSettings = Effect.fnUntraced(function* (settings: Settings)
 });
 
 export const loadSettings = Effect.gen(function* () {
-  const settings: Settings = {
+  const settings: IssuerSettings = {
     baseURL: yield* Config.String("CLANKERAUTH_BASE_URL"),
     secret: yield* Config.Redacted("CLANKERAUTH_BETTER_AUTH_SECRET"),
     database: yield* Config.String("CLANKERAUTH_DATABASE").pipe(
@@ -101,3 +101,9 @@ export const loadSettings = Effect.gen(function* () {
 
   return yield* validateSettings(settings);
 });
+
+/** The issuer's configuration, read once where the process starts. */
+export class Settings extends Context.Service<Settings, IssuerSettings>()("clankerauth/Settings") {
+  /** `CLANKERAUTH_*` from the environment, validated. */
+  static readonly layer = Layer.effect(Settings, loadSettings);
+}

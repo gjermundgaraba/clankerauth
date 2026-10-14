@@ -29,7 +29,7 @@ test("the provider bridge answers an unreadable body as a 400", async () => {
   const baseURL = "http://localhost:3000";
   const issuer = await openIssuer({ baseURL });
 
-  const handle = webApplication(issuer.service);
+  const handle = webApplication(issuer);
 
   const post = (body: BodyInit) => {
     const init: StreamingRequestInit = {

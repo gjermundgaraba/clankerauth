@@ -1,12 +1,12 @@
 import { Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/http";
 import { application } from "../src/http/application.ts";
-import { Auth } from "../src/issuer/issuer.ts";
+import type { OpenedIssuer } from "./open-issuer.ts";
 
 /** Test boundary: simulate the socket peer; production never trusts this header. */
-export function webApplication(service: Auth["Service"], staticRoot?: string) {
+export function webApplication(issuer: OpenedIssuer, staticRoot?: string) {
   const { handler, dispose } = HttpRouter.toWebHandler(
-    application(staticRoot).pipe(Layer.provide(Layer.succeed(Auth, service))),
+    application(staticRoot).pipe(Layer.provide(Layer.succeedContext(issuer.context))),
     {
       disableLogger: true,
       middleware: (effect) =>

@@ -3,8 +3,9 @@ import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { FetchHttpClient, HttpRouter } from "effect/http";
 import { Otlp, OtlpSerialization } from "effect/observability";
 import { application } from "./http/application.ts";
-import { Auth } from "./issuer/issuer.ts";
-import { loadSettings } from "./issuer/settings.ts";
+import { Settings } from "./issuer/settings.ts";
+import { CimdTransport } from "./platform/cimd-transport.ts";
+import { issuerServices } from "./services.ts";
 import { createNodeServer } from "./platform/node-http.ts";
 
 process.umask(0o077);
@@ -15,11 +16,11 @@ const telemetry = Otlp.layerFromConfig({ resource: { serviceName: "clankerauth" 
 );
 
 /** The configured issuer for this process; its scope outlives every request scope. */
-const issuer = Layer.unwrap(Effect.map(loadSettings, (settings) => Auth.layer(settings)));
+const issuer = issuerServices(Settings.layer, CimdTransport.layer);
 
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const { settings } = yield* Auth;
+    const settings = yield* Settings;
     const nodeServer = createNodeServer();
 
     const server = yield* NodeHttpServer.make(() => nodeServer, {
