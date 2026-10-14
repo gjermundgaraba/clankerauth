@@ -20,10 +20,20 @@ import { describe, test } from "vite-plus/test";
 
 import { AppRoute } from "../route.ts";
 import { Change } from "./change.ts";
-import { Announce, FetchListing, SaveChange, SignOut } from "./command.ts";
+import { Announce, SaveChange, SignOut } from "./command.ts";
 import { Message, update, view } from "./index.ts";
-import { cataloged, listed, listing, reread } from "./dashboard.fixture.ts";
-import { Activity, ListingData } from "./model.ts";
+import {
+  SECOND_READ,
+  THIRD_READ,
+  cataloged,
+  listed,
+  listing,
+  readOf,
+  staleListed,
+  unlisted,
+} from "./dashboard.fixture.ts";
+import { listingQuery } from "./listing.ts";
+import { Activity } from "./model.ts";
 
 const clientsView = withViewInputs(view, { section: AppRoute.Clients() })();
 
@@ -89,7 +99,10 @@ describe("dashboard view", () => {
         Message.SucceededSaveChange({ change: deleteKey, maybeCredential: Option.none() }),
       ),
       closeDialog,
-      Command.resolveAll([FetchListing, reread], [Announce, Message.CompletedAnnounce()]),
+      Command.resolveAll(
+        [listingQuery.Fetch, readOf(SECOND_READ, listing)],
+        [Announce, Message.CompletedAnnounce()],
+      ),
       Mount.expectEnded(UiDialog.AcquireResources, Dialog.BindActionKeys),
       expect(role("alertdialog", { name: "Delete API key" })).toBeAbsent(),
     );
@@ -197,15 +210,11 @@ describe("dashboard view", () => {
   test("a listing that could not refresh can be read again", () => {
     scene(
       { update, view: keysView },
-      given(
-        modifyFields(listed, {
-          listing: () => ListingData.Stale({ data: listing, error: "Fixture request failed" }),
-        }),
-      ),
+      given(staleListed),
       measureTopBar,
       expect(text("Not refreshed")).toExist(),
       click(role("button", { name: "retry refresh" })),
-      Command.resolve(FetchListing, reread),
+      Command.resolve(listingQuery.Fetch, readOf(THIRD_READ, listing)),
       expect(text("Not refreshed")).toBeAbsent(),
     );
   });
@@ -213,14 +222,10 @@ describe("dashboard view", () => {
   test("a listing that could not be read says why and can be read again", () => {
     scene(
       { update, view: keysView },
-      given(
-        modifyFields(listed, {
-          listing: () => ListingData.Failure({ error: "Fixture request failed" }),
-        }),
-      ),
+      given(unlisted),
       expect(text("Fixture request failed")).toExist(),
       click(role("button", { name: "try again" })),
-      Command.resolve(FetchListing, reread),
+      Command.resolve(listingQuery.Fetch, readOf(SECOND_READ, listing)),
       measureTopBar,
       expect(role("heading", { name: "API keys" })).toExist(),
     );

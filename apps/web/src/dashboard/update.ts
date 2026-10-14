@@ -14,26 +14,36 @@ import {
   needsReread,
   type Credential,
 } from "./change.ts";
-import { Announce, FetchListing, SaveChange, SignOut } from "./command.ts";
+import { Announce, SaveChange, SignOut } from "./command.ts";
 import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
+import { listingQuery } from "./listing.ts";
 import { Message } from "./message.ts";
 import {
   Activity,
-  ListingData,
   type Model,
   type PendingCredential,
   type Place,
   type Refusal,
   isHeld,
   isSaving,
+  listingOf,
 } from "./model.ts";
+
+// LISTING
+
+/** The listing, read on opening and read again on request and after a saved change. A read
+ *  already running is left to finish. */
+const listing = listingQuery.lift<Model, Message>({
+  parentField: "listing",
+  toParentMessage: (message) => Message.GotListingMessage({ message }),
+});
 
 // INIT
 
-export const init = (): Update.Return<Model, Message> => ({
-  model: {
-    listing: ListingData.Loading(),
+export const init = (): Update.Return<Model, Message> =>
+  listing.loadIfMissing({
+    listing: listingQuery.init(),
     credentials: [],
     issuerCopy: CopyButton.init({ id: "copy-issuer" }),
     editor: Dialog.init({ id: "dashboard-editor" }),
@@ -42,9 +52,7 @@ export const init = (): Update.Return<Model, Message> => ({
     maybePending: Option.none(),
     activity: Activity.Idle(),
     maybeRefusal: Option.none(),
-  },
-  commands: [FetchListing()],
-});
+  });
 
 // UPDATE
 
@@ -55,15 +63,6 @@ const editorFold = Dialog.foldDialog(Dialog, {
   write: (model: Model, nextEditor: Dialog.Model): Model =>
     modifyFields(model, { editor: () => nextEditor }),
   toParentMessage: (message: Dialog.Message) => Message.GotEditorMessage({ message }),
-});
-
-/** Reads the listing again: afresh after a failed first read, in place once it has data. A
- *  read already running is left to finish. */
-const reloadListing = Update.refresh({
-  read: (model: Model) => Option.some(model.listing),
-  revalidate: AsyncData.revalidateOrLoad,
-  write: (model, nextListing) => modifyFields(model, { listing: () => nextListing }),
-  load: FetchListing(),
 });
 
 /** Drops a refusal shown at `place`, which a fresh start there makes old news. */
@@ -194,7 +193,7 @@ const saved = (
     [
       closeEditor,
       closeConfirm,
-      ...(needsReread(change) ? [reloadListing] : []),
+      ...(needsReread(change) ? [listing.revalidateOrLoad] : []),
       (stepModel) => ({
         model: stepModel,
         commands: [
@@ -261,14 +260,17 @@ const formOpened = (model: Model, form: Form.Model): UpdateReturn =>
 // The copy buttons write through the application's `Clipboard` service.
 export const update = (model: Model, message: Message) =>
   Message.match<Update.Return<Model, Message, Clipboard.Clipboard>>(message, {
-    SettledFetchListing: ({ result }) => {
-      const nextModel = modifyFields(model, { listing: AsyncData.settle(result) });
+    GotListingMessage: ({ message: listingMessage }) => {
+      const listingFold = listing.fold(model, listingMessage);
 
-      return AsyncData.isStale(nextModel.listing)
-        ? { model: nextModel, commands: [Announce({ text: NOT_REFRESHED })] }
-        : { model: nextModel };
+      return !AsyncData.isStale(listingOf(model)) && AsyncData.isStale(listingOf(listingFold.model))
+        ? {
+            model: listingFold.model,
+            commands: [...(listingFold.commands ?? []), Announce({ text: NOT_REFRESHED })],
+          }
+        : listingFold;
     },
-    ClickedRetryListing: () => reloadListing(model),
+    ClickedRetryListing: () => listing.revalidateOrLoad(model),
     ClickedOpenForm: ({ form }) => formOpened(model, form),
     GotFormMessage: ({ message: formMessage }) => ({
       model: modifyFields(model, {

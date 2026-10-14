@@ -2,7 +2,7 @@ import { Array, DateTime } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Button, Format, Wrap } from "@gjermundgaraba-designs/pixel-paper";
 
-import type { Listing } from "./model.ts";
+import type { Listing } from "./listing.ts";
 
 /** What every section of the dashboard renders from. */
 export type SectionContext = Readonly<{

@@ -1,4 +1,3 @@
-import { ClientListResult, MachineKey } from "@clankerauth/admin-api";
 import { Option, Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -6,18 +5,9 @@ import { ConfirmDialog, CopyButton, Dialog } from "@gjermundgaraba-designs/pixel
 
 import { Change, type Confirmation, Credential, confirmationOf } from "./change.ts";
 import * as Form from "./form.ts";
+import { type Listing, listingQuery } from "./listing.ts";
 
 // MODEL
-
-/** Everything the dashboard lists, read in one go after every saved change. */
-export const Listing = Schema.Struct({
-  overview: ClientListResult,
-  keys: Schema.Array(MachineKey),
-});
-
-export type Listing = typeof Listing.Type;
-
-export const ListingData = AsyncData.Schema(Listing, Schema.String);
 
 /** A credential shown once, with the button that copies it. */
 export const PendingCredential = Schema.Struct({
@@ -48,7 +38,7 @@ export const Refusal = Schema.Struct({ place: Place, title: Schema.String, reaso
 export type Refusal = typeof Refusal.Type;
 
 export const Model = Schema.Struct({
-  listing: ListingData.schema,
+  listing: listingQuery.Model,
   credentials: Schema.Array(PendingCredential),
   issuerCopy: CopyButton.Model,
   editor: Dialog.Model,
@@ -65,6 +55,10 @@ export type Model = typeof Model.Type;
 
 // ACCESSORS
 
+/** The listing as the dashboard has read it. */
+export const listingOf = (model: Model): AsyncData.AsyncData<Listing, string> =>
+  listingQuery.read(model.listing);
+
 /** Whether a change is saving, so its dialog stays open and its controls are busy. */
 export const isSaving = (model: Model): boolean => Activity.guards.Saving(model.activity);
 
@@ -74,7 +68,7 @@ export const isSaving = (model: Model): boolean => Activity.guards.Saving(model.
  * may be out of date, so the only way on from a failed read is to read again.
  */
 export const isHeld = (model: Model): boolean =>
-  !Activity.guards.Idle(model.activity) || !AsyncData.isSuccess(model.listing);
+  !Activity.guards.Idle(model.activity) || !AsyncData.isSuccess(listingOf(model));
 
 /** Whether one of the dashboard's dialogs is open, so it hosts the page's live region. */
 export const isDialogOpen = (model: Model): boolean =>
