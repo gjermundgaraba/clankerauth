@@ -1,4 +1,5 @@
-import { expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { ClientNotFound } from "@clankerauth/admin-api";
 import { Cause, Effect, Exit, Result } from "effect";
 import { sql as query } from "kysely";
@@ -7,116 +8,122 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSql, openDatabase, transaction } from "../../src/platform/sqlite.ts";
 
-test("native SQLite queries share Kysely transactions and rollbacks", async () => {
-  const database = await openDatabase(":memory:");
+const open = (filename: string) =>
+  Effect.acquireRelease(
+    Effect.promise(() => openDatabase(filename)),
+    (database) => Effect.promise(() => database.close()),
+  );
 
-  try {
-    await Effect.runPromise(
-      database.sql`CREATE TABLE example (id INTEGER PRIMARY KEY, value TEXT)`,
-    );
+it.live("native SQLite queries share Kysely transactions and rollbacks", () =>
+  Effect.gen(function* () {
+    const database = yield* open(":memory:");
+    const services = yield* Effect.context<never>();
 
-    const inserted = await query`INSERT INTO example (value) VALUES (${"first"})`.execute(
-      database.kysely,
+    yield* database.sql`CREATE TABLE example (id INTEGER PRIMARY KEY, value TEXT)`;
+
+    const inserted = yield* Effect.promise(() =>
+      query`INSERT INTO example (value) VALUES (${"first"})`.execute(database.kysely),
     );
 
     expect(inserted.numAffectedRows).toBe(1n);
     expect(inserted.insertId).toBe(1n);
-    expect(await Effect.runPromise(database.sql`SELECT value FROM example`)).toEqual([
-      { value: "first" },
-    ]);
+    expect(yield* database.sql`SELECT value FROM example`).toEqual([{ value: "first" }]);
 
     let reader: Promise<unknown> | undefined;
     let readerCompleted = false;
-    await expect(
-      database.kysely.transaction().execute(async (transaction) => {
-        const sql = makeSql(transaction);
-        await Effect.runPromise(sql`INSERT INTO example (value) VALUES (${"rolled back"})`);
-        expect(
-          await Effect.runPromise(sql<{ value: string }>`SELECT value FROM example ORDER BY id`),
-        ).toEqual([{ value: "first" }, { value: "rolled back" }]);
-        reader = Effect.runPromise(database.sql`SELECT value FROM example`).then((rows) => {
-          readerCompleted = true;
 
-          return rows;
-        });
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(readerCompleted).toBe(false);
-        throw new Error("rollback requested");
+    const rollback = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () =>
+          database.kysely.transaction().execute(async (transaction) => {
+            const sql = makeSql(transaction);
+            await Effect.runPromiseWith(services)(
+              sql`INSERT INTO example (value) VALUES (${"rolled back"})`,
+            );
+            expect(
+              await Effect.runPromiseWith(services)(
+                sql<{ value: string }>`SELECT value FROM example ORDER BY id`,
+              ),
+            ).toEqual([{ value: "first" }, { value: "rolled back" }]);
+            reader = Effect.runPromiseWith(services)(database.sql`SELECT value FROM example`).then(
+              (rows) => {
+                readerCompleted = true;
+
+                return rows;
+              },
+            );
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(readerCompleted).toBe(false);
+            throw new Error("rollback requested");
+          }),
+        catch: (error) => error,
       }),
-    ).rejects.toThrow("rollback requested");
-    expect(await reader).toEqual([{ value: "first" }]);
+    );
 
-    await database.kysely.transaction().execute(async (transaction) => {
-      await query`INSERT INTO example (value) VALUES (${"committed"})`.execute(transaction);
-    });
-    expect(await Effect.runPromise(database.sql`SELECT value FROM example ORDER BY id`)).toEqual([
+    expect(rollback).toHaveProperty("message", "rollback requested");
+    expect(yield* Effect.promise(async () => reader)).toEqual([{ value: "first" }]);
+
+    yield* Effect.promise(() =>
+      database.kysely.transaction().execute(async (transaction) => {
+        await query`INSERT INTO example (value) VALUES (${"committed"})`.execute(transaction);
+      }),
+    );
+    expect(yield* database.sql`SELECT value FROM example ORDER BY id`).toEqual([
       { value: "first" },
       { value: "committed" },
     ]);
-    await expect(query`SELECT * FROM missing_table`.execute(database.kysely)).rejects.toThrow();
-    expect((await query`SELECT * FROM example`.execute(database.kysely)).rows).toHaveLength(2);
-  } finally {
-    await database.close();
-  }
-});
-
-test("native SQLite enables WAL, foreign keys, busy timeout and persists rows", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "clankerauth-database-"));
-  const filename = join(directory, "clankerauth.sqlite");
-
-  try {
-    const database = await openDatabase(filename);
-
-    try {
-      expect(await Effect.runPromise(database.sql`PRAGMA journal_mode`)).toEqual([
-        { journal_mode: "wal" },
-      ]);
-      expect(await Effect.runPromise(database.sql`PRAGMA foreign_keys`)).toEqual([
-        { foreign_keys: 1 },
-      ]);
-      expect(await Effect.runPromise(database.sql`PRAGMA busy_timeout`)).toEqual([
-        { timeout: 5000 },
-      ]);
-      await Effect.runPromise(database.sql`CREATE TABLE parent (id INTEGER PRIMARY KEY)`);
-      await Effect.runPromise(
-        database.sql`CREATE TABLE child (id INTEGER PRIMARY KEY, parentId INTEGER REFERENCES parent(id))`,
-      );
-      await expect(
-        Effect.runPromise(database.sql`INSERT INTO child VALUES (1, 99)`),
-      ).rejects.toThrow();
-      await Effect.runPromise(database.sql`INSERT INTO parent VALUES (99)`);
-      await Effect.runPromise(database.sql`INSERT INTO child VALUES (1, 99)`);
-    } finally {
-      await database.close();
-    }
-
-    await expect(Effect.runPromise(database.sql`SELECT 1`)).rejects.toThrow();
-
-    const reopened = await openDatabase(filename);
-
-    try {
-      expect(await Effect.runPromise(reopened.sql`SELECT * FROM child`)).toEqual([
-        { id: 1, parentId: 99 },
-      ]);
-    } finally {
-      await reopened.close();
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("local transactions preserve domain failures and roll back failed commits", async () => {
-  const database = await openDatabase(":memory:");
-
-  try {
-    await Effect.runPromise(database.sql`CREATE TABLE parent (id INTEGER PRIMARY KEY)`);
-    await Effect.runPromise(
-      database.sql`CREATE TABLE child (parentId INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED)`,
+    yield* Effect.flip(
+      Effect.tryPromise(() => query`SELECT * FROM missing_table`.execute(database.kysely)),
     );
+    expect(
+      (yield* Effect.promise(() => query`SELECT * FROM example`.execute(database.kysely))).rows,
+    ).toHaveLength(2);
+  }),
+);
+
+it.effect("native SQLite enables WAL, foreign keys, busy timeout and persists rows", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "clankerauth-database-"))),
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    );
+
+    const filename = join(directory, "clankerauth.sqlite");
+
+    const database = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const database = yield* open(filename);
+
+        expect(yield* database.sql`PRAGMA journal_mode`).toEqual([{ journal_mode: "wal" }]);
+        expect(yield* database.sql`PRAGMA foreign_keys`).toEqual([{ foreign_keys: 1 }]);
+        expect(yield* database.sql`PRAGMA busy_timeout`).toEqual([{ timeout: 5000 }]);
+        yield* database.sql`CREATE TABLE parent (id INTEGER PRIMARY KEY)`;
+        yield* database.sql`CREATE TABLE child (id INTEGER PRIMARY KEY, parentId INTEGER REFERENCES parent(id))`;
+        yield* Effect.flip(database.sql`INSERT INTO child VALUES (1, 99)`);
+        yield* database.sql`INSERT INTO parent VALUES (99)`;
+        yield* database.sql`INSERT INTO child VALUES (1, 99)`;
+
+        return database;
+      }),
+    );
+
+    yield* Effect.flip(database.sql`SELECT 1`);
+
+    const reopened = yield* open(filename);
+
+    expect(yield* reopened.sql`SELECT * FROM child`).toEqual([{ id: 1, parentId: 99 }]);
+  }),
+);
+
+it.effect("local transactions preserve domain failures and roll back failed commits", () =>
+  Effect.gen(function* () {
+    const database = yield* open(":memory:");
+
+    yield* database.sql`CREATE TABLE parent (id INTEGER PRIMARY KEY)`;
+    yield* database.sql`CREATE TABLE child (parentId INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED)`;
     const error = ClientNotFound.of("missing");
-    await expect(
-      Effect.runPromise(
+    expect(
+      yield* Effect.flip(
         transaction(database.kysely, (sql) =>
           Effect.gen(function* () {
             yield* sql`INSERT INTO parent VALUES (1)`;
@@ -125,50 +132,40 @@ test("local transactions preserve domain failures and roll back failed commits",
           }),
         ),
       ),
-    ).rejects.toBe(error);
-    expect(await Effect.runPromise(database.sql`SELECT * FROM parent`)).toEqual([]);
+    ).toBe(error);
+    expect(yield* database.sql`SELECT * FROM parent`).toEqual([]);
 
     // The callback succeeds, but the deferred foreign key fails at COMMIT.
-    await expect(
-      Effect.runPromise(transaction(database.kysely, (sql) => sql`INSERT INTO child VALUES (99)`)),
-    ).rejects.toBeInstanceOf(Error);
-    expect(await Effect.runPromise(database.sql`SELECT * FROM child`)).toEqual([]);
-    await Effect.runPromise(
-      transaction(database.kysely, (sql) => sql`INSERT INTO parent VALUES (99)`),
-    );
-    expect(await Effect.runPromise(database.sql`SELECT * FROM parent`)).toEqual([{ id: 99 }]);
-  } finally {
-    await database.close();
-  }
-});
+    expect(
+      yield* Effect.flip(transaction(database.kysely, (sql) => sql`INSERT INTO child VALUES (99)`)),
+    ).toBeInstanceOf(Error);
+    expect(yield* database.sql`SELECT * FROM child`).toEqual([]);
+    yield* transaction(database.kysely, (sql) => sql`INSERT INTO parent VALUES (99)`);
+    expect(yield* database.sql`SELECT * FROM parent`).toEqual([{ id: 99 }]);
+  }),
+);
 
-test("transactions preserve non-Error failures and defects after rollback", async () => {
-  const database = await openDatabase(":memory:");
-  const refusal = { reason: "denied" };
-  const defect = new Error("programming error");
+it.effect("transactions preserve non-Error failures and defects after rollback", () =>
+  Effect.gen(function* () {
+    const database = yield* open(":memory:");
+    const refusal = { reason: "denied" };
+    const defect = new Error("programming error");
 
-  try {
-    await Effect.runPromise(database.sql`CREATE TABLE rollbackProbe (value TEXT)`);
+    yield* database.sql`CREATE TABLE rollbackProbe (value TEXT)`;
 
-    const failure = await Effect.runPromise(
-      transaction(database.kysely, (sql) =>
-        sql`INSERT INTO rollbackProbe VALUES ('failure')`.pipe(
-          Effect.andThen(Effect.fail(refusal)),
-        ),
-      ).pipe(Effect.result),
-    );
+    const failure = yield* transaction(database.kysely, (sql) =>
+      sql`INSERT INTO rollbackProbe VALUES ('failure')`.pipe(Effect.andThen(Effect.fail(refusal))),
+    ).pipe(Effect.result);
 
     expect(Result.isFailure(failure) && failure.failure).toBe(refusal);
 
-    const exit = await Effect.runPromiseExit(
+    const exit = yield* Effect.exit(
       transaction(database.kysely, (sql) =>
         sql`INSERT INTO rollbackProbe VALUES ('defect')`.pipe(Effect.andThen(Effect.die(defect))),
       ),
     );
 
     expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
-    expect(await Effect.runPromise(database.sql`SELECT * FROM rollbackProbe`)).toEqual([]);
-  } finally {
-    await database.close();
-  }
-});
+    expect(yield* database.sql`SELECT * FROM rollbackProbe`).toEqual([]);
+  }),
+);

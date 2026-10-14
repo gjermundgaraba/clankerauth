@@ -1,37 +1,30 @@
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
 import { webMcpRequest } from "./mcp.ts";
-import { afterEach, beforeEach, expect, test } from "vite-plus/test";
-import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
-import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
+import { expect } from "vite-plus/test";
+import { testWebApplication, WebApplication } from "./test-issuer.ts";
+import { mcpOAuthGrant, type TestHandler } from "./mcp-oauth-helper.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
 
 const baseURL = "http://localhost:3000";
 
 const clientOrigin = "https://mcp-client.example.test";
 
-let issuer: OpenedIssuer;
+const corsIssuer = () => testWebApplication({ baseURL, mcpAllowedOrigins: [clientOrigin] });
 
-let handle: ReturnType<typeof application>;
+const send = (handle: TestHandler, request: Request) => Effect.promise(() => handle(request));
 
-beforeEach(async () => {
-  issuer = await openIssuer({ baseURL, mcpAllowedOrigins: [clientOrigin] });
-  handle = application(issuer);
-});
-
-afterEach(async () => {
-  await handle.dispose();
-  await issuer.close();
-});
-
-const list = (headers: Record<string, string> = {}) =>
-  handle(webMcpRequest({ method: "tools/list", url: `${baseURL}/mcp`, headers }));
+const list = (handle: TestHandler, headers: Record<string, string> = {}) =>
+  send(handle, webMcpRequest({ method: "tools/list", url: `${baseURL}/mcp`, headers }));
 
 const preflight = (
+  handle: TestHandler,
   origin: string,
   method = "POST",
   headers = "authorization, content-type, mcp-protocol-version",
 ) =>
-  handle(
+  send(
+    handle,
     new Request(`${baseURL}/mcp`, {
       method: "OPTIONS",
       headers: {
@@ -54,138 +47,172 @@ const expectCors = (response: Response, origin: string) => {
   expect(headerNames(response, "vary")).toContain("origin");
 };
 
-test("allowed browser origins can preflight MCP without credentials", async () => {
-  const allowedHeaders = [
-    "Authorization",
-    "Content-Type",
-    "Accept",
-    "Mcp-Protocol-Version",
-    "Mcp-Method",
-    "Mcp-Name",
-  ];
+it.live("allowed browser origins can preflight MCP without credentials", () =>
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
 
-  for (const origin of [clientOrigin, baseURL]) {
-    const response = await preflight(origin, "POST", allowedHeaders.join(", "));
-    expect(response.status).toBe(204);
-    expectCors(response, origin);
-    expect(headerNames(response, "access-control-allow-methods")).toEqual(["post"]);
-    expect(headerNames(response, "access-control-allow-headers")).toEqual(
-      expect.arrayContaining(allowedHeaders.map((name) => name.toLowerCase())),
-    );
-  }
-});
+    const allowedHeaders = [
+      "Authorization",
+      "Content-Type",
+      "Accept",
+      "Mcp-Protocol-Version",
+      "Mcp-Method",
+      "Mcp-Name",
+    ];
 
-test("MCP preflight rejects unlisted origins, methods, and headers", async () => {
-  for (const origin of [
-    "https://unlisted.example.test",
-    "https://mcp-client.example.test.evil.test",
-    "null",
-  ]) {
-    const response = await preflight(origin);
-    expect(response.status).toBe(403);
-    expect(response.headers.has("access-control-allow-origin")).toBe(false);
-  }
+    for (const origin of [clientOrigin, baseURL]) {
+      const response = yield* preflight(handle, origin, "POST", allowedHeaders.join(", "));
+      expect(response.status).toBe(204);
+      expectCors(response, origin);
+      expect(headerNames(response, "access-control-allow-methods")).toEqual(["post"]);
+      expect(headerNames(response, "access-control-allow-headers")).toEqual(
+        expect.arrayContaining(allowedHeaders.map((name) => name.toLowerCase())),
+      );
+    }
+  }).pipe(Effect.provide(corsIssuer())),
+);
 
-  // Stateless 2026-07-28 MCP has no GET stream, session deletion, session or resumption headers.
-  for (const method of ["GET", "DELETE", "PATCH"])
-    expect((await preflight(clientOrigin, method)).status).toBe(403);
+it.live("MCP preflight rejects unlisted origins, methods, and headers", () =>
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
 
-  for (const header of ["x-unlisted", "mcp-session-id", "last-event-id"])
-    expect((await preflight(clientOrigin, "POST", `authorization, ${header}`)).status).toBe(403);
-});
+    for (const origin of [
+      "https://unlisted.example.test",
+      "https://mcp-client.example.test.evil.test",
+      "null",
+    ]) {
+      const response = yield* preflight(handle, origin);
+      expect(response.status).toBe(403);
+      expect(response.headers.has("access-control-allow-origin")).toBe(false);
+    }
 
-test("browser authentication failures expose the challenge and MCP headers", async () => {
-  for (const authorization of [undefined, "Bearer invalid"]) {
-    const response = await list(
-      authorization === undefined
-        ? { origin: clientOrigin }
-        : { origin: clientOrigin, authorization },
-    );
+    // Stateless 2026-07-28 MCP has no GET stream, session deletion, session or resumption headers.
+    for (const method of ["GET", "DELETE", "PATCH"])
+      expect((yield* preflight(handle, clientOrigin, method)).status).toBe(403);
 
-    expect(response.status).toBe(401);
-    expectCors(response, clientOrigin);
-    expect(headerNames(response, "access-control-expose-headers")).toEqual([
-      "www-authenticate",
-      "mcp-protocol-version",
-    ]);
-  }
-});
+    for (const header of ["x-unlisted", "mcp-session-id", "last-event-id"])
+      expect(
+        (yield* preflight(handle, clientOrigin, "POST", `authorization, ${header}`)).status,
+      ).toBe(403);
+  }).pipe(Effect.provide(corsIssuer())),
+);
 
-test("MCP rejects unlisted origins before authentication and accepts originless native requests", async () => {
-  const foreign = await list({ origin: "https://unlisted.example.test" });
-  expect(foreign.status).toBe(403);
-  expect(foreign.headers.has("access-control-allow-origin")).toBe(false);
-  const native = await list();
-  expect(native.status).toBe(401);
-  expect(native.headers.has("access-control-allow-origin")).toBe(false);
-});
+it.live("browser authentication failures expose the challenge and MCP headers", () =>
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
 
-test("an allowed external browser uses bearer MCP while the dashboard API exposes no CORS grant", async () => {
-  const credentials = { email: "owner@example.internal", password: "test-only password123" };
-  await issuer.run(issuer.get(OwnerAccount).create(credentials));
+    for (const authorization of [undefined, "Bearer invalid"]) {
+      const response = yield* list(
+        handle,
+        authorization === undefined
+          ? { origin: clientOrigin }
+          : { origin: clientOrigin, authorization },
+      );
 
-  const login = await handle(
-    new Request(`${baseURL}/api/auth/sign-in/email`, {
-      method: "POST",
-      headers: { origin: baseURL, "content-type": "application/json" },
-      body: JSON.stringify(credentials),
-    }),
-  );
+      expect(response.status).toBe(401);
+      expectCors(response, clientOrigin);
+      expect(headerNames(response, "access-control-expose-headers")).toEqual([
+        "www-authenticate",
+        "mcp-protocol-version",
+      ]);
+    }
+  }).pipe(Effect.provide(corsIssuer())),
+);
 
-  expect(login.status).toBe(200);
+it.live(
+  "MCP rejects unlisted origins before authentication and accepts originless native requests",
+  () =>
+    Effect.gen(function* () {
+      const handle = yield* WebApplication;
+      const foreign = yield* list(handle, { origin: "https://unlisted.example.test" });
+      expect(foreign.status).toBe(403);
+      expect(foreign.headers.has("access-control-allow-origin")).toBe(false);
+      const native = yield* list(handle);
+      expect(native.status).toBe(401);
+      expect(native.headers.has("access-control-allow-origin")).toBe(false);
+    }).pipe(Effect.provide(corsIssuer())),
+);
 
-  const cookie = login.headers
-    .getSetCookie()
-    .map((part) => part.split(";")[0])
-    .join("; ");
+it.live(
+  "an allowed external browser uses bearer MCP while the dashboard API exposes no CORS grant",
+  () =>
+    Effect.gen(function* () {
+      const handle = yield* WebApplication;
+      const credentials = { email: "owner@example.internal", password: "test-only password123" };
+      yield* (yield* OwnerAccount).create(credentials);
 
-  const { tokens } = await mcpOAuthGrant(handle, baseURL, cookie);
+      const login = yield* send(
+        handle,
+        new Request(`${baseURL}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { origin: baseURL, "content-type": "application/json" },
+          body: JSON.stringify(credentials),
+        }),
+      );
 
-  const response = await list({
-    origin: clientOrigin,
-    authorization: `Bearer ${tokens.access_token}`,
-  });
+      expect(login.status).toBe(200);
 
-  expect(response.status, await response.clone().text()).toBe(200);
-  expectCors(response, clientOrigin);
-  expect((await list({ origin: clientOrigin, cookie })).status).toBe(401);
+      const cookie = login.headers
+        .getSetCookie()
+        .map((part) => part.split(";")[0])
+        .join("; ");
 
-  const foreignToken = await list({
-    origin: "https://unlisted.example.test",
-    authorization: `Bearer ${tokens.access_token}`,
-  });
+      const { tokens } = yield* Effect.promise(() => mcpOAuthGrant(handle, baseURL, cookie));
 
-  expect(foreignToken.status).toBe(403);
-  expect(foreignToken.headers.has("access-control-allow-origin")).toBe(false);
+      const response = yield* list(handle, {
+        origin: clientOrigin,
+        authorization: `Bearer ${tokens.access_token}`,
+      });
 
-  const dashboard = await handle(
-    new Request(`${baseURL}/api/listClients`, {
-      method: "POST",
-      headers: { cookie, origin: clientOrigin, "content-type": "application/json" },
-      body: "{}",
-    }),
-  );
+      expect(response.status, yield* Effect.promise(() => response.clone().text())).toBe(200);
+      expectCors(response, clientOrigin);
+      expect((yield* list(handle, { origin: clientOrigin, cookie })).status).toBe(401);
 
-  // The SameSite cookie authenticates the owner; no CORS grant is exposed for the dashboard API.
-  expect(dashboard.status).toBe(200);
-  expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
-});
+      const foreignToken = yield* list(handle, {
+        origin: "https://unlisted.example.test",
+        authorization: `Bearer ${tokens.access_token}`,
+      });
 
-test("discovery middleware cannot bypass public CORS or security headers", async () => {
-  for (const method of ["GET", "HEAD", "OPTIONS"]) {
-    const response = await handle(
-      new Request(`${baseURL}/.well-known/oauth-protected-resource`, {
-        method,
-        headers: { origin: clientOrigin },
-      }),
-    );
+      expect(foreignToken.status).toBe(403);
+      expect(foreignToken.headers.has("access-control-allow-origin")).toBe(false);
 
-    expect(response.status).toBe(method === "OPTIONS" ? 204 : 200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("*");
-    expect(response.headers.get("cache-control")).toBe(
-      method === "GET" ? "public, max-age=300" : "no-store",
-    );
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    await response.body?.cancel();
-  }
-});
+      const dashboard = yield* send(
+        handle,
+        new Request(`${baseURL}/api/listClients`, {
+          method: "POST",
+          headers: { cookie, origin: clientOrigin, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+
+      // The SameSite cookie authenticates the owner; no CORS grant is exposed for the dashboard API.
+      expect(dashboard.status).toBe(200);
+      expect(dashboard.headers.has("access-control-allow-origin")).toBe(false);
+    }).pipe(Effect.provide(corsIssuer())),
+);
+
+it.live("discovery middleware cannot bypass public CORS or security headers", () =>
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
+
+    for (const method of ["GET", "HEAD", "OPTIONS"]) {
+      const response = yield* send(
+        handle,
+        new Request(`${baseURL}/.well-known/oauth-protected-resource`, {
+          method,
+          headers: { origin: clientOrigin },
+        }),
+      );
+
+      expect(response.status).toBe(method === "OPTIONS" ? 204 : 200);
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("cache-control")).toBe(
+        method === "GET" ? "public, max-age=300" : "no-store",
+      );
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      yield* Effect.promise(async () => {
+        await response.body?.cancel();
+      });
+    }
+  }).pipe(Effect.provide(corsIssuer())),
+);

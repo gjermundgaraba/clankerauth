@@ -10,6 +10,7 @@ catalog:
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.4
+  "@effect/vitest": 4.0.4
   foldkit: 0.168.0
   "@foldkit/ui": 0.168.0
   "@foldkit/vite-plugin": 0.27.1
@@ -68,6 +69,7 @@ minimumReleaseAgeExclude:
   - "@effect/platform-browser@4.0.4"
   - "@effect/platform-node@4.0.4"
   - "@effect/platform-node-shared@4.0.4"
+  - "@effect/vitest@4.0.4"
   # Foldkit 0.168.0 is newer than the one-day release age; drop these once it is not.
   - foldkit@0.168.0
   - "@foldkit/ui@0.168.0"

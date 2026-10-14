@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { Effect, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { describe, expect, vi } from "vite-plus/test";
+import { Context, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, ServiceUnavailable } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
-import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
+import { testWebApplication, WebApplication } from "./test-issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 import { Database } from "../src/platform/sqlite.ts";
@@ -15,41 +15,61 @@ import { Issuer } from "../src/issuer/issuer.ts";
 /** A typed client of the issuer's binding, as an HTTP caller of the issuer builds one. */
 const apiClient = (baseUrl: string) => ActionHttp.client(Http, { baseUrl });
 
+const baseURL = "http://localhost:3000";
+
+/** The issuer's web application, as a browser on its origin reaches it. */
+class Browser extends Context.Service<
+  Browser,
+  {
+    readonly handle: (request: Request) => Promise<Response>;
+    readonly fetch: typeof fetch;
+    cookie: string;
+  }
+>()("api-contract.test/Browser") {}
+
+// Model the browser's same-origin headers and cookie transport while exercising
+// the actual FetchHttpClient request encoding and HttpApiClient response decoding.
+const browser = Layer.effect(
+  Browser,
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
+
+    const self: Browser["Service"] = {
+      handle,
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        request.headers.set("origin", baseURL);
+        request.headers.set("cookie", self.cookie);
+        request.headers.set("x-clankerauth-peer", "127.0.0.1");
+
+        return handle(request);
+      },
+      cookie: "",
+    };
+
+    return self;
+  }),
+);
+
+const contractIssuer = () =>
+  Layer.mergeAll(
+    FetchHttpClient.layer,
+    Layer.effect(
+      FetchHttpClient.Fetch,
+      Effect.map(Browser, ({ fetch }) => fetch),
+    ),
+  ).pipe(Layer.provideMerge(browser), Layer.provideMerge(testWebApplication({ baseURL })));
+
 describe("API integration", () => {
   const email = "owner@example.internal";
   const password = "test-only owner password 8rS!";
   const resource = "https://example.internal/mcp";
-  let issuer: OpenedIssuer;
-  let handle: ReturnType<typeof application>;
-  let settings: OpenedIssuer["settings"];
-  let cookie: string;
 
-  beforeEach(async () => {
-    issuer = await openIssuer({ baseURL: "http://localhost:3000" });
-    settings = issuer.settings;
-    handle = application(issuer);
-    cookie = "";
-  });
-
-  afterEach(async () => {
-    await handle.dispose();
-    await issuer.close();
-  });
-
-  // Model the browser's same-origin headers and cookie transport while exercising
-  // the actual FetchHttpClient request encoding and HttpApiClient response decoding.
-  const appFetch: typeof fetch = (input, init) => {
-    const request = new Request(input, init);
-    request.headers.set("origin", settings.baseURL);
-    request.headers.set("cookie", cookie);
-    request.headers.set("x-clankerauth-peer", "127.0.0.1");
-
-    return handle(request);
-  };
-
-  test("generated client shares setup, owner authorization and client lifecycle", async () => {
-    await Effect.gen(function* () {
-      const api = yield* apiClient(settings.baseURL);
+  it.live("generated client shares setup, owner authorization and client lifecycle", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const { sql } = yield* Database;
+      const api = yield* apiClient(baseURL);
       expect(yield* api.setupStatus()).toEqual({ required: true });
       expect(yield* api.setupOwner({ email, password })).toEqual({
         created: true,
@@ -64,7 +84,7 @@ describe("API integration", () => {
       expect(anonymous._tag).toBe("Unauthenticated");
 
       const login = yield* Effect.promise(() =>
-        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ email, password }),
@@ -72,11 +92,11 @@ describe("API integration", () => {
       );
 
       expect(login.status).toBe(200);
-      cookie = login.headers
+      browser.cookie = login.headers
         .getSetCookie()
         .map((value) => value.split(";")[0])
         .join("; ");
-      expect(cookie).not.toBe("");
+      expect(browser.cookie).not.toBe("");
 
       const resourceInput = {
         identifier: resource,
@@ -84,9 +104,7 @@ describe("API integration", () => {
         scopes: ["example:read"],
       };
 
-      expect((yield* api.listClients()).resources).toEqual([
-        administrationResource(settings.baseURL),
-      ]);
+      expect((yield* api.listClients()).resources).toEqual([administrationResource(baseURL)]);
       yield* api.createResource(resourceInput);
 
       const created = yield* api.createClient({
@@ -111,9 +129,9 @@ describe("API integration", () => {
       yield* api.deleteClient({ client_id: publicClient.client_id });
       const listing = yield* api.listClients();
       expect(listing.email).toBe(email);
-      expect(listing.issuer).toBe(`${settings.baseURL}/api/auth`);
+      expect(listing.issuer).toBe(`${baseURL}/api/auth`);
       expect(listing.resources).toEqual([
-        administrationResource(settings.baseURL),
+        administrationResource(baseURL),
         { ...resourceInput, builtIn: false },
       ]);
       expect(listing.clientAccess).toEqual([{ client_id: created.client_id, resource }]);
@@ -159,8 +177,7 @@ describe("API integration", () => {
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
       // Persisted values must satisfy the outgoing contract; corrupt data is a
       // server failure, not a bad request from this correctly typed caller.
-      yield* issuer.get(Database)
-        .sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
+      yield* sql`UPDATE oauthClient SET redirectUris = ${JSON.stringify([42])} WHERE clientId = ${created.client_id}`;
       const invalidResponse = yield* Effect.flip(api.listClients());
       expect(invalidResponse._tag).toBe("InternalServerError");
       expect(yield* api.deleteClient({ client_id: created.client_id })).toEqual({
@@ -170,61 +187,62 @@ describe("API integration", () => {
       expect(yield* api.deleteResource({ identifier: resource })).toEqual({
         deleted: true,
       });
-      expect((yield* api.listClients()).resources).toEqual([
-        administrationResource(settings.baseURL),
-      ]);
-    }).pipe(
-      Effect.provide(FetchHttpClient.layer),
-      Effect.provideService(FetchHttpClient.Fetch, appFetch),
-      Effect.runPromise,
-    );
-  });
+      expect((yield* api.listClients()).resources).toEqual([administrationResource(baseURL)]);
+    }).pipe(Effect.provide(contractIssuer())),
+  );
 
-  test("a session the provider cannot read answers the declared 503, which the client decodes", async () => {
-    // The owner session's verifier fails with an error `OwnerSession` declares, not a refusal:
-    // signing in again cannot help.
-    vi.spyOn(issuer.get(Issuer).auth.api, "getSession").mockRejectedValue(
-      new APIError("SERVICE_UNAVAILABLE", { message: "Session store unavailable" }),
-    );
-    cookie = `${issuer.get(Issuer).context.authCookies.sessionToken.name}=unreadable`;
+  it.live(
+    "a session the provider cannot read answers the declared 503, which the client decodes",
+    () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+        const { auth, context } = yield* Issuer;
+        // The owner session's verifier fails with an error `OwnerSession` declares, not a refusal:
+        // signing in again cannot help.
+        vi.spyOn(auth.api, "getSession").mockRejectedValue(
+          new APIError("SERVICE_UNAVAILABLE", { message: "Session store unavailable" }),
+        );
+        browser.cookie = `${context.authCookies.sessionToken.name}=unreadable`;
 
-    const response = await appFetch(`${settings.baseURL}/api/listClients`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    });
+        const response = yield* Effect.promise(() =>
+          browser.fetch(`${baseURL}/api/listClients`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          }),
+        );
 
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual(
-      Schema.encodeSync(ServiceUnavailable)(
-        new ServiceUnavailable({ message: "Session store unavailable" }),
-      ),
-    );
+        expect(response.status).toBe(503);
+        expect(yield* Effect.promise(() => response.json())).toEqual(
+          Schema.encodeSync(ServiceUnavailable)(
+            new ServiceUnavailable({ message: "Session store unavailable" }),
+          ),
+        );
 
-    const failure = await Effect.runPromise(
-      Effect.flip(Effect.flatMap(apiClient(settings.baseURL), (api) => api.listClients())).pipe(
-        Effect.provide(FetchHttpClient.layer),
-        Effect.provideService(FetchHttpClient.Fetch, appFetch),
-      ),
-    );
+        const failure = yield* Effect.flip(
+          Effect.flatMap(apiClient(baseURL), (api) => api.listClients()),
+        );
 
-    expect(failure).toBeInstanceOf(ServiceUnavailable);
-  });
+        expect(failure).toBeInstanceOf(ServiceUnavailable);
+      }).pipe(Effect.provide(contractIssuer())),
+  );
 
-  test("automatic clients are visible and manageable through the generated owner API", async () => {
-    await Effect.gen(function* () {
-      const api = yield* apiClient(settings.baseURL);
+  it.live("automatic clients are visible and manageable through the generated owner API", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const { sql } = yield* Database;
+      const api = yield* apiClient(baseURL);
       yield* api.setupOwner({ email, password });
 
       const login = yield* Effect.promise(() =>
-        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ email, password }),
         }),
       );
 
-      cookie = login.headers
+      browser.cookie = login.headers
         .getSetCookie()
         .map((value) => value.split(";")[0])
         .join("; ");
@@ -235,8 +253,8 @@ describe("API integration", () => {
       });
 
       const registration = yield* Effect.promise(() =>
-        handle(
-          new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
+        browser.handle(
+          new Request(`${baseURL}/api/auth/oauth2/register`, {
             method: "POST",
             headers: { "content-type": "application/json", "x-clankerauth-peer": "127.0.0.1" },
             body: JSON.stringify({
@@ -254,8 +272,8 @@ describe("API integration", () => {
       expect(registration.headers.has("access-control-allow-credentials")).toBe(false);
 
       const preflight = yield* Effect.promise(() =>
-        handle(
-          new Request(`${settings.baseURL}/api/auth/oauth2/register`, {
+        browser.handle(
+          new Request(`${baseURL}/api/auth/oauth2/register`, {
             method: "OPTIONS",
             headers: {
               origin: "https://mcp-client.example",
@@ -306,13 +324,12 @@ describe("API integration", () => {
         deleted: true,
       });
       expect((yield* api.listClients()).resources.map((entry) => entry.identifier)).toEqual([
-        `${settings.baseURL}/`,
+        `${baseURL}/`,
       ]);
 
       // Onboarding is derived from provider columns: metadata discovery marks CIMD clients
       // and nullable live metadata is omitted rather than invented.
-      yield* issuer.get(Database)
-        .sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
+      yield* sql`UPDATE oauthClient SET clientDiscoveryId = 'cimd', name = NULL, tokenEndpointAuthMethod = NULL, applicationType = NULL, scopes = NULL, grantTypes = NULL WHERE clientId = ${client_id}`;
       expect((yield* api.listClients()).clients).toEqual([
         {
           client_id,
@@ -324,30 +341,27 @@ describe("API integration", () => {
       ]);
 
       for (const invalidRedirects of ["null", "[42]"]) {
-        yield* issuer.get(Database)
-          .sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
+        yield* sql`UPDATE oauthClient SET redirectUris = ${invalidRedirects} WHERE clientId = ${client_id}`;
         expect((yield* Effect.flip(api.listClients()))._tag).toBe("InternalServerError");
       }
 
-      cookie = "";
+      browser.cookie = "";
       expect((yield* Effect.flip(api.blockClient({ client_id, blocked: true })))._tag).toBe(
         "Unauthenticated",
       );
       expect((yield* Effect.flip(api.revokeClient({ client_id })))._tag).toBe("Unauthenticated");
-    }).pipe(
-      Effect.provide(FetchHttpClient.layer),
-      Effect.provideService(FetchHttpClient.Fetch, appFetch),
-      Effect.runPromise,
-    );
-  });
+    }).pipe(Effect.provide(contractIssuer())),
+  );
 
-  test("client administration returns 404 for missing clients and 500 for failed writes", async () => {
-    await Effect.gen(function* () {
-      const api = yield* apiClient(settings.baseURL);
+  it.live("client administration returns 404 for missing clients and 500 for failed writes", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const { sql } = yield* Database;
+      const api = yield* apiClient(baseURL);
       yield* api.setupOwner({ email, password });
 
       const login = yield* Effect.promise(() =>
-        appFetch(`${settings.baseURL}/api/auth/sign-in/email`, {
+        browser.fetch(`${baseURL}/api/auth/sign-in/email`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ email, password }),
@@ -355,7 +369,7 @@ describe("API integration", () => {
       );
 
       expect(login.status).toBe(200);
-      cookie = login.headers
+      browser.cookie = login.headers
         .getSetCookie()
         .map((value) => value.split(";")[0])
         .join("; ");
@@ -377,10 +391,8 @@ describe("API integration", () => {
       });
 
       const client_id = client.client_id;
-      yield* issuer.get(Database)
-        .sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* issuer.get(OwnerAccount).find()}, '[]', ${Date.now()}, ${Date.now()})`;
-      yield* issuer.get(Database)
-        .sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
+      yield* sql`INSERT INTO oauthConsent (id, clientId, userId, scopes, createdAt, updatedAt) VALUES ('failure-consent', ${client_id}, ${yield* (yield* OwnerAccount).find()}, '[]', ${Date.now()}, ${Date.now()})`;
+      yield* sql`CREATE TRIGGER fail_revoke BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
       expect((yield* Effect.flip(api.revokeClient({ client_id })))._tag).toBe(
         "InternalServerError",
       );
@@ -389,26 +401,30 @@ describe("API integration", () => {
       );
       // Failed revocation also rolls back the disabled flag written by block.
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(false);
-      expect(
-        yield* issuer.get(Database).sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`,
-      ).toEqual([{ id: "failure-consent" }]);
-    }).pipe(
-      Effect.provide(FetchHttpClient.layer),
-      Effect.provideService(FetchHttpClient.Fetch, appFetch),
-      Effect.runPromise,
-    );
-  });
+      expect(yield* sql`SELECT id FROM oauthConsent WHERE clientId = ${client_id}`).toEqual([
+        { id: "failure-consent" },
+      ]);
+    }).pipe(Effect.provide(contractIssuer())),
+  );
 
-  test("malformed setup input is refused without reflecting the password or creating an owner", async () => {
-    const response = await appFetch(`${settings.baseURL}/api/setupOwner`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: { sensitive: password } }),
-    });
+  it.live(
+    "malformed setup input is refused without reflecting the password or creating an owner",
+    () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
-    expect(response.status).toBeLessThan(500);
-    expect(await response.text()).not.toContain(password);
-    expect(await Effect.runPromise(issuer.get(OwnerAccount).find())).toBeUndefined();
-  });
+        const response = yield* Effect.promise(() =>
+          browser.fetch(`${baseURL}/api/setupOwner`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email, password: { sensitive: password } }),
+          }),
+        );
+
+        expect(response.status).toBeGreaterThanOrEqual(400);
+        expect(response.status).toBeLessThan(500);
+        expect(yield* Effect.promise(() => response.text())).not.toContain(password);
+        expect(yield* (yield* OwnerAccount).find()).toBeUndefined();
+      }).pipe(Effect.provide(contractIssuer())),
+  );
 });

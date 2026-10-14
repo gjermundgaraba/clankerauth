@@ -1,9 +1,10 @@
-import { Effect, Exit } from "effect";
+import { it } from "@effect/vitest";
+import { Context, Effect, Exit, Layer } from "effect";
 import { ClientIsAutomatic, ClientNotFound } from "@clankerauth/admin-api";
-import { afterEach, beforeEach, expect, test } from "vite-plus/test";
+import { beforeEach, expect } from "vite-plus/test";
 import { createHash } from "node:crypto";
 import { convertSetCookieToCookie } from "better-auth/test";
-import { openIssuer, type OpenedIssuer, withOwnerHeaders } from "../open-issuer.ts";
+import { issuerGeneration, testIssuer, testSettings, withOwnerHeaders } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 import { Issuer } from "../../src/issuer/issuer.ts";
@@ -32,48 +33,82 @@ type ClientMetadata = {
   response_types?: string[];
 };
 
-let issuer: OpenedIssuer;
-
-let cookie: string;
-
 let fetches: number;
 
 let metadata: ClientMetadata;
 
 let metadataCacheControl: string;
 
-const ownerHeaders = () => new Headers({ cookie, origin: baseURL });
+const cimdTransport = async () => {
+  fetches++;
 
-async function request(path: string, body?: AuthRequestBody, authenticated = false) {
-  const headers = new Headers({ "x-clankerauth-peer": "127.0.0.1" });
+  return Response.json(metadata, { headers: { "cache-control": metadataCacheControl } });
+};
 
-  if (body !== undefined)
-    headers.set(
-      "content-type",
-      path === "/oauth2/token" ? "application/x-www-form-urlencoded" : "application/json",
-    );
-
-  if (authenticated) {
-    headers.set("cookie", cookie);
-    headers.set("origin", baseURL);
-  }
-
-  const init: RequestInit = {
-    method: body !== undefined ? "POST" : "GET",
-    headers,
+beforeEach(() => {
+  fetches = 0;
+  metadataCacheControl = "max-age=1";
+  metadata = {
+    client_id: clientId,
+    client_name: "Metadata client",
+    redirect_uris: [callback],
+    token_endpoint_auth_method: "none",
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
   };
+});
 
-  if (body !== undefined) {
-    init.body =
-      path === "/oauth2/token"
-        ? new URLSearchParams(
-            Object.entries(body).map(([key, value]) => [key, String(value)]),
-          ).toString()
-        : JSON.stringify(body);
-  }
+/** The signed-in owner's provider session cookie. */
+class OwnerCookie extends Context.Service<OwnerCookie, string>()("clients.test/OwnerCookie") {}
 
-  return issuer.get(Issuer).auth.handler(new Request(`${baseURL}/api/auth${path}`, init));
-}
+const ownerHeaders = Effect.map(OwnerCookie, (cookie) => new Headers({ cookie, origin: baseURL }));
+
+const asOwner = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(ownerHeaders, (headers) => withOwnerHeaders(headers)(effect));
+
+const request = (path: string, body?: AuthRequestBody, cookie?: string) =>
+  Effect.gen(function* () {
+    const headers = new Headers({ "x-clankerauth-peer": "127.0.0.1" });
+
+    if (body !== undefined)
+      headers.set(
+        "content-type",
+        path === "/oauth2/token" ? "application/x-www-form-urlencoded" : "application/json",
+      );
+
+    if (cookie !== undefined) {
+      headers.set("cookie", cookie);
+      headers.set("origin", baseURL);
+    }
+
+    const init: RequestInit = {
+      method: body !== undefined ? "POST" : "GET",
+      headers,
+    };
+
+    if (body !== undefined) {
+      init.body =
+        path === "/oauth2/token"
+          ? new URLSearchParams(
+              Object.entries(body).map(([key, value]) => [key, String(value)]),
+            ).toString()
+          : JSON.stringify(body);
+    }
+
+    const { auth } = yield* Issuer;
+
+    return yield* Effect.promise(() =>
+      auth.handler(new Request(`${baseURL}/api/auth${path}`, init)),
+    );
+  });
+
+/** `request` as the signed-in owner. */
+const ownerRequest = (path: string, body?: AuthRequestBody) =>
+  Effect.flatMap(OwnerCookie, (cookie) => request(path, body, cookie));
+
+const json = (response: Response) => Effect.promise(() => response.json());
+
+const text = (response: Response) => Effect.promise(() => response.clone().text());
 
 function authorization(
   id: string,
@@ -96,8 +131,8 @@ function authorization(
   );
 }
 
-async function register() {
-  const response = await request("/oauth2/register", {
+const register = Effect.gen(function* () {
+  const response = yield* request("/oauth2/register", {
     client_name: "Dynamic client",
     redirect_uris: [callback],
     token_endpoint_auth_method: "none",
@@ -105,39 +140,39 @@ async function register() {
     response_types: ["code"],
   });
 
-  expect(response.status, await response.clone().text()).toBe(201);
+  expect(response.status, yield* text(response)).toBe(201);
 
-  return response.json();
-}
+  return yield* json(response);
+});
 
-async function grant(id: string, identifier = resource, scope?: string) {
-  const response = await request(authorization(id, identifier, 4184, scope), undefined, true);
-  expect(response.status, await response.clone().text()).toBe(302);
-  const location = new URL(response.headers.get("location")!, baseURL);
-  expect(location.pathname).toBe("/consent");
+const grant = (id: string, identifier = resource, scope?: string) =>
+  Effect.gen(function* () {
+    const response = yield* ownerRequest(authorization(id, identifier, 4184, scope));
+    expect(response.status, yield* text(response)).toBe(302);
+    const location = new URL(response.headers.get("location")!, baseURL);
+    expect(location.pathname).toBe("/consent");
 
-  const consent = await request(
-    "/oauth2/consent",
-    { accept: true, oauth_query: location.search.slice(1) },
-    true,
-  );
+    const consent = yield* ownerRequest("/oauth2/consent", {
+      accept: true,
+      oauth_query: location.search.slice(1),
+    });
 
-  expect(consent.status, await consent.clone().text()).toBe(200);
-  const code = new URL((await consent.json()).url).searchParams.get("code");
+    expect(consent.status, yield* text(consent)).toBe(200);
+    const code = new URL((yield* json(consent)).url).searchParams.get("code");
 
-  const tokens = await request("/oauth2/token", {
-    grant_type: "authorization_code",
-    client_id: id,
-    code,
-    code_verifier: verifier,
-    redirect_uri: callback,
-    resource: identifier,
+    const tokens = yield* request("/oauth2/token", {
+      grant_type: "authorization_code",
+      client_id: id,
+      code,
+      code_verifier: verifier,
+      redirect_uri: callback,
+      resource: identifier,
+    });
+
+    expect(tokens.status, yield* text(tokens)).toBe(200);
+
+    return yield* json(tokens);
   });
-
-  expect(tokens.status, await tokens.clone().text()).toBe(200);
-
-  return tokens.json();
-}
 
 const refresh = (id: string, token: string, identifier = resource) =>
   request("/oauth2/token", {
@@ -148,362 +183,342 @@ const refresh = (id: string, token: string, identifier = resource) =>
   });
 
 const blocked = (id: string) =>
-  Effect.runPromise(
-    issuer.get(Database).sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`,
+  Effect.flatMap(
+    Database,
+    ({ sql }) => sql`SELECT disabled FROM oauthClient WHERE clientId = ${id}`,
   );
 
-const consentRequired = async (id: string, identifier = resource, scope?: string) =>
-  (await request(authorization(id, identifier, 4184, scope), undefined, true)).headers.get(
-    "location",
-  ) ?? "";
+const consentRequired = (id: string, identifier = resource, scope?: string) =>
+  Effect.map(
+    ownerRequest(authorization(id, identifier, 4184, scope)),
+    (response) => response.headers.get("location") ?? "",
+  );
+
+const createResource = (identifier: string, name: string, scopes: ReadonlyArray<string>) =>
+  Effect.flatMap(Resources, (resources) =>
+    asOwner(resources.create({ identifier, name, scopes: [...scopes] })),
+  );
 
 const second = "https://second.example/mcp";
 
-const addSecond = () =>
-  Effect.runPromise(
-    issuer
-      .get(Resources)
-      .create({ identifier: second, name: "Second", scopes: ["second:read"] })
-      .pipe(withOwnerHeaders(ownerHeaders())),
-  );
+const addSecond = createResource(second, "Second", ["second:read"]);
 
 /** A first-party public client with access to the test resource, which skips consent. */
-async function managed() {
-  const client = await issuer.get(Issuer).auth.api.adminCreateOAuthClient({
-    headers: ownerHeaders(),
-    body: {
-      client_name: "Managed client",
-      redirect_uris: [callback],
-      application_type: "native",
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      scope: "offline_access resource:read",
-      skip_consent: true,
-    },
-  });
+const managed = Effect.gen(function* () {
+  const { auth } = yield* Issuer;
+  const headers = yield* ownerHeaders;
 
-  await Effect.runPromise(
-    issuer.get(Resources).setAccess({ client_id: client.client_id, resources: [resource] }),
-  );
-
-  return client.client_id;
-}
-
-const cimdTransport = async () => {
-  fetches++;
-
-  return Response.json(metadata, { headers: { "cache-control": metadataCacheControl } });
-};
-
-beforeEach(async () => {
-  fetches = 0;
-  metadataCacheControl = "max-age=1";
-  metadata = {
-    client_id: clientId,
-    client_name: "Metadata client",
-    redirect_uris: [callback],
-    token_endpoint_auth_method: "none",
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-  };
-  issuer = await openIssuer({ baseURL }, cimdTransport);
-  await issuer.run(
-    issuer.get(OwnerAccount).create({
-      email: "owner@example.com",
-      password: "test-password-long-enough",
+  const client = yield* Effect.promise(() =>
+    auth.api.adminCreateOAuthClient({
+      headers,
+      body: {
+        client_name: "Managed client",
+        redirect_uris: [callback],
+        application_type: "native",
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        scope: "offline_access resource:read",
+        skip_consent: true,
+      },
     }),
   );
 
-  const login = await request("/sign-in/email", {
-    email: "owner@example.com",
-    password: "test-password-long-enough",
-  });
+  yield* (yield* Resources).setAccess({ client_id: client.client_id, resources: [resource] });
 
-  expect(login.status).toBe(200);
-  cookie = convertSetCookieToCookie(login.headers).get("cookie") ?? "";
-  await Effect.runPromise(
-    issuer
-      .get(Resources)
-      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
-      .pipe(withOwnerHeaders(ownerHeaders())),
-  );
+  return client.client_id;
 });
 
-afterEach(async () => {
-  await issuer.close();
-});
+/** The owner, signed in, with the test resource. */
+const ownerWithResource = Layer.effect(
+  OwnerCookie,
+  Effect.gen(function* () {
+    yield* (yield* OwnerAccount).create({
+      email: "owner@example.com",
+      password: "test-password-long-enough",
+    });
 
-test("DCR infers native callbacks, keeps PKCE and consent, and revocation ends refresh", async () => {
-  const client = await register();
-  expect(client.application_type).toBe("native");
-  const alternate = await request(authorization(client.client_id, resource, 4999), undefined, true);
-  expect(alternate.headers.get("location")).toContain("/consent");
-  const tokens = await grant(client.client_id);
-  expect(tokens.access_token).toBeTypeOf("string");
-  expect(
-    await Effect.runPromise(issuer.get(Clients).revoke({ client_id: client.client_id })),
-  ).toEqual({
-    revoked: true,
-  });
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-  expect(await consentRequired(client.client_id)).toContain("/consent");
-});
+    const login = yield* request("/sign-in/email", {
+      email: "owner@example.com",
+      password: "test-password-long-enough",
+    });
 
-test("DCR cannot self-assert consent bypass, and its resource list is ignored", async () => {
-  expect(
-    (
-      await request("/oauth2/register", {
+    expect(login.status).toBe(200);
+    const cookie = convertSetCookieToCookie(login.headers).get("cookie") ?? "";
+    yield* createResource(resource, "Test resource", ["resource:read"]).pipe(
+      Effect.provideService(OwnerCookie, cookie),
+    );
+
+    return cookie;
+  }),
+);
+
+const clientsIssuer = () =>
+  ownerWithResource.pipe(Layer.provideMerge(testIssuer({ baseURL }, cimdTransport)));
+
+it.live("DCR infers native callbacks, keeps PKCE and consent, and revocation ends refresh", () =>
+  Effect.gen(function* () {
+    const client = yield* register;
+    expect(client.application_type).toBe("native");
+    const alternate = yield* ownerRequest(authorization(client.client_id, resource, 4999));
+    expect(alternate.headers.get("location")).toContain("/consent");
+    const tokens = yield* grant(client.client_id);
+    expect(tokens.access_token).toBeTypeOf("string");
+    expect(yield* (yield* Clients).revoke({ client_id: client.client_id })).toEqual({
+      revoked: true,
+    });
+    expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+    expect(yield* consentRequired(client.client_id)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live("DCR cannot self-assert consent bypass, and its resource list is ignored", () =>
+  Effect.gen(function* () {
+    expect(
+      (yield* request("/oauth2/register", {
         client_name: "Untrusted",
         redirect_uris: [callback],
         token_endpoint_auth_method: "none",
         skip_consent: true,
-      })
-    ).status,
-  ).toBe(400);
-  expect(
-    (
-      await request("/oauth2/register", {
+      })).status,
+    ).toBe(400);
+    expect(
+      (yield* request("/oauth2/register", {
         client_name: "Untrusted",
         redirect_uris: [callback],
         token_endpoint_auth_method: "none",
         resources: [resource, "https://unconfigured.example/mcp"],
-      })
-    ).status,
-  ).toBe(201);
-});
-
-test.each(["dcr", "cimd"])(
-  "%s clients may ask for resources added later, and deletion revokes dependent grants",
-  async (source) => {
-    const client = source === "dcr" ? await register() : { client_id: clientId };
-    const tokens = await grant(client.client_id);
-    await addSecond();
-    expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
-      "/consent",
-    );
-    await Effect.runPromise(
-      issuer.get(Resources).delete({ identifier: resource }).pipe(withOwnerHeaders(ownerHeaders())),
-    );
-    expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-    expect(await consentRequired(client.client_id)).not.toContain("/consent");
-  },
+      })).status,
+    ).toBe(201);
+  }).pipe(Effect.provide(clientsIssuer())),
 );
 
-test("automatic clients have no configurable resource access", async () => {
-  const client = await register();
+it.live.each(["dcr", "cimd"])(
+  "%s clients may ask for resources added later, and deletion revokes dependent grants",
+  (source) =>
+    Effect.gen(function* () {
+      const client = source === "dcr" ? yield* register : { client_id: clientId };
+      const tokens = yield* grant(client.client_id);
+      yield* addSecond;
+      expect(
+        yield* consentRequired(client.client_id, second, "offline_access second:read"),
+      ).toContain("/consent");
+      yield* asOwner((yield* Resources).delete({ identifier: resource }));
+      expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+      expect(yield* consentRequired(client.client_id)).not.toContain("/consent");
+    }).pipe(Effect.provide(clientsIssuer())),
+);
 
-  expect(
-    await Effect.runPromise(
-      Effect.flip(issuer.get(Resources).setAccess({ client_id: client.client_id, resources: [] })),
-    ),
-  ).toEqual(ClientIsAutomatic.of(client.client_id));
-  expect(await Effect.runPromise(issuer.get(ResourceCatalog).access())).toEqual([]);
-});
+it.live("automatic clients have no configurable resource access", () =>
+  Effect.gen(function* () {
+    const client = yield* register;
 
-test("blocking uses the provider's disabled flag and survives CIMD metadata rediscovery", async () => {
-  expect(await consentRequired(clientId)).toContain("/consent");
-  expect(fetches).toBe(1);
-  const tokens = await grant(clientId);
-  expect(
-    await Effect.runPromise(issuer.get(Clients).block({ client_id: clientId, blocked: true })),
-  ).toEqual({
-    blocked: true,
-  });
-  expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
-  expect((await refresh(clientId, tokens.refresh_token)).status).toBe(400);
-  // Let the metadata cache expire so the next authorization rediscovers the document.
-  await new Promise((resolve) => setTimeout(resolve, 1100));
-  expect(await consentRequired(clientId)).not.toContain("/consent");
-  expect(fetches).toBe(2);
-  expect(await blocked(clientId)).toEqual([{ disabled: 1 }]);
-  expect(
-    await Effect.runPromise(issuer.get(Clients).block({ client_id: clientId, blocked: false })),
-  ).toEqual({
-    blocked: false,
-  });
-  expect(await consentRequired(clientId)).toContain("/consent");
-});
-
-test("blocking a dynamically registered client rejects authorization until unblocked", async () => {
-  const client = await register();
-  await Effect.runPromise(
-    issuer.get(Clients).block({ client_id: client.client_id, blocked: true }),
-  );
-  const blocked = await request(authorization(client.client_id), undefined, true);
-  expect(blocked.headers.get("location") ?? "").not.toContain("/consent");
-  await Effect.runPromise(
-    issuer.get(Clients).block({ client_id: client.client_id, blocked: false }),
-  );
-  expect(await consentRequired(client.client_id)).toContain("/consent");
-});
-
-test("block and revoke report unknown clients", async () => {
-  const missing = ClientNotFound.of("missing");
-  expect(
-    await Effect.runPromise(Effect.flip(issuer.get(Clients).revoke({ client_id: "missing" }))),
-  ).toEqual(missing);
-  expect(
-    await Effect.runPromise(
-      Effect.flip(issuer.get(Clients).block({ client_id: "missing", blocked: true })),
-    ),
-  ).toEqual(missing);
-});
-
-test("initialization is repeatable and refresh grants survive a reopen", async () => {
-  const client = await register();
-  const tokens = await grant(client.client_id);
-  issuer = await issuer.reopen();
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
-});
-
-test("CIMD rejects malformed metadata before persisting a client", async () => {
-  metadata = { client_id: clientId, redirect_uris: [callback], token_endpoint_auth_method: "none" };
-  expect(await consentRequired(clientId)).not.toContain("/consent");
-  expect(
-    await Effect.runPromise(
-      issuer.get(Database).sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`,
-    ),
-  ).toEqual([]);
-});
-
-test("revoking one resource leaves the client's other authorization", async () => {
-  await addSecond();
-  const client = await register();
-  const tokens = await grant(client.client_id);
-
-  const response = await request(
-    authorization(client.client_id, second, 4184, "offline_access second:read"),
-    undefined,
-    true,
-  );
-
-  const location = new URL(response.headers.get("location")!, baseURL);
-
-  const consent = await request(
-    "/oauth2/consent",
-    { accept: true, oauth_query: location.search.slice(1) },
-    true,
-  );
-
-  expect(consent.status, await consent.clone().text()).toBe(200);
-  const listed = await Effect.runPromise(issuer.get(Clients).connections());
-  expect(listed.map((connection) => [connection.resource, connection.scopes])).toEqual([
-    [resource, ["resource:read"]],
-    [second, ["second:read"]],
-  ]);
-  expect(listed[0]?.approvedAt).not.toBeNull();
-  expect(listed[0]?.refreshedAt).not.toBeNull();
-  // Approved but the code was never exchanged, so no refresh token exists.
-  expect(listed[1]?.refreshedAt).toBeNull();
-
-  await Effect.runPromise(
-    issuer.get(Clients).revoke({ client_id: client.client_id, resource: second }),
-  );
-  expect(
-    (await Effect.runPromise(issuer.get(Clients).connections())).map((c) => c.resource),
-  ).toEqual([resource]);
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
-  expect(await consentRequired(client.client_id, second, "offline_access second:read")).toContain(
-    "/consent",
-  );
-});
-
-test("the owner can delete an automatic client, which may register again", async () => {
-  const client = await register();
-  const tokens = await grant(client.client_id);
-  expect(
-    await Effect.runPromise(issuer.get(Clients).delete({ client_id: client.client_id })),
-  ).toEqual({
-    deleted: true,
-  });
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
-  expect(
-    await Effect.runPromise(
-      Effect.flip(issuer.get(Clients).delete({ client_id: client.client_id })),
-    ),
-  ).toEqual(ClientNotFound.of(client.client_id));
-
-  expect(await consentRequired(clientId)).toContain("/consent");
-  await Effect.runPromise(issuer.get(Clients).delete({ client_id: clientId }));
-  expect(await consentRequired(clientId)).toContain("/consent");
-});
-
-test("a recreated resource does not revive authorization given for the deleted one", async () => {
-  const client = await register();
-  const tokens = await grant(client.client_id);
-  await Effect.runPromise(
-    issuer.get(Resources).delete({ identifier: resource }).pipe(withOwnerHeaders(ownerHeaders())),
-  );
-  await Effect.runPromise(
-    issuer
-      .get(Resources)
-      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
-      .pipe(withOwnerHeaders(ownerHeaders())),
-  );
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-  expect(await consentRequired(client.client_id)).toContain("/consent");
-});
-
-test("creating a resource clears authorization a failed deletion left behind", async () => {
-  const client = await register();
-  const tokens = await grant(client.client_id);
-  await Effect.runPromise(
-    issuer.get(Database)
-      .sql`CREATE TRIGGER fail_clear BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`,
-  );
-  expect(
-    Exit.isFailure(
-      await Effect.runPromiseExit(
-        issuer
-          .get(Resources)
-          .delete({ identifier: resource })
-          .pipe(withOwnerHeaders(ownerHeaders())),
+    expect(
+      yield* Effect.flip(
+        (yield* Resources).setAccess({ client_id: client.client_id, resources: [] }),
       ),
-    ),
-  ).toBe(true);
-  await Effect.runPromise(issuer.get(Database).sql`DROP TRIGGER fail_clear`);
-  expect(await Effect.runPromise(issuer.get(ResourceCatalog).get(resource))).toBeUndefined();
+    ).toEqual(ClientIsAutomatic.of(client.client_id));
+    expect(yield* (yield* ResourceCatalog).access()).toEqual([]);
+  }).pipe(Effect.provide(clientsIssuer())),
+);
 
-  await Effect.runPromise(
-    issuer
-      .get(Resources)
-      .create({ identifier: resource, name: "Test resource", scopes: ["resource:read"] })
-      .pipe(withOwnerHeaders(ownerHeaders())),
-  );
-  expect((await refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
-  expect(await consentRequired(client.client_id)).toContain("/consent");
-});
+it.live("blocking uses the provider's disabled flag and survives CIMD metadata rediscovery", () =>
+  Effect.gen(function* () {
+    const clients = yield* Clients;
+    expect(yield* consentRequired(clientId)).toContain("/consent");
+    expect(fetches).toBe(1);
+    const tokens = yield* grant(clientId);
+    expect(yield* clients.block({ client_id: clientId, blocked: true })).toEqual({
+      blocked: true,
+    });
+    expect(yield* blocked(clientId)).toEqual([{ disabled: 1 }]);
+    expect((yield* refresh(clientId, tokens.refresh_token)).status).toBe(400);
+    // Let the metadata cache expire so the next authorization rediscovers the document.
+    yield* Effect.sleep("1100 millis");
+    expect(yield* consentRequired(clientId)).not.toContain("/consent");
+    expect(fetches).toBe(2);
+    expect(yield* blocked(clientId)).toEqual([{ disabled: 1 }]);
+    expect(yield* clients.block({ client_id: clientId, blocked: false })).toEqual({
+      blocked: false,
+    });
+    expect(yield* consentRequired(clientId)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
 
-test("a managed client, which skips consent, shows a connection while it holds a refresh token", async () => {
-  const id = await managed();
-  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
+it.live("blocking a dynamically registered client rejects authorization until unblocked", () =>
+  Effect.gen(function* () {
+    const clients = yield* Clients;
+    const client = yield* register;
+    yield* clients.block({ client_id: client.client_id, blocked: true });
+    const refused = yield* ownerRequest(authorization(client.client_id));
+    expect(refused.headers.get("location") ?? "").not.toContain("/consent");
+    yield* clients.block({ client_id: client.client_id, blocked: false });
+    expect(yield* consentRequired(client.client_id)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
 
-  const response = await request(authorization(id), undefined, true);
-  expect(response.status, await response.clone().text()).toBe(302);
-  const code = new URL(response.headers.get("location")!).searchParams.get("code");
-  expect(code).toBeTypeOf("string");
+it.live("block and revoke report unknown clients", () =>
+  Effect.gen(function* () {
+    const clients = yield* Clients;
+    const missing = ClientNotFound.of("missing");
+    expect(yield* Effect.flip(clients.revoke({ client_id: "missing" }))).toEqual(missing);
+    expect(yield* Effect.flip(clients.block({ client_id: "missing", blocked: true }))).toEqual(
+      missing,
+    );
+  }).pipe(Effect.provide(clientsIssuer())),
+);
 
-  const tokens = await request("/oauth2/token", {
-    grant_type: "authorization_code",
-    client_id: id,
-    code: code!,
-    code_verifier: verifier,
-    redirect_uri: callback,
-    resource,
-  });
+it.live("initialization is repeatable and refresh grants survive a reopen", () =>
+  Effect.gen(function* () {
+    const { client, tokens } = yield* Effect.gen(function* () {
+      const client = yield* register;
 
-  expect(tokens.status, await tokens.clone().text()).toBe(200);
-  const [connection, ...rest] = await Effect.runPromise(issuer.get(Clients).connections());
-  expect(rest).toEqual([]);
-  expect(connection).toMatchObject({
-    client_id: id,
-    resource,
-    scopes: ["resource:read"],
-    approvedAt: null,
-  });
-  expect(connection?.refreshedAt).not.toBeNull();
+      return { client, tokens: yield* grant(client.client_id) };
+    }).pipe(
+      Effect.provide(ownerWithResource.pipe(Layer.provideMerge(issuerGeneration(cimdTransport)))),
+    );
 
-  await Effect.runPromise(issuer.get(Clients).revoke({ client_id: id, resource: resource }));
-  expect(await Effect.runPromise(issuer.get(Clients).connections())).toEqual([]);
-});
+    const refreshed = yield* refresh(client.client_id, tokens.refresh_token).pipe(
+      Effect.provide(issuerGeneration(cimdTransport)),
+    );
+
+    expect(refreshed.status).toBe(200);
+  }).pipe(Effect.provide(testSettings({ baseURL }))),
+);
+
+it.live("CIMD rejects malformed metadata before persisting a client", () =>
+  Effect.gen(function* () {
+    const { sql } = yield* Database;
+    metadata = {
+      client_id: clientId,
+      redirect_uris: [callback],
+      token_endpoint_auth_method: "none",
+    };
+    expect(yield* consentRequired(clientId)).not.toContain("/consent");
+    expect(yield* sql`SELECT clientId FROM oauthClient WHERE clientId = ${clientId}`).toEqual([]);
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live("revoking one resource leaves the client's other authorization", () =>
+  Effect.gen(function* () {
+    const clients = yield* Clients;
+    yield* addSecond;
+    const client = yield* register;
+    const tokens = yield* grant(client.client_id);
+
+    const response = yield* ownerRequest(
+      authorization(client.client_id, second, 4184, "offline_access second:read"),
+    );
+
+    const location = new URL(response.headers.get("location")!, baseURL);
+
+    const consent = yield* ownerRequest("/oauth2/consent", {
+      accept: true,
+      oauth_query: location.search.slice(1),
+    });
+
+    expect(consent.status, yield* text(consent)).toBe(200);
+    const listed = yield* clients.connections();
+    expect(listed.map((connection) => [connection.resource, connection.scopes])).toEqual([
+      [resource, ["resource:read"]],
+      [second, ["second:read"]],
+    ]);
+    expect(listed[0]?.approvedAt).not.toBeNull();
+    expect(listed[0]?.refreshedAt).not.toBeNull();
+    // Approved but the code was never exchanged, so no refresh token exists.
+    expect(listed[1]?.refreshedAt).toBeNull();
+
+    yield* clients.revoke({ client_id: client.client_id, resource: second });
+    expect((yield* clients.connections()).map((c) => c.resource)).toEqual([resource]);
+    expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(200);
+    expect(
+      yield* consentRequired(client.client_id, second, "offline_access second:read"),
+    ).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live("the owner can delete an automatic client, which may register again", () =>
+  Effect.gen(function* () {
+    const clients = yield* Clients;
+    const client = yield* register;
+    const tokens = yield* grant(client.client_id);
+    expect(yield* clients.delete({ client_id: client.client_id })).toEqual({ deleted: true });
+    expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+    expect(yield* clients.connections()).toEqual([]);
+    expect(yield* Effect.flip(clients.delete({ client_id: client.client_id }))).toEqual(
+      ClientNotFound.of(client.client_id),
+    );
+
+    expect(yield* consentRequired(clientId)).toContain("/consent");
+    yield* clients.delete({ client_id: clientId });
+    expect(yield* consentRequired(clientId)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live("a recreated resource does not revive authorization given for the deleted one", () =>
+  Effect.gen(function* () {
+    const client = yield* register;
+    const tokens = yield* grant(client.client_id);
+    yield* asOwner((yield* Resources).delete({ identifier: resource }));
+    yield* createResource(resource, "Test resource", ["resource:read"]);
+    expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+    expect(yield* consentRequired(client.client_id)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live("creating a resource clears authorization a failed deletion left behind", () =>
+  Effect.gen(function* () {
+    const { sql } = yield* Database;
+    const client = yield* register;
+    const tokens = yield* grant(client.client_id);
+    yield* sql`CREATE TRIGGER fail_clear BEFORE DELETE ON oauthConsent BEGIN SELECT RAISE(ABORT, 'injected database failure'); END`;
+    expect(
+      Exit.isFailure(
+        yield* Effect.exit(asOwner((yield* Resources).delete({ identifier: resource }))),
+      ),
+    ).toBe(true);
+    yield* sql`DROP TRIGGER fail_clear`;
+    expect(yield* (yield* ResourceCatalog).get(resource)).toBeUndefined();
+
+    yield* createResource(resource, "Test resource", ["resource:read"]);
+    expect((yield* refresh(client.client_id, tokens.refresh_token)).status).toBe(400);
+    expect(yield* consentRequired(client.client_id)).toContain("/consent");
+  }).pipe(Effect.provide(clientsIssuer())),
+);
+
+it.live(
+  "a managed client, which skips consent, shows a connection while it holds a refresh token",
+  () =>
+    Effect.gen(function* () {
+      const clients = yield* Clients;
+      const id = yield* managed;
+      expect(yield* clients.connections()).toEqual([]);
+
+      const response = yield* ownerRequest(authorization(id));
+      expect(response.status, yield* text(response)).toBe(302);
+      const code = new URL(response.headers.get("location")!).searchParams.get("code");
+      expect(code).toBeTypeOf("string");
+
+      const tokens = yield* request("/oauth2/token", {
+        grant_type: "authorization_code",
+        client_id: id,
+        code: code!,
+        code_verifier: verifier,
+        redirect_uri: callback,
+        resource,
+      });
+
+      expect(tokens.status, yield* text(tokens)).toBe(200);
+      const [connection, ...rest] = yield* clients.connections();
+      expect(rest).toEqual([]);
+      expect(connection).toMatchObject({
+        client_id: id,
+        resource,
+        scopes: ["resource:read"],
+        approvedAt: null,
+      });
+      expect(connection?.refreshedAt).not.toBeNull();
+
+      yield* clients.revoke({ client_id: id, resource: resource });
+      expect(yield* clients.connections()).toEqual([]);
+    }).pipe(Effect.provide(clientsIssuer())),
+);

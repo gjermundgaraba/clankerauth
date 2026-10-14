@@ -1,13 +1,17 @@
+import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { CimdTransport, createAbortAwareTransport } from "../../src/platform/cimd-transport.ts";
 
-const fetchClientMetadataResource = Effect.runSync(
-  Effect.provide(
-    Effect.map(CimdTransport, ({ fetch }) => fetch),
-    CimdTransport.layer,
-  ),
-);
+/** What the production transport rejects `url` with. */
+const rejection = (url: string) =>
+  Effect.gen(function* () {
+    const { fetch } = yield* CimdTransport;
+
+    return yield* Effect.flip(
+      Effect.tryPromise({ try: async () => fetch(url), catch: (cause) => cause }),
+    );
+  }).pipe(Effect.provide(CimdTransport.layer));
 
 const url = "https://client.example/metadata.json";
 
@@ -81,15 +85,20 @@ describe("abort-aware CIMD transport", () => {
 });
 
 describe("production CIMD transport", () => {
-  test.each(["https://127.0.0.1/metadata.json", "https://10.0.0.1/metadata.json"])(
+  it.live.each(["https://127.0.0.1/metadata.json", "https://10.0.0.1/metadata.json"])(
     "rejects private metadata address %s",
-    async (url) => {
-      await expect(fetchClientMetadataResource(url)).rejects.toThrow("public-routable");
-    },
+    (url) =>
+      Effect.gen(function* () {
+        expect(yield* rejection(url)).toMatchObject({
+          message: expect.stringContaining("public-routable"),
+        });
+      }),
   );
-  test("rejects non-HTTPS metadata", async () => {
-    await expect(fetchClientMetadataResource("http://127.0.0.1/metadata.json")).rejects.toThrow(
-      "HTTPS",
-    );
-  });
+  it.live("rejects non-HTTPS metadata", () =>
+    Effect.gen(function* () {
+      expect(yield* rejection("http://127.0.0.1/metadata.json")).toMatchObject({
+        message: expect.stringContaining("HTTPS"),
+      });
+    }),
+  );
 });

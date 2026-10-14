@@ -49,6 +49,7 @@
     "jose": "catalog:"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
     "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "catalog:",

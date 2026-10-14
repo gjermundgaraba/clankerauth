@@ -1,14 +1,14 @@
-import { expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { Effect, Schema } from "effect";
 import { InternalServerError, ProviderRefused, UnreadableRequest } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { HttpServerResponse } from "effect/http";
 import { provider, respond } from "../src/issuer/errors.ts";
-import { openIssuer } from "./open-issuer.ts";
-import { webApplication } from "./web-application.ts";
+import { testWebApplication, WebApplication } from "./test-issuer.ts";
 
-test("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
+it("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
   const cause = new Error("SQLITE_CORRUPT: database disk image is malformed");
   const failure = InternalServerError.of(cause);
 
@@ -20,18 +20,17 @@ test("an internal failure keeps its cause for diagnostics and never puts it on t
   );
 });
 
+const baseURL = "http://localhost:3000";
+
 /** Node requires `duplex` for a streaming request body; the DOM lib does not declare it. */
 interface StreamingRequestInit extends RequestInit {
   readonly duplex: "half";
 }
 
-test("the provider bridge answers an unreadable body as a 400", async () => {
-  const baseURL = "http://localhost:3000";
-  const issuer = await openIssuer({ baseURL });
+it.live("the provider bridge answers an unreadable body as a 400", () =>
+  Effect.gen(function* () {
+    const handle = yield* WebApplication;
 
-  const handle = webApplication(issuer);
-
-  const post = (body: BodyInit) => {
     const init: StreamingRequestInit = {
       method: "POST",
       headers: {
@@ -39,57 +38,59 @@ test("the provider bridge answers an unreadable body as a 400", async () => {
         "content-type": "application/x-www-form-urlencoded",
         "x-clankerauth-peer": "127.0.0.1",
       },
-      body,
+      body: new ReadableStream({
+        start: (controller) => controller.error(new Error("reset by peer")),
+      }),
       duplex: "half",
     };
 
-    return handle(new Request(`${baseURL}/api/auth/oauth2/token`, init));
-  };
-
-  try {
-    const truncated = await post(
-      new ReadableStream({ start: (controller) => controller.error(new Error("reset by peer")) }),
+    const truncated = yield* Effect.promise(() =>
+      handle(new Request(`${baseURL}/api/auth/oauth2/token`, init)),
     );
 
     expect(truncated.status).toBe(400);
-    expect(await truncated.json()).toEqual(
+    expect(yield* Effect.promise(() => truncated.json())).toEqual(
       Schema.encodeSync(UnreadableRequest)(
         new UnreadableRequest({ message: "Request body could not be read" }),
       ),
     );
-  } finally {
-    await handle.dispose();
-    await issuer.close();
-  }
-});
+  }).pipe(Effect.provide(testWebApplication({ baseURL }))),
+);
 
-test("a route's own failures keep their bodies, and a provider refusal is the built-in 403", async () => {
-  // What `/forward-auth*` and `/healthz` answer a failure with: `respond`.
-  const answered = async (cause: unknown) => {
-    // A provider call fails as `provider` turns what the provider threw.
-    const failure = await Effect.runPromise(Effect.flip(provider(() => Promise.reject(cause))));
-    const response = HttpServerResponse.toWeb(await Effect.runPromise(respond(failure)));
+it.effect(
+  "a route's own failures keep their bodies, and a provider refusal is the built-in 403",
+  () =>
+    Effect.gen(function* () {
+      // What `/forward-auth*` and `/healthz` answer a failure with: `respond`.
+      const answered = (cause: unknown) =>
+        Effect.gen(function* () {
+          // A provider call fails as `provider` turns what the provider threw.
+          const failure = yield* Effect.flip(provider(() => Promise.reject(cause)));
+          const response = HttpServerResponse.toWeb(yield* respond(failure));
 
-    return { status: response.status, body: await response.json() };
-  };
+          return { status: response.status, body: yield* Effect.promise(() => response.json()) };
+        });
 
-  // The issuer's own vocabulary is unchanged: `error`, under its tag.
-  expect(await answered(new Error("SQLITE_BUSY"))).toEqual({
-    status: 500,
-    body: Schema.encodeSync(InternalServerError)(
-      new InternalServerError({ message: "Request could not be completed" }),
-    ),
-  });
-  expect(await answered(new APIError("BAD_REQUEST", { message: "Bad target" }))).toEqual({
-    status: 400,
-    body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
-  });
+      // The issuer's own failures carry `message` under their tag.
+      expect(yield* answered(new Error("SQLITE_BUSY"))).toEqual({
+        status: 500,
+        body: Schema.encodeSync(InternalServerError)(
+          new InternalServerError({ message: "Request could not be completed" }),
+        ),
+      });
+      expect(yield* answered(new APIError("BAD_REQUEST", { message: "Bad target" }))).toEqual({
+        status: 400,
+        body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
+      });
 
-  // A provider 401 or 403 is effect-actions' `Forbidden`, which carries `message`.
-  for (const status of ["UNAUTHORIZED", "FORBIDDEN"] as const) {
-    expect(await answered(new APIError(status, { message: "Not the owner" }))).toEqual({
-      status: 403,
-      body: Schema.encodeSync(Action.Forbidden)(new Action.Forbidden({ message: "Not the owner" })),
-    });
-  }
-});
+      // A provider 401 or 403 is effect-actions' `Forbidden`, which carries `message`.
+      for (const status of ["UNAUTHORIZED", "FORBIDDEN"] as const) {
+        expect(yield* answered(new APIError(status, { message: "Not the owner" }))).toEqual({
+          status: 403,
+          body: Schema.encodeSync(Action.Forbidden)(
+            new Action.Forbidden({ message: "Not the owner" }),
+          ),
+        });
+      }
+    }),
+);

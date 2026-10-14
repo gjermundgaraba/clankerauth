@@ -3,60 +3,53 @@
  * the deployment, `__Secure-` prefixed over HTTPS, and the cookie owner actions authenticate
  * with, end to end from sign-in.
  */
-import { afterEach, expect, test } from "vite-plus/test";
-import { openIssuer, type OpenedIssuer } from "../open-issuer.ts";
-import { webApplication } from "../web-application.ts";
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
+import { expect } from "vite-plus/test";
+import { testWebApplication, WebApplication } from "../test-issuer.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 
 const owner = { email: "owner@example.internal", password: "test-only password123" };
 
-let issuer: OpenedIssuer | undefined;
+/** Signs the owner in to the issuer at `origin` and reads the session cookie it set. */
+const signIn = (origin: string) =>
+  Effect.gen(function* () {
+    const app = yield* WebApplication;
+    yield* (yield* OwnerAccount).create(owner);
 
-let handle: ReturnType<typeof webApplication> | undefined;
+    const post = (path: string, body: Readonly<Record<string, string>>, cookie?: string) => {
+      const headers = new Headers({ origin, "content-type": "application/json" });
 
-afterEach(async () => {
-  await handle?.dispose();
-  await issuer?.close();
-  handle = undefined;
-  issuer = undefined;
-});
+      if (cookie !== undefined) headers.set("cookie", cookie);
 
-/** Opens an issuer at `origin`, signs the owner in, and reads the session cookie it set. */
-const signIn = async (origin: string) => {
-  issuer = await openIssuer({ baseURL: origin });
-  const app = webApplication(issuer);
-  handle = app;
-  await issuer.run(issuer.get(OwnerAccount).create(owner));
+      return Effect.promise(() =>
+        app(
+          new Request(`${origin}${path}`, { method: "POST", headers, body: JSON.stringify(body) }),
+        ),
+      );
+    };
 
-  const post = (path: string, body: Readonly<Record<string, string>>, cookie?: string) => {
-    const headers = new Headers({ origin, "content-type": "application/json" });
+    const login = yield* post("/api/auth/sign-in/email", owner);
+    expect(login.status, yield* Effect.promise(() => login.clone().text())).toBe(200);
 
-    if (cookie !== undefined) headers.set("cookie", cookie);
+    const [set] = login.headers
+      .getSetCookie()
+      .filter((cookie) => cookie.includes("session_token="));
 
-    return app(
-      new Request(`${origin}${path}`, { method: "POST", headers, body: JSON.stringify(body) }),
-    );
-  };
+    expect(set).toBeDefined();
+    const [pair = ""] = set!.split(";");
 
-  const login = await post("/api/auth/sign-in/email", owner);
-  expect(login.status, await login.clone().text()).toBe(200);
+    return {
+      /** The `Set-Cookie` header the sign-in answered with. */
+      set: set!,
+      value: pair.slice(pair.indexOf("=") + 1),
+      /** An owner action, called with `cookie` alone. */
+      listClients: (cookie: string) => post("/api/listClients", {}, cookie),
+      openapi: Effect.promise(() => app(new Request(`${origin}/openapi.json`))),
+    };
+  });
 
-  const [set] = login.headers.getSetCookie().filter((cookie) => cookie.includes("session_token="));
-
-  expect(set).toBeDefined();
-  const [pair = ""] = set!.split(";");
-
-  return {
-    /** The `Set-Cookie` header the sign-in answered with. */
-    set: set!,
-    value: pair.slice(pair.indexOf("=") + 1),
-    /** An owner action, called with `cookie` alone. */
-    listClients: (cookie: string) => post("/api/listClients", {}, cookie),
-    openapi: () => app(new Request(`${origin}/openapi.json`)),
-  };
-};
-
-test.for([
+it.live.each([
   {
     scheme: "HTTPS",
     origin: "https://clankerauth.home.example",
@@ -71,21 +64,23 @@ test.for([
   },
 ] as const)(
   "over $scheme, owner actions authenticate with the session cookie $name",
-  async ({ origin, name, secure }) => {
-    const session = await signIn(origin);
+  ({ origin, name, secure }) =>
+    Effect.gen(function* () {
+      const session = yield* signIn(origin);
 
-    // The session cookie is sent over HTTPS only when the deployment is served over HTTPS.
-    expect(/;\s*Secure(;|$)/i.test(session.set)).toBe(secure);
+      // The session cookie is sent over HTTPS only when the deployment is served over HTTPS.
+      expect(/;\s*Secure(;|$)/i.test(session.set)).toBe(secure);
 
-    // The provider's own name for the deployment, `__Secure-` prefixed over HTTPS.
-    const listed = await session.listClients(`${name}=${session.value}`);
-    expect(listed.status, await listed.clone().text()).toBe(200);
-    expect((await listed.json()).email).toBe(owner.email);
+      // The provider's own name for the deployment, `__Secure-` prefixed over HTTPS.
+      const listed = yield* session.listClients(`${name}=${session.value}`);
+      expect(listed.status, yield* Effect.promise(() => listed.clone().text())).toBe(200);
+      expect((yield* Effect.promise(() => listed.json())).email).toBe(owner.email);
 
-    // The server's binding names the cookie it reads, in its OpenAPI document too.
-    const document = await (await session.openapi()).json();
-    expect(Object.values(document.components.securitySchemes)).toContainEqual(
-      expect.objectContaining({ type: "apiKey", in: "cookie", name }),
-    );
-  },
+      // The server's binding names the cookie it reads, in its OpenAPI document too.
+      const openapi = yield* session.openapi;
+      const document = yield* Effect.promise(() => openapi.json());
+      expect(Object.values(document.components.securitySchemes)).toContainEqual(
+        expect.objectContaining({ type: "apiKey", in: "cookie", name }),
+      );
+    }).pipe(Effect.provide(testWebApplication({ baseURL: origin }))),
 );

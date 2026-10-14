@@ -1,29 +1,34 @@
-import { expect, test, vi } from "vite-plus/test";
-import { Effect, Fiber } from "effect";
-import { openIssuer } from "../open-issuer.ts";
+import { it } from "@effect/vitest";
+import { expect, vi } from "vite-plus/test";
+import { Context, Effect, Exit, Fiber, Scope } from "effect";
+import { startGeneration, testIssuer, testSettings } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
 import { Issuer } from "../../src/issuer/issuer.ts";
 
-test.each([false, true])(
+const baseURL = "https://clankerauth.example.internal";
+
+const createOwner = Effect.gen(function* () {
+  const owners = yield* OwnerAccount;
+
+  yield* owners.create({ email: "owner@example.internal", password: "test password123" });
+  const owner = yield* owners.find();
+
+  if (!owner) return yield* Effect.die("Missing test owner");
+
+  return owner;
+});
+
+it.live.each([false, true])(
   "stopping the issuer waits for provider session cleanup (failure: %s)",
-  async (failCleanup) => {
-    const issuer = await openIssuer({ baseURL: "https://clankerauth.example.internal" });
-    const allowDeletion = Promise.withResolvers<void>();
-    let closing: Promise<void> | undefined;
-
-    try {
-      await issuer.run(
-        issuer.get(OwnerAccount).create({
-          email: "owner@example.internal",
-          password: "test password123",
-        }),
-      );
-      const owner = await Effect.runPromise(issuer.get(OwnerAccount).find());
-
-      if (!owner) throw new Error("Missing test owner");
-      const { context } = issuer.get(Issuer);
+  (failCleanup) =>
+    Effect.gen(function* () {
+      const { context: services, scope } = yield* startGeneration();
+      const owner = yield* createOwner.pipe(Effect.provideContext(services));
+      const { context } = Context.get(services, Issuer);
+      const { kysely } = Context.get(services, Database);
       const startedDeletion = Promise.withResolvers<void>();
+      const allowDeletion = Promise.withResolvers<void>();
       const originalDelete = context.internalAdapter.deleteSession.bind(context.internalAdapter);
       vi.spyOn(context.internalAdapter, "deleteSession").mockImplementation(async (token) => {
         startedDeletion.resolve();
@@ -33,76 +38,55 @@ test.each([false, true])(
 
         return originalDelete(token);
       });
-      const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
+      const destroy = vi.spyOn(kysely, "destroy");
+      yield* Effect.addFinalizer(() => Effect.sync(() => allowDeletion.resolve()));
 
-      const request = issuer.runExit(
-        Effect.scoped(issuer.get(OwnerAccount).providerSession(owner)),
-      );
+      const request = yield* OwnerAccount.use((owners) =>
+        Effect.scoped(owners.providerSession(owner)),
+      ).pipe(Effect.provideContext(services), Effect.exit, Effect.forkIn(scope));
 
-      await startedDeletion.promise;
-      closing = issuer.stop();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield* Effect.promise(() => startedDeletion.promise);
+      const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Effect.sleep("50 millis");
       // The request fiber is owned by the scope shutting down, ahead of the database.
       expect(destroy).not.toHaveBeenCalled();
       allowDeletion.resolve();
-      await request;
-      await closing;
+      yield* Fiber.await(request);
+      yield* Fiber.join(closing);
       expect(destroy).toHaveBeenCalledTimes(1);
-    } finally {
-      allowDeletion.resolve();
-      await (closing ?? Promise.resolve());
-      await issuer.close();
-    }
-  },
+    }).pipe(Effect.provide(testSettings({ baseURL }))),
 );
 
-test("cancellation releases a temporary provider session that lasts at most one minute", async () => {
-  const issuer = await openIssuer({ baseURL: "https://clankerauth.example.internal" });
-  let request: Fiber.Fiber<never, unknown> | undefined;
-
-  try {
-    await issuer.run(
-      issuer.get(OwnerAccount).create({
-        email: "owner@example.internal",
-        password: "test password123",
-      }),
-    );
-    const owner = await Effect.runPromise(issuer.get(OwnerAccount).find());
-
-    if (!owner) throw new Error("Missing test owner");
-    const { context } = issuer.get(Issuer);
+it.live("cancellation releases a temporary provider session that lasts at most one minute", () =>
+  Effect.gen(function* () {
+    const owner = yield* createOwner;
+    const { context } = yield* Issuer;
+    const { sql } = yield* Database;
     const deleteSession = vi.spyOn(context.internalAdapter, "deleteSession");
+    const owners = yield* OwnerAccount;
     const acquired = Promise.withResolvers<void>();
 
-    const before = await Effect.runPromise(
-      issuer.get(Database).sql`SELECT id FROM session ORDER BY id`,
-    );
+    const before = yield* sql`SELECT id FROM session ORDER BY id`;
 
-    request = issuer.runFork(
+    const request = yield* Effect.forkChild(
       Effect.scoped(
         Effect.gen(function* () {
-          yield* issuer.get(OwnerAccount).providerSession(owner);
+          yield* owners.providerSession(owner);
           acquired.resolve();
 
           return yield* Effect.never;
         }),
       ),
     );
-    await acquired.promise;
 
-    const sessions = await Effect.runPromise(
-      issuer.get(Database).sql`SELECT expiresAt FROM session`,
-    );
+    yield* Effect.promise(() => acquired.promise);
+
+    const sessions = yield* sql`SELECT expiresAt FROM session`;
 
     expect(sessions).toHaveLength(before.length + 1);
     expect(Date.parse(String(sessions.at(-1)?.expiresAt))).toBeLessThanOrEqual(Date.now() + 60_000);
-    await Effect.runPromise(Fiber.interrupt(request));
+    yield* Fiber.interrupt(request);
     expect(deleteSession).toHaveBeenCalledTimes(1);
-    expect(
-      await Effect.runPromise(issuer.get(Database).sql`SELECT id FROM session ORDER BY id`),
-    ).toEqual(before);
-  } finally {
-    if (request) await Effect.runPromise(Fiber.interrupt(request));
-    await issuer.close();
-  }
-});
+    expect(yield* sql`SELECT id FROM session ORDER BY id`).toEqual(before);
+  }).pipe(Effect.provide(testIssuer({ baseURL }))),
+);

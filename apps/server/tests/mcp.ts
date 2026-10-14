@@ -24,12 +24,10 @@ export const administrationTools = (
   origin: string,
   token: string,
 ) =>
-  Effect.runPromise(
-    ActionMcp.client(Administration, {
-      url: `${origin}/mcp`,
-      transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
-    }).pipe(Effect.provide(Testing.layer(handler))),
-  );
+  ActionMcp.client(Administration, {
+    url: `${origin}/mcp`,
+    transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
+  }).pipe(Effect.provide(Testing.layer(handler)));
 
 interface OfficialClientOptions {
   /** A web handler, such as `HttpRouter.toWebHandler(routes).handler`. */
