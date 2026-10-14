@@ -262,7 +262,7 @@ try {
 
   const assets = new Set();
 
-  for (const path of ["/", "/setup", "/login", "/consent"]) {
+  for (const path of ["/", "/resources", "/keys", "/setup", "/login", "/consent"]) {
     const page = await fetch(baseURL + path);
     assert.equal(page.status, 200);
     const html = await page.text();

@@ -1,4 +1,31 @@
+import foldkitRecommended from "@foldkit/oxlint-plugin/recommended.json" with { type: "json" };
 import { defineConfig } from "vite-plus";
+
+// The dashboard is a Foldkit application: its source takes Foldkit's recommended rules, with
+// the plugin's own per-file overrides (the entry, the tests) scoped to the same files.
+const foldkitSource = "apps/web/src";
+
+// The JSON is untyped text; every level in it is "error" or "off".
+const level = (value: string): "error" | "off" => (value === "off" ? "off" : "error");
+
+const levels = (rules: Record<string, string | undefined>) =>
+  Object.fromEntries(
+    Object.entries(rules).flatMap(([rule, value]) =>
+      value === undefined ? [] : [[rule, level(value)] as const],
+    ),
+  );
+
+const within = (patterns: ReadonlyArray<string> = []) =>
+  patterns.map((pattern) => `${foldkitSource}/${pattern}`);
+
+const foldkitOverrides = [
+  { files: [`${foldkitSource}/**/*.ts`], rules: levels(foldkitRecommended.rules) },
+  ...foldkitRecommended.overrides.map((override) => ({
+    files: within(override.files),
+    excludeFiles: within(override.excludeFiles),
+    rules: levels(override.rules),
+  })),
+];
 
 export default defineConfig({
   fmt: {
@@ -37,6 +64,7 @@ export default defineConfig({
       "repos/**",
     ],
     jsPlugins: [
+      { name: "foldkit", specifier: "@foldkit/oxlint-plugin" },
       { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
       {
         name: "anti-slop-effect",
@@ -69,6 +97,7 @@ export default defineConfig({
       "anti-slop-effect/no-service-constructor-imports": "error",
       "anti-slop-effect/prefer-effect-match": "error",
     },
+    overrides: foldkitOverrides,
   },
   run: { cache: true },
 });

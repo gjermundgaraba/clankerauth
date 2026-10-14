@@ -117,6 +117,13 @@ try {
   page.setDefaultTimeout(15_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  // The issuer's pages run under its Content Security Policy; anything it refuses is a defect.
+  const policyViolations = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("Content Security Policy")) {
+      policyViolations.push(message.text());
+    }
+  });
   const tokenGrants = [];
   page.on("request", (request) => {
     if (request.url() === `${issuer}/api/auth/oauth2/token`) {
@@ -147,9 +154,9 @@ try {
   await page.goto(authorization.href);
   await page.getByLabel("Email", { exact: true }).fill("browser@example.internal");
   await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: /Sign in/ }).click();
+  await page.getByRole("button", { name: /sign in/i }).click();
   await page.getByRole("heading", { name: "Allow this connection?" }).waitFor();
-  await page.getByRole("button", { name: /Allow access/ }).click();
+  await page.getByRole("button", { name: /allow access/i }).click();
   await page.waitForURL(`${clientOrigin}/callback?**`);
   await page.waitForFunction(() => Boolean(window.mcpTest));
   assert.deepEqual(await page.evaluate(() => window.mcpTest.finishAuth()), {
@@ -166,6 +173,7 @@ try {
   assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("listClients"));
   await page.evaluate(() => window.mcpTest.close());
   assert.deepEqual(pageErrors, []);
+  assert.deepEqual(policyViolations, []);
   console.log(
     "Cross-origin browser MCP OAuth passed (PKCE, consent, SDK scopes, mutation, refresh, 2026-07-28 transport).",
   );

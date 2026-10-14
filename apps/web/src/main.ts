@@ -1,798 +1,334 @@
-import { createAuthClient } from "better-auth/client";
-import { oauthProviderClient } from "@better-auth/oauth-provider/client";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
-import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
+import type { Clipboard } from "@effect/platform-browser";
+import { Effect, Option, Schema, String } from "effect";
+import { Command, Subscription, type Runtime } from "foldkit";
+import { UrlRequest, load, pushUrl, replaceUrl } from "foldkit/navigation";
+import { modifyFields } from "foldkit/struct";
+import * as Update from "foldkit/update";
+import { type Url, toString as urlToString } from "foldkit/url";
+import { SkipLink, Tips } from "@gjermundgaraba-designs/pixel-paper";
+
+import { isSignedIn, issuer, toOwnerSentence } from "./api.ts";
+import * as Dashboard from "./dashboard/index.ts";
+import { Message } from "./message.ts";
+import { Access, type Model, Page, routeOf } from "./model.ts";
+import * as Consent from "./page/consent.ts";
+import * as Login from "./page/login.ts";
+import * as Setup from "./page/setup.ts";
 import {
-  ApplicationType,
-  ClientAuthMethod,
-  Http,
-  errors,
-  type Client,
-  type ClientCredentials,
-  type Connection,
-  type MachineKey,
-  type ResourceSummary,
-} from "@clankerauth/admin-api";
-import { DateTime, Effect, Schema } from "effect";
-import "./style.css";
+  AppRoute,
+  clientsRouter,
+  isDashboardRoute,
+  loginRouter,
+  setupRouter,
+  urlToAppRoute,
+} from "./route.ts";
 
-type ClientView = typeof Client.Type;
+// The dashboard's copy buttons write through the application's `Clipboard` service.
+type UpdateReturn = Update.Return<Model, Message, Clipboard.Clipboard>;
 
-type ResourceView = typeof ResourceSummary.Type;
+// COMMAND
 
-type KeyView = typeof MachineKey.Type;
+export const CheckAccess = Command.define("CheckAccess", {
+  messages: [Message.SucceededCheckAccess, Message.FailedCheckAccess],
+  execute: issuer.setupStatus().pipe(
+    toOwnerSentence,
+    Effect.flatMap(({ required }): Effect.Effect<Access, string> =>
+      required
+        ? Effect.succeed(Access.SetupRequired())
+        : Effect.map(isSignedIn, (hasSession) =>
+            hasSession ? Access.SignedIn() : Access.SignedOut(),
+          ),
+    ),
+    Effect.match({
+      onFailure: (reason) => Message.FailedCheckAccess({ reason }),
+      onSuccess: (access) => Message.SucceededCheckAccess({ access }),
+    }),
+  ),
+});
 
-type ConnectionView = typeof Connection.Type;
+export const NavigateInternal = Command.define("NavigateInternal", {
+  args: { url: Schema.String },
+  messages: [Message.CompletedNavigateInternal],
+  execute: ({ url }) => pushUrl(url).pipe(Effect.as(Message.CompletedNavigateInternal())),
+});
 
-// Built once: each call is an Effect, which `request` runs as a promise at the display
-// boundary.
-const api = ActionHttp.fetchClient(Http);
+export const ReplaceUrl = Command.define("ReplaceUrl", {
+  args: { url: Schema.String },
+  messages: [Message.CompletedReplaceUrl],
+  execute: ({ url }) => replaceUrl(url).pipe(Effect.as(Message.CompletedReplaceUrl())),
+});
 
-/** The issuer's own errors, which every action declares: their sentence is `error`. */
-const isIssuerError = Schema.is(Schema.Union(errors));
+export const LoadUrl = Command.define("LoadUrl", {
+  args: { href: Schema.String },
+  messages: [Message.CompletedLoadUrl],
+  execute: ({ href }) => load(href).pipe(Effect.as(Message.CompletedLoadUrl())),
+});
 
-/** effect-actions' own errors, which every endpoint declares: their sentence is `message`. */
-const isBuiltIn = Schema.is(Action.BuiltIn);
+/** Loads the address on show afresh: the browser has already moved to it, and assigning it
+ *  again would only jump to its fragment. */
+export const ReloadPage = Command.define("ReloadPage", {
+  messages: [Message.CompletedReloadPage],
+  execute: Effect.sync(() => location.reload()).pipe(Effect.as(Message.CompletedReloadPage())),
+});
+
+/** Moves focus to the fragment an address names, such as the skip link's, or to the top of a
+ *  page without one. */
+export const FocusFragment = Command.define("FocusFragment", {
+  args: { maybeFragment: Schema.Option(Schema.String) },
+  messages: [Message.CompletedFocusFragment],
+  execute: ({ maybeFragment }) =>
+    Option.match(maybeFragment, {
+      onNone: () => Effect.sync(() => window.scrollTo(0, 0)),
+      onSome: SkipLink.focusFragment,
+    }).pipe(Effect.as(Message.CompletedFocusFragment())),
+});
+
+// PAGES
+
+const searchOf = (url: Url): string => Option.getOrElse(url.search, () => "");
+
+const toSetupMessage = (message: Setup.Message): Message => Message.GotSetupMessage({ message });
+
+const toLoginMessage = (message: Login.Message): Message => Message.GotLoginMessage({ message });
+
+const toConsentMessage = (message: Consent.Message): Message =>
+  Message.GotConsentMessage({ message });
+
+const toDashboardMessage = (message: Dashboard.Message): Message =>
+  Message.GotDashboardMessage({ message });
+
+const withPage = (model: Model, page: Page): Model => modifyFields(model, { page: () => page });
+
+const setupPage = (model: Model): UpdateReturn => ({
+  model: withPage(model, Page.Setup({ setup: Setup.init() })),
+});
+
+/** The sign-in, which goes on to `destination` unless its query names another. */
+const loginPage = (model: Model, search: string, destination: string): UpdateReturn => ({
+  model: withPage(model, Page.Login({ login: Login.init(search, destination) })),
+});
+
+/** An owner already signed in goes on where the sign-in would have sent them; only a sign-in
+ *  that continues an authorization still shows the form. */
+const signedInLoginPage = (model: Model, search: string): UpdateReturn => {
+  const login = Login.init(search, clientsRouter());
+
+  return Option.match(Login.continuationOf(login), {
+    onNone: () => ({ model: withPage(model, Page.Login({ login })) }),
+    onSome: (continuation) => ({
+      model,
+      commands: Command.mapMessages([continuation], toLoginMessage),
+    }),
+  });
+};
+
+const consentPage = (model: Model, search: string): UpdateReturn =>
+  Update.foldChildInit(Consent.init(search), {
+    toParentModel: (consent) => withPage(model, Page.Consent({ consent })),
+    toParentMessage: toConsentMessage,
+  });
+
+const dashboardPage = (model: Model): UpdateReturn =>
+  Update.foldChildInit(Dashboard.init(), {
+    toParentModel: (dashboard) => withPage(model, Page.Dashboard({ dashboard })),
+    toParentMessage: toDashboardMessage,
+  });
+
+const notFoundPage = (model: Model): UpdateReturn => ({
+  model: withPage(model, Page.NotFound()),
+});
+
+/** Moves to another address in place of this one, and shows `page` there. */
+const redirected = (page: UpdateReturn, url: string): UpdateReturn => ({
+  model: page.model,
+  commands: [...(page.commands ?? []), ReplaceUrl({ url })],
+});
 
 /**
- * The contract's own refusals, and input the issuer cannot serve, carry the sentence written
- * for the owner. Anything else reached the browser instead of the issuer's answer, and reads
- * the same either way.
+ * The page an address shows, once access is known. Until the owner exists every address is
+ * setup's. A signed-out browser signs in where it stands, except at consent, which the
+ * provider signed.
  */
-const displayed = <E>(error: E) => {
-  if (isIssuerError(error)) return new Error(error.error);
+const pageFor = (model: Model, access: Access): UpdateReturn => {
+  const route = routeOf(model);
 
-  // Input that does not decode carries the schema's report as its message, and each rule's
-  // sentence as an issue.
-  if (error instanceof Action.InvalidInput && error.issues.length)
-    return new Error([...new Set(error.issues.map((issue) => issue.message))].join(" "));
+  const search = searchOf(model.url);
 
-  if (isBuiltIn(error)) return new Error(error.message);
-
-  return new Error("Request could not be completed. Please try again.");
-};
-
-/** Typed refusals survive the whole call; only the display boundary flattens them. */
-async function request<A>(call: Effect.Effect<A, unknown>): Promise<A> {
-  try {
-    return await Effect.runPromise(call);
-  } catch (error) {
-    throw displayed(error);
-  }
-}
-
-const auth = createAuthClient({ plugins: [oauthProviderClient()] });
-
-const app = document.querySelector<HTMLDivElement>("#app")!;
-
-app.innerHTML = `<header><a href="/" class="brand"><span class="mark">c.</span> clanker<span class="muted">auth</span></a><span class="tag">PRIVATE IDENTITY</span></header><main id="main"></main><footer>Local accounts. Explicit access.<span>Self-hosted authorization server</span></footer>`;
-
-const main = document.querySelector<HTMLElement>("#main")!;
-
-const escape = (text: string) =>
-  text.replace(
-    /[&<>"']/g,
-    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
-  );
-
-function message(text: string) {
-  const target = document.querySelector<HTMLElement>("#message")!;
-  target.textContent = text;
-
-  if (text && target.hasAttribute("tabindex")) {
-    target.focus();
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-}
-
-let submitting = false;
-
-async function submit(task: () => Promise<void>) {
-  if (submitting) return;
-  submitting = true;
-
-  const buttons = Array.from(main.querySelectorAll("button"), (button) => ({
-    button,
-    disabled: button.disabled,
-  }));
-
-  buttons.forEach(({ button }) => (button.disabled = true));
-  message("");
-
-  try {
-    await task();
-  } catch (error) {
-    message(error instanceof Error ? error.message : "Request failed");
-  } finally {
-    buttons.forEach(({ button, disabled }) => (button.disabled = disabled));
-    submitting = false;
-  }
-}
-
-function confirmed(prompt: string, task: () => Promise<void>) {
-  if (submitting || !confirm(prompt)) return;
-  void submit(task);
-}
-
-function setup() {
-  main.innerHTML = `<section class="intro"><p class="eyebrow">YOUR NETWORK, YOUR IDENTITY</p><h1>Your identity.<br>Starts here.</h1><p>Create the owner account for your private applications.<br>Your account stays on your infrastructure.</p><div class="note"><span class="dot"></span> One owner · Explicit access</div></section>
-    <section class="card login"><p class="eyebrow">FIRST-TIME SETUP</p><h2>Create your account</h2><p class="muted">This account manages Clients and Resources and approves access.</p>
-    <form id="setup"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="owner@example.internal"></label>
-    <label>Password<input name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="128" aria-describedby="password-help"></label><p id="password-help" class="help">Use 8–128 characters. Save your password somewhere safe.</p>
-    <label>Confirm password<input name="confirmation" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></label>
-    <p id="message" role="alert"></p><button>Create account <span>→</span></button></form></section>`;
-  const form = document.querySelector<HTMLFormElement>("#setup")!;
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void submit(async () => {
-      const password = form.querySelector<HTMLInputElement>('[name="password"]')!.value;
-      const confirmation = form.querySelector<HTMLInputElement>('[name="confirmation"]')!.value;
-
-      if (password.length < 8 || password.length > 128)
-        throw new Error("Use a password between 8 and 128 characters.");
-
-      if (password !== confirmation) throw new Error("Passwords do not match.");
-
-      // Setup signs the owner in, so the dashboard opens directly; an owner who already
-      // exists signs in instead.
-      const next = await request(
-        api
-          .setupOwner({
-            email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-            password,
-          })
-          .pipe(
-            Effect.as("/"),
-            Effect.catchTag("Conflict", () => Effect.succeed("/login")),
-          ),
-      );
-
-      location.replace(next);
-    });
+  return Access.match<UpdateReturn>(access, {
+    SetupRequired: () =>
+      AppRoute.guards.Setup(route) ? setupPage(model) : redirected(setupPage(model), setupRouter()),
+    SignedIn: () =>
+      AppRoute.match<UpdateReturn>(route, {
+        Clients: () => dashboardPage(model),
+        Resources: () => dashboardPage(model),
+        Keys: () => dashboardPage(model),
+        Login: () => signedInLoginPage(model, search),
+        Setup: () => redirected(dashboardPage(model), clientsRouter()),
+        Consent: () => consentPage(model, search),
+        NotFound: () => notFoundPage(model),
+      }),
+    SignedOut: () =>
+      AppRoute.match<UpdateReturn>(route, {
+        Clients: () => loginPage(model, search, model.url.pathname),
+        Resources: () => loginPage(model, search, model.url.pathname),
+        Keys: () => loginPage(model, search, model.url.pathname),
+        Login: () => loginPage(model, search, clientsRouter()),
+        Setup: () => redirected(loginPage(model, "", clientsRouter()), loginRouter()),
+        Consent: () => consentPage(model, search),
+        NotFound: () => notFoundPage(model),
+      }),
   });
-}
+};
 
-function login() {
-  main.innerHTML = `<section class="intro"><p class="eyebrow">YOUR NETWORK, YOUR IDENTITY</p><h1>One identity.<br>Deliberate access.</h1><p>Sign in to authorize your private applications.<br>Your account stays on your infrastructure.</p><div class="note"><span class="dot"></span> Password login · No external identity provider</div></section>
-    <section class="card login"><p class="eyebrow">OWNER ACCESS</p><h2>Welcome back</h2><p class="muted">Use your local account to continue.</p>
-    <form id="login"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="owner@example.internal"></label>
-    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-    <p id="message" role="alert"></p><button>Sign in <span>→</span></button></form></section>`;
-  const form = document.querySelector<HTMLFormElement>("#login")!;
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void submit(async () => {
-      const result = await auth.signIn.email({
-        email: form.querySelector<HTMLInputElement>('[name="email"]')!.value,
-        password: form.querySelector<HTMLInputElement>('[name="password"]')!.value,
-      });
-
-      if (result.error)
-        throw new Error("Sign-in failed. Check your credentials or try again later.");
-
-      // The provider client handles OAuth redirects. Forward auth continues on this origin,
-      // which validates the real destination; a plain login returns to the dashboard.
-      const query = new URLSearchParams(location.search);
-      const rd = query.get("rd") ?? "/";
-
-      if (!query.has("sig"))
-        location.assign(new URL(rd, location.origin).origin === location.origin ? rd : "/");
-    });
+/** Whether the page on show answers `route` in place, keeping its state; any other route gets
+ *  its page afresh. */
+const isServedBy = (page: Page, route: AppRoute): boolean =>
+  Page.match(page, {
+    Starting: () => true,
+    Failed: () => false,
+    NotFound: () => AppRoute.guards.NotFound(route),
+    Setup: () => AppRoute.guards.Setup(route),
+    Login: () => AppRoute.guards.Login(route),
+    Consent: () => AppRoute.guards.Consent(route),
+    Dashboard: () => isDashboardRoute(route),
   });
-}
 
-async function consent() {
-  const query = new URLSearchParams(location.search);
-  const clientId = query.get("client_id");
+// INIT
 
-  if (!clientId || !query.has("sig"))
-    throw new Error("Start authorization from your application; this consent link is incomplete.");
-  const client = await auth.oauth2.publicClient({ query: { client_id: clientId } });
+export const init: Runtime.RoutingApplicationInit<Model, Message, void, Clipboard.Clipboard> = (
+  url,
+) => ({
+  model: {
+    url,
+    page: Page.Starting(),
+    tips: Tips.init({ id: "page-tip" }),
+  },
+  commands: [CheckAccess()],
+});
 
-  if (client.error || !client.data)
-    throw new Error("Sign in through your application to continue authorization.");
-  const scopes = (query.get("scope") ?? "").split(" ").filter(Boolean);
-  const resources = query.getAll("resource");
-  let metadataHost: string | undefined;
+// UPDATE
 
-  try {
-    const identifier = new URL(clientId);
+const foldSetupOutMessage = Setup.OutMessage.match<
+  Update.Step<Model, Message, Clipboard.Clipboard>
+>({
+  CreatedOwner: () => (stepModel) => redirected(dashboardPage(stepModel), clientsRouter()),
+  FoundOwner: () => (stepModel) =>
+    redirected(loginPage(stepModel, "", clientsRouter()), loginRouter()),
+});
 
-    if (identifier.protocol === "https:") metadataHost = identifier.hostname;
-  } catch {
-    // Registered identifiers need not be URLs.
-  }
+const foldSetup = Update.foldChild({
+  update: Setup.update,
+  read: (model: Model) =>
+    Page.matchOrElse(model.page, { Setup: ({ setup }) => Option.some(setup) }, () =>
+      Option.none<Setup.Model>(),
+    ),
+  write: (model, nextSetup) => withPage(model, Page.Setup({ setup: nextSetup })),
+  toParentMessage: toSetupMessage,
+  foldOutMessage: foldSetupOutMessage,
+});
 
-  const redirect = query.get("redirect_uri");
-  main.className = "center";
-  main.innerHTML = `<section class="card consent"><p class="eyebrow">PERMISSION REQUEST</p><h1>Allow this connection?</h1>
-    <p><strong>${escape(client.data.client_name ?? clientId)}</strong> wants to act on your behalf.</p>
-    ${metadataHost ? `<p>Client metadata host: <strong>${escape(metadataHost)}</strong></p>` : ""}
-    <label>Client ID<code>${escape(clientId)}</code></label>
-    <label>Callback destination<code>${escape(redirect ?? "Not supplied in this request")}</code></label>
-    <p class="help">The client supplies its display name. Review the identifier and callback before approving.</p>
-    <div class="resource"><span class="eyebrow">ONLY FOR THIS RESOURCE</span>${resources.map((r) => `<code>${escape(r)}</code>`).join("")}</div>
-    <form id="consent"><h3>Requested access</h3><ul class="scopes">${scopes.map((scope) => `<li><label class="checkbox"><input type="checkbox" name="scope" value="${escape(scope)}" checked><code>${escape(scope)}</code></label></li>`).join("")}</ul>
-    <p class="help">Untick anything this Client should not get. It receives only what stays ticked.</p>
-    ${query.has("claims") ? `<h3>Additional identity claims</h3><pre>${escape(query.get("claims")!)}</pre>` : ""}
-    <p class="help">Access tokens expire after fifteen minutes. Offline access lets the Client renew them until you revoke its authorization.</p>
-    <p id="message" role="alert"></p><div class="actions"><button type="submit" name="decision" value="deny" class="secondary">Deny</button><button type="submit" name="decision" value="allow">Allow access →</button></div></form></section>`;
-  const form = document.querySelector<HTMLFormElement>("#consent")!;
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const submitter = event.submitter;
+const foldLogin = Update.foldChild({
+  update: Login.update,
+  read: (model: Model) =>
+    Page.matchOrElse(model.page, { Login: ({ login }) => Option.some(login) }, () =>
+      Option.none<Login.Model>(),
+    ),
+  write: (model, nextLogin) => withPage(model, Page.Login({ login: nextLogin })),
+  toParentMessage: toLoginMessage,
+});
 
-    if (!(submitter instanceof HTMLButtonElement))
-      throw new Error("Consent must be decided with the Allow or Deny button.");
+const foldConsent = Update.foldChild({
+  update: Consent.update,
+  read: (model: Model) =>
+    Page.matchOrElse(model.page, { Consent: ({ consent }) => Option.some(consent) }, () =>
+      Option.none<Consent.Model>(),
+    ),
+  write: (model, nextConsent) => withPage(model, Page.Consent({ consent: nextConsent })),
+  toParentMessage: toConsentMessage,
+});
 
-    const accept = submitter.value === "allow";
+const foldDashboard = Update.foldChild({
+  update: Dashboard.update,
+  read: (model: Model) =>
+    Page.matchOrElse(model.page, { Dashboard: ({ dashboard }) => Option.some(dashboard) }, () =>
+      Option.none<Dashboard.Model>(),
+    ),
+  write: (model, nextDashboard) => withPage(model, Page.Dashboard({ dashboard: nextDashboard })),
+  toParentMessage: toDashboardMessage,
+});
 
-    const granted = Array.from(new FormData(form).getAll("scope"), String);
+const foldTips = Update.foldChild({
+  update: Tips.update,
+  read: (model: Model) => Option.some(model.tips),
+  write: (model, nextTips) => modifyFields(model, { tips: () => nextTips }),
+  toParentMessage: (message) => Message.GotTipsMessage({ message }),
+});
 
-    void submit(async () => {
-      // The provider refuses an empty scope, and leaving it out approves what was requested.
-      if (accept && scopes.length && !granted.length)
-        throw new Error("Tick at least one permission, or deny the request.");
+const isSameSearch = Option.makeEquivalence(String.Equivalence);
 
-      const result = await auth.oauth2.consent(
-        accept && granted.length ? { accept, scope: granted.join(" ") } : { accept },
-      );
+/** The fragment a link names in the document on show, such as the skip link's. */
+const fragmentOf = (model: Model, url: Url): Option.Option<string> =>
+  url.pathname === model.url.pathname && isSameSearch(url.search, model.url.search)
+    ? url.hash
+    : Option.none();
 
-      if (result.error)
-        throw new Error("Authorization could not be completed. Restart from your application.");
-      // Better Auth follows the redirect; a second navigation would cancel the callback.
-    });
-  });
-}
-
-function textField(fields: FormData, name: string): string {
-  const value = fields.get(name);
-
-  if (value === null || value instanceof File) throw new Error(`Missing form field: ${name}`);
-
-  return value.trim();
-}
-
-function selectedResources(form: HTMLFormElement): string[] {
-  return Array.from(
-    form.querySelectorAll<HTMLInputElement>('input[name="resources"]:checked'),
-    (input) => input.value,
-  );
-}
-
-function resourceFields(fields: FormData) {
-  const scopes = [...new Set(textField(fields, "scopes").split(/\s+/).filter(Boolean))];
-
-  return { name: textField(fields, "name"), scopes };
-}
-
-function redirectUris(fields: FormData) {
-  const uris = [...new Set(textField(fields, "redirect_uris").split(/\s+/).filter(Boolean))];
-
-  if (!uris.length) throw new Error("Add at least one redirect URI.");
-
-  return uris;
-}
-
-const authMethodLabels: Record<typeof ClientAuthMethod.Type, string> = {
-  none: "Public client (PKCE only)",
-  client_secret_basic: "Confidential client · HTTP Basic secret",
-  client_secret_post: "Confidential client · secret in request body",
-};
-
-const authMethodField = (fields: FormData) =>
-  Schema.decodeUnknownSync(ClientAuthMethod)(textField(fields, "token_endpoint_auth_method"));
-
-const applicationTypeField = (fields: FormData) =>
-  Schema.decodeUnknownSync(ApplicationType)(fields.has("native") ? "native" : "web");
-
-function keyGrants(form: HTMLFormElement) {
-  const grants: Record<string, string[]> = {};
-
-  for (const checkbox of form.querySelectorAll<HTMLInputElement>('input[name="key-scope"]:checked'))
-    (grants[checkbox.dataset.resource!] ??= []).push(checkbox.value);
-
-  return grants;
-}
-
-// One-time credentials stay in memory until the owner dismisses them.
-// A later rotation replaces the now-invalid secret for the same Client.
-const pendingKeys = new Map<string, string>();
-
-const pendingCredentials = new Map<string, typeof ClientCredentials.Type>();
-
-function renderCredentials() {
-  const box = document.querySelector<HTMLElement>("#credentials")!;
-  box.classList.toggle("hidden", pendingCredentials.size === 0 && pendingKeys.size === 0);
-  box.replaceChildren();
-
-  if (!pendingCredentials.size && !pendingKeys.size) return;
-  box.innerHTML = `<h2>Save these credentials now</h2><p>API keys and client secrets are shown only once.</p><button class="secondary">Saved — dismiss credentials</button>`;
-  const button = box.querySelector("button")!;
-
-  for (const value of pendingCredentials.values()) {
-    const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify(value, null, 2);
-    button.before(pre);
-  }
-
-  for (const value of pendingKeys.values()) {
-    const pre = document.createElement("pre");
-    pre.textContent = value;
-    button.before(pre);
-  }
-
-  button.addEventListener("click", () => {
-    pendingKeys.clear();
-    pendingCredentials.clear();
-    renderCredentials();
-  });
-}
-
-function showCredentials() {
-  renderCredentials();
-  document.querySelector("#credentials")!.scrollIntoView({ behavior: "smooth" });
-}
-
-// The write has already succeeded. A failed read must never invite replaying it.
-async function refreshDashboard() {
-  try {
-    await dashboard();
-  } catch {
-    document.querySelector<HTMLFieldSetElement>("#dashboard-mutations")!.disabled = true;
-    message("Saved, but the dashboard could not refresh.");
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "secondary";
-    retry.textContent = "Retry refresh";
-    retry.addEventListener("click", () => {
-      void submit(refreshDashboard);
-    });
-    document.querySelector("#message")!.append(" ", retry);
-  }
-}
-
-const scopeHelp = "Optional. Separate scopes with spaces. offline_access is reserved.";
-
-const onboardingLabel = {
-  managed: "Managed registration · first party, no consent screen",
-  dcr: "Dynamic registration",
-  cimd: "Client ID Metadata Document",
-};
-
-const isManaged = (client: ClientView) => !client.onboarding || client.onboarding === "managed";
-
-const columns = (title: string, count: number, intro: string, list: string, form: string) =>
-  `<div class="columns dashboard-section"><section><h2>${title} <span class="count">${count}</span></h2><p class="muted">${intro}</p>${list}</section><section class="card registration">${form}</section></div>`;
-
-const empty = (title: string, text: string) =>
-  `<div class="empty"><h3>${title}</h3><p>${text}</p></div>`;
-
-const resourceSummary = (resource: ResourceView) =>
-  `<code>${escape(resource.identifier)}</code><span class="muted">${escape(resource.scopes.join(" · "))}</span>`;
-
-const resourceChoices = (resources: readonly ResourceView[], selected: readonly string[]) =>
-  resources
-    .map(
-      (resource) =>
-        `<label class="checkbox resource-choice"><input type="checkbox" name="resources" value="${escape(resource.identifier)}" ${selected.includes(resource.identifier) ? "checked" : ""}><span>${escape(resource.name)}${resourceSummary(resource)}</span></label>`,
-    )
-    .join("");
-
-const keyChoices = (
-  resources: readonly ResourceView[],
-  grants: Record<string, readonly string[]>,
-) =>
-  resources
-    .map(
-      (resource) =>
-        `<fieldset><legend>${escape(resource.name)}</legend><code>${escape(resource.identifier)}</code>${resource.scopes
-          .map(
-            (scope) =>
-              `<label class="checkbox"><input type="checkbox" name="key-scope" data-resource="${escape(resource.identifier)}" value="${escape(scope)}" ${grants[resource.identifier]?.includes(scope) ? "checked" : ""}><code>${escape(scope)}</code></label>`,
-          )
-          .join("")}</fieldset>`,
-    )
-    .join("") || '<p class="help">Add a Resource to grant access.</p>';
-
-const resourceCard = (resource: ResourceView, connected: readonly ClientView[]) =>
-  `<article class="resource"><h3>${escape(resource.name)}</h3>${resourceSummary(resource)}
-  <p class="help dependencies">Connected Clients: ${connected.length ? connected.map((client) => escape(client.client_name ?? client.client_id)).join(", ") : "None"}</p>
-  ${
-    resource.builtIn
-      ? '<p class="help">Built-in administration resource, fixed. OAuth access tokens are required. clankerauth:read allows listing; clankerauth:write also allows every change.</p>'
-      : `<details><summary>Edit resource</summary><form data-resource-edit="${escape(resource.identifier)}"><label>Name<input name="name" value="${escape(resource.name)}" required maxlength="100"></label><label>Scopes<input name="scopes" value="${escape(resource.scopes.join(" "))}"></label><p class="help">Added scopes need new consent. Removed scopes are no longer issued, but approvals are kept and work again if the scope is restored.</p><button>Save resource</button></form></details>
-  <button class="danger" data-resource-delete="${escape(resource.identifier)}">Delete resource</button>`
-  }</article>`;
-
-const resourceForm = () =>
-  `<h2>Add resource</h2><form id="resource-create"><label>Name<input name="name" required maxlength="100" placeholder="Notes MCP"></label><label>HTTP or HTTPS identifier<input name="identifier" type="url" required placeholder="https://notes.internal/"></label><p class="help">The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application\u2019s origin root with its trailing slash.</p><label>Scopes<input name="scopes" placeholder="notes:read notes:write"></label><p class="help">${scopeHelp}</p><button>Add resource +</button></form>`;
-
-const keyCard = (key: KeyView, resources: readonly ResourceView[]) =>
-  `<article class="resource"><h3>${escape(key.name)}</h3><p>${key.enabled ? "Enabled" : "Disabled"} · ${key.expiresAt ? `Expires ${escape(DateTime.formatLocal(key.expiresAt, { dateStyle: "medium", timeStyle: "short" }))}` : "Valid until revoked"}</p>${Object.entries(
-    key.permissions,
-  )
-    .map(
-      ([resource, scopes]) =>
-        `<code>${escape(resource)}</code><p class="help">${escape(scopes.join(" · "))}</p>`,
-    )
-    .join("")}
-  <details><summary>Rename key</summary><form data-key-rename="${escape(key.keyId)}"><label>Name<input name="name" required maxlength="100" value="${escape(key.name)}"></label><button>Save name</button></form></details>
-  <details><summary>Edit grants</summary><form data-key-grants="${escape(key.keyId)}">${keyChoices(resources, key.permissions)}<p class="help">Saving replaces all grants, including any not currently available, with the selected scopes.</p><button>Save grants</button></form></details>
-  <div class="actions"><button class="secondary" data-key-toggle="${escape(key.keyId)}" data-enabled="${key.enabled}">${key.enabled ? "Disable key" : "Enable key"}</button><button class="danger" data-key-delete="${escape(key.keyId)}">Delete key</button></div></article>`;
-
-const keyForm = (resources: readonly ResourceView[]) =>
-  `<h2>Create API key</h2><form id="key-create"><label>Name<input name="name" required maxlength="100" placeholder="Backup script"></label>${keyChoices(resources, {})}<label>Expiry (optional)<input name="expiry" type="datetime-local"></label><p class="help">Blank means valid until revoked. The key is shown once and works within about a minute.</p><button ${resources.length ? "" : "disabled"}>Create API key</button></form>`;
-
-const when = (value: DateTime.Utc) =>
-  escape(DateTime.formatLocal(value, { dateStyle: "medium", timeStyle: "short" }));
-
-const connectionRow = (connection: ConnectionView, resources: readonly ResourceView[]) => {
-  const resource = resources.find((resource) => resource.identifier === connection.resource);
-
-  const history = [
-    connection.approvedAt ? `Approved ${when(connection.approvedAt)}` : "First party, no consent",
-    connection.refreshedAt ? `last token ${when(connection.refreshedAt)}` : "no refresh token",
-  ].join(" · ");
-
-  return `<div class="allowed-resource connection"><strong>${escape(resource?.name ?? connection.resource)}</strong><code>${escape(connection.resource)}</code><span class="muted">${escape(connection.scopes.join(" · ") || "No Resource scopes")}</span><p class="help">${history}</p><button class="secondary" data-disconnect="${escape(connection.client_id)}" data-resource="${escape(connection.resource)}">Revoke</button></div>`;
-};
-
-const clientCard = (
-  client: ClientView,
-  resources: readonly ResourceView[],
-  allowed: readonly string[],
-  connections: readonly ConnectionView[],
-) => {
-  const managed = isManaged(client);
-  const id = escape(client.client_id);
-
-  const connected =
-    connections.map((connection) => connectionRow(connection, resources)).join("") ||
-    `<p class="help">${managed ? "Holds no refresh token." : "No Resource approved yet."}</p>`;
-
-  // Automatic clients may ask for any Resource; consent decides.
-  const access = managed
-    ? `<details><summary>Allowed Resources · ${allowed.length} of ${resources.length}</summary><form data-client-access="${id}"><fieldset><legend>Allowed Resources</legend>${resourceChoices(resources, allowed) || '<p class="help">Add a Resource above to configure access.</p>'}</fieldset><p class="help">This Client skips consent for the Resources ticked here. Unticking one revokes its authorization for it.</p><button>Save access</button></form></details>`
-    : '<p class="help">May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.</p>';
-
-  const edit = managed
-    ? `<details><summary>Edit client</summary><form data-client-edit="${id}"><label>Client name<input name="name" required maxlength="100" value="${escape(client.client_name ?? "")}"></label><label>Redirect URIs (one per line)<textarea name="redirect_uris" required rows="3">${escape(client.redirect_uris.join("\n"))}</textarea></label><label class="checkbox"><input type="checkbox" name="native" ${client.application_type === "native" ? "checked" : ""}>Native / desktop client (loopback redirect)</label><p class="help">The authentication method is fixed at registration.</p><button>Save client</button></form></details>`
-    : "";
-
-  const actions = [
-    `<button class="secondary" data-revoke="${id}">Revoke all</button>`,
-    `<button class="secondary" data-block="${id}" data-blocked="${client.blocked ? "true" : "false"}">${client.blocked ? "Unblock client" : "Block client"}</button>`,
-    managed && client.token_endpoint_auth_method !== "none"
-      ? `<button class="secondary" data-rotate="${id}">Rotate secret</button>`
-      : "",
-    `<button class="danger" data-delete="${id}" data-managed="${managed}">Delete client</button>`,
-  ].join("");
-
-  return `<article class="card client"><div class="client-heading"><h3>${escape(client.client_name ?? "Unnamed client")}</h3><span class="tag">${client.token_endpoint_auth_method === "none" ? "PUBLIC · PKCE" : "CONFIDENTIAL · PKCE"}</span></div><p class="help">${onboardingLabel[client.onboarding ?? "managed"]}${client.blocked ? " · BLOCKED" : ""}</p><label>Client ID<code>${id}</code></label><label>Redirect URIs${client.redirect_uris.map((uri) => `<code>${escape(uri)}</code>`).join("")}</label>
-  <h3>Connections</h3>${connected}${access}${edit}<div class="actions">${actions}</div></article>`;
-};
-
-const registerForm = (resources: readonly ResourceView[]) =>
-  `<p class="eyebrow">MANAGED REGISTRATION</p><h2>Register client</h2><form id="register"><fieldset><label>Client name<input name="name" required maxlength="100" placeholder="My MCP client"></label><label>Redirect URIs (one per line)<textarea name="redirect_uris" required rows="3" placeholder="https://app.internal/callback"></textarea></label><fieldset><legend>Allowed Resources (optional)</legend>${resourceChoices(resources, []) || '<p class="help">You can configure Resource access after registration.</p>'}</fieldset><label class="checkbox"><input type="checkbox" name="native">Native / desktop client (loopback redirect)</label><label>Client authentication<select name="token_endpoint_auth_method">${Object.entries(
-    authMethodLabels,
-  )
-    .map(([value, label]) => `<option value="${value}">${label}</option>`)
-    .join(
-      "",
-    )}</select></label><button>Register client +</button></fieldset><p class="help">S256 PKCE is always required. Clients you register here are first party and skip the consent screen.</p></form>`;
-
-async function dashboard() {
-  const [data, keyData] = await request(
-    Effect.all([api.listClients(), api.listApiKeys()], {
-      concurrency: "unbounded",
+/** A fragment of the document on show only moves focus. Otherwise a link the page on show
+ *  answers moves in place, and any other is loaded afresh. */
+const internalLinkClicked = (model: Model, url: Url): UpdateReturn =>
+  Option.match(fragmentOf(model, url), {
+    onSome: (fragment) => ({
+      model,
+      commands: [FocusFragment({ maybeFragment: Option.some(fragment) })],
     }),
-  );
-
-  const { resources } = data;
-  const keyResources = resources.filter((resource) => !resource.builtIn);
-
-  const allowed = (clientId: string) =>
-    data.clientAccess
-      .filter((access) => access.client_id === clientId)
-      .map((access) => access.resource);
-
-  const connections = (clientId: string) =>
-    data.connections.filter((connection) => connection.client_id === clientId);
-
-  main.className = "dashboard";
-  main.innerHTML = `
-    <div class="page-title"><div><p class="eyebrow">CONTROL PLANE</p><h1>Clients and Resources</h1><p class="muted">Signed in as ${escape(data.email)}</p></div><button id="logout" class="secondary">Sign out</button></div>
-    <div class="issuer"><span class="dot"></span><span>Canonical issuer</span><code>${escape(data.issuer)}</code></div>
-    <p id="message" role="alert" tabindex="-1"></p>
-    <section id="credentials" class="card hidden" aria-live="polite"></section>
-    <fieldset id="dashboard-mutations" aria-label="Clients and Resources">
-    ${columns(
-      "Resources",
-      resources.length,
-      "Protected APIs and MCP servers, and the scopes they define.",
-      resources
-        .map((resource) =>
-          resourceCard(
-            resource,
-            data.clients.filter((client) =>
-              connections(client.client_id).some(
-                (connection) => connection.resource === resource.identifier,
-              ),
-            ),
-          ),
-        )
-        .join("") ||
-        empty(
-          "Add your first Resource",
-          "Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.",
-        ),
-      resourceForm(),
-    )}
-    ${columns(
-      "API keys",
-      keyData.keys.length,
-      "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours.",
-      keyData.keys.map((key) => keyCard(key, keyResources)).join("") ||
-        empty("No API keys", "Create a key for a CLI or automation that needs direct access."),
-      keyForm(keyResources),
-    )}
-    ${columns(
-      "Clients",
-      data.clients.length,
-      "Compatible MCP clients register themselves when they connect; registration alone grants no access. Revoking or blocking stops new authorization and refresh at once; already-issued access tokens stay valid until they expire, at most fifteen minutes.",
-      data.clients
-        .map((client) =>
-          clientCard(client, resources, allowed(client.client_id), connections(client.client_id)),
-        )
-        .join("") ||
-        empty(
-          "No Clients registered",
-          "Connect your MCP client to a configured server to onboard automatically, or register a managed Client here.",
-        ),
-      registerForm(resources),
-    )}
-    </fieldset>`;
-  renderCredentials();
-
-  const form = (id: string) => document.querySelector<HTMLFormElement>(id)!;
-
-  const onSubmit = (target: HTMLFormElement, task: (form: HTMLFormElement) => Promise<void>) =>
-    target.addEventListener("submit", (event) => {
-      event.preventDefault();
-      void submit(() => task(target));
-    });
-
-  const onClick = (selector: string, handler: (button: HTMLButtonElement) => void) => {
-    for (const button of main.querySelectorAll<HTMLButtonElement>(selector))
-      button.addEventListener("click", () => handler(button));
-  };
-
-  document.querySelector("#logout")!.addEventListener("click", () => {
-    void submit(async () => {
-      await auth.signOut();
-      location.assign("/login");
-    });
-  });
-  onSubmit(form("#register"), async (target) => {
-    const fields = new FormData(target);
-
-    const result = await request(
-      api.createClient({
-        client_name: textField(fields, "name"),
-        redirect_uris: redirectUris(fields),
-        resources: selectedResources(target),
-        application_type: applicationTypeField(fields),
-        token_endpoint_auth_method: authMethodField(fields),
-      }),
-    );
-
-    target.reset();
-    pendingCredentials.set(result.client_id, result);
-    showCredentials();
-    await refreshDashboard();
-  });
-  onSubmit(form("#key-create"), async (target) => {
-    const fields = new FormData(target);
-    const expiry = textField(fields, "expiry");
-
-    const result = await request(
-      api.createApiKey({
-        name: textField(fields, "name"),
-        permissions: keyGrants(target),
-        // A `datetime-local` value has no zone, so the browser's own zone applies.
-        expiresAt: expiry ? DateTime.fromDateUnsafe(new Date(expiry)) : null,
-      }),
-    );
-
-    pendingKeys.set(result.keyId, `${result.name}\n${result.key}`);
-    target.reset();
-    showCredentials();
-    await refreshDashboard();
-  });
-  onSubmit(form("#resource-create"), async (target) => {
-    const fields = new FormData(target);
-    await request(
-      api.createResource({
-        identifier: textField(fields, "identifier"),
-        ...resourceFields(fields),
-      }),
-    );
-    target.reset();
-    await refreshDashboard();
+    onNone: () =>
+      isServedBy(model.page, urlToAppRoute(url))
+        ? { model, commands: [NavigateInternal({ url: urlToString(url) })] }
+        : { model, commands: [LoadUrl({ href: urlToString(url) })] },
   });
 
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-rename]"))
-    onSubmit(edit, async (target) => {
-      await request(
-        api.updateApiKey({
-          keyId: target.dataset.keyRename!,
-          name: textField(new FormData(target), "name"),
-        }),
-      );
-      await refreshDashboard();
-    });
-
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-key-grants]"))
-    onSubmit(edit, async (target) => {
-      await request(
-        api.updateApiKey({
-          keyId: target.dataset.keyGrants!,
-          permissions: keyGrants(target),
-        }),
-      );
-      await refreshDashboard();
-    });
-
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-resource-edit]"))
-    onSubmit(edit, async (target) => {
-      await request(
-        api.updateResource({
-          identifier: target.dataset.resourceEdit!,
-          ...resourceFields(new FormData(target)),
-        }),
-      );
-      await refreshDashboard();
-    });
-
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-client-edit]"))
-    onSubmit(edit, async (target) => {
-      const fields = new FormData(target);
-      await request(
-        api.updateClient({
-          client_id: target.dataset.clientEdit!,
-          client_name: textField(fields, "name"),
-          redirect_uris: redirectUris(fields),
-          application_type: applicationTypeField(fields),
-        }),
-      );
-      await refreshDashboard();
-    });
-
-  for (const edit of main.querySelectorAll<HTMLFormElement>("[data-client-access]"))
-    edit.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const client_id = edit.dataset.clientAccess!;
-      const selected = selectedResources(edit);
-      const removed = allowed(client_id).filter((resource) => !selected.includes(resource));
-
-      const save = async () => {
-        await request(api.setClientAccess({ client_id, resources: selected }));
-        await refreshDashboard();
-      };
-
-      if (removed.length)
-        confirmed(
-          `Remove access to ${removed.join(", ")}? This revokes the Client\u2019s authorization for ${removed.length === 1 ? "it" : "them"}.`,
-          save,
-        );
-      else void submit(save);
-    });
-  onClick("[data-key-toggle]", (button) => {
-    void submit(async () => {
-      await request(
-        api.updateApiKey({
-          keyId: button.dataset.keyToggle!,
-          enabled: button.dataset.enabled !== "true",
-        }),
-      );
-      await refreshDashboard();
-    });
+const linkClicked = (model: Model, request: UrlRequest): UpdateReturn =>
+  UrlRequest.match<UpdateReturn>(request, {
+    Internal: ({ url }) => internalLinkClicked(model, url),
+    External: ({ href }) => ({ model, commands: [LoadUrl({ href })] }),
   });
-  onClick("[data-key-delete]", (button) => {
-    const keyId = button.dataset.keyDelete!;
-    confirmed("Delete this API key?", async () => {
-      await request(api.deleteApiKey({ keyId }));
-      pendingKeys.delete(keyId);
-      renderCredentials();
-      await refreshDashboard();
-    });
-  });
-  onClick("[data-revoke]", (button) => {
-    const client_id = button.dataset.revoke!;
-    confirmed(
-      "Revoke all of this Client’s authorization? It must authorize again, and an automatic Client asks for consent.",
-      async () => {
-        await request(api.revokeClient({ client_id }));
-        await refreshDashboard();
-      },
-    );
-  });
-  onClick("[data-disconnect]", (button) => {
-    const client_id = button.dataset.disconnect!;
-    const resource = button.dataset.resource!;
-    confirmed(
-      `Revoke this Client’s authorization for ${resource}? It must authorize again, and an automatic Client asks for consent.`,
-      async () => {
-        await request(api.revokeClient({ client_id, resource }));
-        await refreshDashboard();
-      },
-    );
-  });
-  onClick("[data-block]", (button) => {
-    const client_id = button.dataset.block!;
-    const blocked = button.dataset.blocked !== "true";
-    confirmed(
-      blocked ? "Block this Client and revoke its authorization?" : "Unblock this Client?",
-      async () => {
-        await request(api.blockClient({ client_id, blocked }));
-        await refreshDashboard();
-      },
-    );
-  });
-  onClick("[data-rotate]", (button) => {
-    const client_id = button.dataset.rotate!;
-    confirmed("Rotate the secret? The old one stops working immediately.", async () => {
-      const result = await request(api.rotateClientSecret({ client_id }));
 
-      pendingCredentials.set(result.client_id, result);
-      showCredentials();
-    });
+/** A new address, from a link or the browser's back and forward, keeps the page on show when
+ *  it answers it, and focus follows the address's fragment, such as the skip link's. Any other
+ *  address is loaded afresh, which asks again whether the issuer has an owner and this browser
+ *  a session. */
+const urlChanged = (model: Model, url: Url): UpdateReturn =>
+  isServedBy(model.page, urlToAppRoute(url))
+    ? {
+        model: modifyFields(model, { url: () => url }),
+        commands: [FocusFragment({ maybeFragment: url.hash })],
+      }
+    : { model, commands: [ReloadPage()] };
+
+export const update = (model: Model, message: Message) =>
+  Message.match<UpdateReturn>(message, {
+    SucceededCheckAccess: ({ access }) => pageFor(model, access),
+    FailedCheckAccess: ({ reason }) => ({ model: withPage(model, Page.Failed({ reason })) }),
+    ClickedRetryAccess: () => ({
+      model: withPage(model, Page.Starting()),
+      commands: [CheckAccess()],
+    }),
+    ClickedLink: ({ request }) => linkClicked(model, request),
+    ChangedUrl: ({ url }) => urlChanged(model, url),
+    CompletedNavigateInternal: () => ({ model }),
+    CompletedReplaceUrl: () => ({ model }),
+    CompletedLoadUrl: () => ({ model }),
+    CompletedReloadPage: () => ({ model }),
+    CompletedFocusFragment: () => ({ model }),
+    GotSetupMessage: ({ message }) => foldSetup(model, message),
+    GotLoginMessage: ({ message }) => foldLogin(model, message),
+    GotConsentMessage: ({ message }) => foldConsent(model, message),
+    GotDashboardMessage: ({ message }) => foldDashboard(model, message),
+    GotTipsMessage: ({ message }) => foldTips(model, message),
   });
-  onClick("[data-delete]", (button) => {
-    const client_id = button.dataset.delete!;
 
-    const prompt =
-      button.dataset.managed === "true"
-        ? "Delete this Client and its authorization?"
-        : "Forget this Client and its authorization? It can register again; block it to keep it out.";
+// SUBSCRIPTION
 
-    confirmed(prompt, async () => {
-      await request(api.deleteClient({ client_id }));
-      pendingCredentials.delete(client_id);
-      renderCredentials();
-      await refreshDashboard();
-    });
-  });
-  onClick("[data-resource-delete]", (button) => {
-    const identifier = button.dataset.resourceDelete!;
-    confirmed(
-      `Delete Resource ${identifier}? Every Client\u2019s authorization for it is revoked; API-key grants are kept.`,
-      async () => {
-        await request(api.deleteResource({ identifier }));
-        await refreshDashboard();
-      },
-    );
-  });
-}
-
-try {
-  const state = await request(api.setupStatus());
-
-  if (state.required) {
-    if (location.pathname !== "/setup") location.replace("/setup");
-    else setup();
-  } else if (location.pathname === "/setup") {
-    const session = await auth.getSession();
-    location.replace(session.data ? "/" : "/login");
-  } else if (location.pathname === "/consent") await consent();
-  else {
-    const session = await auth.getSession();
-
-    if (!session.data || location.pathname === "/login") login();
-    else await dashboard();
-  }
-} catch (error) {
-  main.innerHTML = `<section class="card"><h1>Unable to continue</h1><p>${escape(error instanceof Error ? error.message : "Please try again")}</p><a href="/login">Return to sign in</a></section>`;
-}
+export const subscriptions = Subscription.lift(Tips.subscriptions("tip"))<Model, Message>({
+  read: (model) => Option.some(model.tips),
+  toParentMessage: (message) => Message.GotTipsMessage({ message }),
+});

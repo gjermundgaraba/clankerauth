@@ -45,9 +45,9 @@ const cacheablePaths = new Set([
   "/.well-known/oauth-authorization-server/api/auth",
 ]);
 
-const spaRoutes = new Set(["/", "/login", "/consent", "/setup"]);
+const spaRoutes = new Set(["/", "/resources", "/keys", "/login", "/consent", "/setup"]);
 
-const assetPath = /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css)$/;
+const assetPath = /^\/assets\/[a-zA-Z0-9_.-]+\.(js|css|woff2)$/;
 
 const json = (body: typeof Schema.Json.Type, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status });
@@ -144,7 +144,9 @@ export const application = (
                     ? "text/javascript"
                     : file.endsWith(".css")
                       ? "text/css"
-                      : "text/html; charset=utf-8",
+                      : file.endsWith(".woff2")
+                        ? "font/woff2"
+                        : "text/html; charset=utf-8",
                 })
                 .pipe(Effect.catch(() => Effect.succeed(notFound)));
             }),
@@ -246,7 +248,7 @@ export const application = (
                   "x-content-type-options": "nosniff",
                   "x-frame-options": "DENY",
                   "content-security-policy":
-                    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+                    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
                 }),
               );
 

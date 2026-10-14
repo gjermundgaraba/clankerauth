@@ -8,7 +8,7 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey } from "@better-auth/api-key";
 import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
-import { Conflict } from "@clankerauth/admin-api";
+import { Conflict, MAXIMUM_PASSWORD_LENGTH, MINIMUM_PASSWORD_LENGTH } from "@clankerauth/admin-api";
 import { signer } from "./signing.ts";
 import { fetchClientMetadataResource } from "./cimd-transport.ts";
 import { clientStore } from "./clients.ts";
@@ -153,7 +153,11 @@ const openAuth = Effect.fn("Auth.open")(function* (settings: Settings, integrati
     trustedOrigins: [settings.baseURL],
     logger: { disabled: true },
     disabledPaths: ["/token"],
-    emailAndPassword: { enabled: true, minPasswordLength: 8, maxPasswordLength: 128 },
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: MINIMUM_PASSWORD_LENGTH,
+      maxPasswordLength: MAXIMUM_PASSWORD_LENGTH,
+    },
     databaseHooks: {
       user: {
         create: {
