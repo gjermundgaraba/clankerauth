@@ -1,237 +1,294 @@
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { expect, vi } from "vite-plus/test";
 import { once } from "node:events";
-import type { Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { Effect, Exit, Schema, Scope } from "effect";
+import { Context, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { webMcpRequest } from "./mcp.ts";
 import { nodeHandler } from "../src/http/application.ts";
-import { openIssuer, type OpenedIssuer } from "./open-issuer.ts";
+import { startGeneration, testSettings } from "./test-issuer.ts";
 import { createNodeServer } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { Issuer } from "../src/issuer/issuer.ts";
+import { Settings } from "../src/issuer/settings.ts";
 
-let issuer: OpenedIssuer;
+const settings = testSettings({ baseURL: "https://issuer.example" });
 
-let scope: Scope.Closeable;
+const listen = Effect.gen(function* () {
+  const { context: services, scope: generation } = yield* startGeneration();
+  yield* Effect.addFinalizer(() => Effect.sync(() => vi.restoreAllMocks()));
+  const handlerScope = yield* Scope.fork(yield* Effect.scope, "sequential");
 
-let server: Server;
+  const listener = yield* nodeHandler().pipe(
+    Effect.provideContext(services),
+    Scope.provide(handlerScope),
+  );
 
-let url: string;
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(async () => {
+      const server = createNodeServer(listener);
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
 
-let closing: Promise<void> | undefined;
+      return server;
+    }),
+    (server) =>
+      Effect.promise(() => {
+        server.closeAllConnections();
 
-beforeEach(async () => {
-  issuer = await openIssuer({ baseURL: "https://issuer.example" });
-  scope = Scope.makeUnsafe();
-
-  const listener = await issuer.run(nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)));
-
-  server = createNodeServer(listener);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+        return new Promise<void>((resolve) => server.close(() => resolve()));
+      }),
+  );
 
   const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
     server.address(),
   );
 
-  url = `http://127.0.0.1:${port}`;
-  closing = undefined;
+  const shutdown = Scope.close(handlerScope, Exit.void).pipe(
+    Effect.andThen(Scope.close(generation, Exit.void)),
+  );
+
+  return { services, shutdown, url: `http://127.0.0.1:${port}` };
 });
 
-afterEach(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  await Effect.runPromise(Scope.close(scope, Exit.void));
-  await closing;
-  vi.restoreAllMocks();
-  await issuer.close();
-});
+const served = <A, E>(test: Effect.Effect<A, E, Scope.Scope | Settings>) =>
+  test.pipe(Effect.scoped, Effect.provide(settings));
 
-test("shutdown waits for a provider request to settle after its client disconnects", async () => {
-  const entered = Promise.withResolvers<Request>();
-  const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
-  vi.spyOn(issuer.get(Issuer).auth, "handler").mockImplementation(async (request) => {
-    entered.resolve(request);
-    await release.promise;
-    // Work still owned by the provider must not encounter a closed database.
-    await Effect.runPromise(issuer.get(Database).sql`SELECT 1`);
+it.live("shutdown waits for a provider request to settle after its client disconnects", () =>
+  served(
+    Effect.gen(function* () {
+      const { services, shutdown, url } = yield* listen;
+      const entered = Promise.withResolvers<Request>();
+      const release = Promise.withResolvers<void>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+      const destroy = vi.spyOn(Context.get(services, Database).kysely, "destroy");
+      vi.spyOn(Context.get(services, Issuer).auth, "handler").mockImplementation(
+        async (request) => {
+          entered.resolve(request);
+          await release.promise;
+          // Work still owned by the provider must not encounter a closed database.
+          await Effect.runPromiseWith(services)(Database.use(({ sql }) => sql`SELECT 1`));
 
-    return Response.json({ keys: [] });
-  });
-  const controller = new AbortController();
-  const response = fetch(`${url}/api/auth/jwks`, { signal: controller.signal });
-  const rejected = expect(response).rejects.toThrow();
+          return Response.json({ keys: [] });
+        },
+      );
+      const controller = new AbortController();
 
-  try {
-    const request = await entered.promise;
-    expect(request.url).toBe("https://issuer.example/api/auth/jwks");
-    controller.abort();
-    await rejected;
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
-    expect(destroy).not.toHaveBeenCalled();
-    release.resolve();
-    await closing;
-    expect(destroy).toHaveBeenCalledTimes(1);
-  } finally {
-    release.resolve();
-  }
-});
+      const response = yield* Effect.forkChild(
+        Effect.flip(
+          Effect.tryPromise(() => fetch(`${url}/api/auth/jwks`, { signal: controller.signal })),
+        ),
+      );
 
-test("disconnect does not abandon an uncancellable SDK call in an action route", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
-  const { context } = issuer.get(Issuer);
-  const hash = context.password.hash;
-  // Sign-up hashes inside the provider's transaction, which holds the connection.
-  vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
-    entered.resolve();
-    await release.promise;
-
-    return hash(password);
-  });
-  const controller = new AbortController();
-
-  const response = fetch(`${url}/api/setupOwner`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: "https://issuer.example" },
-    body: JSON.stringify({ email: "owner@example.com", password: "test-password-long-enough" }),
-    signal: controller.signal,
-  });
-
-  const rejected = expect(response).rejects.toThrow();
-
-  try {
-    await entered.promise;
-    controller.abort();
-    await rejected;
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
-    expect(destroy).not.toHaveBeenCalled();
-    release.resolve();
-    await closing;
-    expect(destroy).toHaveBeenCalledTimes(1);
-    // The disconnected request still committed the account before the database closed.
-    const stored = new DatabaseSync(issuer.settings.database);
-    expect(stored.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 1 });
-    stored.close();
-  } finally {
-    release.resolve();
-  }
-});
-
-test("an in-process JWKS read is awaited by its request, so shutdown waits for it", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const destroy = vi.spyOn(issuer.get(Database).kysely, "destroy");
-  const handler = issuer.get(Issuer).auth.handler;
-  let stalledCallFailed: unknown;
-
-  vi.spyOn(issuer.get(Issuer).auth, "handler").mockImplementation(async (request) => {
-    if (new URL(request.url).pathname.endsWith("/jwks")) {
-      entered.resolve();
-      await release.promise;
-      // Work still owned by the provider must not encounter a closed database.
-      await Effect.runPromise(issuer.get(Database).sql`SELECT 1`).catch((cause: unknown) => {
-        stalledCallFailed = cause;
-      });
-    }
-
-    return handler(request);
-  });
-
-  const { privateKey } = await generateKeyPair("EdDSA");
-
-  const token = await new SignJWT({
-    scope: "clankerauth:read clankerauth:write",
-    client_id: "stalled",
-    azp: "stalled",
-  })
-    .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "unknown" })
-    .setIssuer("https://issuer.example/api/auth")
-    .setAudience("https://issuer.example/")
-    .setSubject("owner")
-    .setIssuedAt()
-    .setExpirationTime("5m")
-    .setJti("stalled")
-    .sign(privateKey);
-
-  let answered = false;
-
-  const response = fetch(
-    webMcpRequest({
-      method: "tools/list",
-      url: `${url}/mcp`,
-      headers: { authorization: `Bearer ${token}` },
+      const request = yield* Effect.promise(() => entered.promise);
+      expect(request.url).toBe("https://issuer.example/api/auth/jwks");
+      controller.abort();
+      yield* Fiber.join(response);
+      const closing = yield* Effect.forkChild(shutdown, { startImmediately: true });
+      expect(destroy).not.toHaveBeenCalled();
+      release.resolve();
+      yield* Fiber.join(closing);
+      expect(destroy).toHaveBeenCalledTimes(1);
     }),
-  ).then((answer) => {
-    answered = true;
+  ),
+);
 
-    return answer;
-  });
+it.live("disconnect does not abandon an uncancellable SDK call in an action route", () =>
+  served(
+    Effect.gen(function* () {
+      const { services, shutdown, url } = yield* listen;
+      const { database } = yield* Settings;
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+      const destroy = vi.spyOn(Context.get(services, Database).kysely, "destroy");
+      const { context } = Context.get(services, Issuer);
+      const hash = context.password.hash;
+      // Sign-up hashes inside the provider's transaction, which holds the connection.
+      vi.spyOn(context.password, "hash").mockImplementation(async (password) => {
+        entered.resolve();
+        await release.promise;
 
-  try {
-    await entered.promise;
-    closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => issuer.stop());
-    // Past the deadline a Resource would apply: the raw verifier has none, so the request
-    // fiber is still waiting on the provider, and shutdown is still waiting on the fiber.
-    await new Promise((resolve) => setTimeout(resolve, 5500));
-    expect(answered).toBe(false);
-    expect(destroy).not.toHaveBeenCalled();
-    release.resolve();
-    // Shutdown interrupts the request once its provider work is done, so the client
-    // sees the interruption, not a verdict; the provider's query still reached SQLite.
-    await response;
-    await closing;
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(stalledCallFailed).toBeUndefined();
-  } finally {
-    release.resolve();
-  }
-}, 15000);
+        return hash(password);
+      });
+      const controller = new AbortController();
 
-test.each(["GET", "HEAD"])("%s reaches the provider without a body", async (method) => {
-  const handler = vi
-    .spyOn(issuer.get(Issuer).auth, "handler")
-    .mockImplementation(async (request) => {
-      expect(request.method).toBe(method);
-      expect(request.body).toBeNull();
+      const response = yield* Effect.forkChild(
+        Effect.flip(
+          Effect.tryPromise(() =>
+            fetch(`${url}/api/setupOwner`, {
+              method: "POST",
+              headers: { "content-type": "application/json", origin: "https://issuer.example" },
+              body: JSON.stringify({
+                email: "owner@example.com",
+                password: "test-password-long-enough",
+              }),
+              signal: controller.signal,
+            }),
+          ),
+        ),
+      );
 
-      return new Response("provider response");
-    });
+      yield* Effect.promise(() => entered.promise);
+      controller.abort();
+      yield* Fiber.join(response);
+      const closing = yield* Effect.forkChild(shutdown, { startImmediately: true });
+      expect(destroy).not.toHaveBeenCalled();
+      release.resolve();
+      yield* Fiber.join(closing);
+      expect(destroy).toHaveBeenCalledTimes(1);
+      // The disconnected request still committed the account before the database closed.
+      const stored = new DatabaseSync(database);
+      expect(stored.prepare("SELECT count(*) AS n FROM user").get()).toEqual({ n: 1 });
+      stored.close();
+    }),
+  ),
+);
 
-  const response = await fetch(`${url}/api/auth/jwks`, { method });
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe(method === "HEAD" ? "" : "provider response");
-  expect(handler).toHaveBeenCalledTimes(1);
-});
+it.live(
+  "an in-process JWKS read is awaited by its request, so shutdown waits for it",
+  () =>
+    served(
+      Effect.gen(function* () {
+        const { services, shutdown, url } = yield* listen;
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
+        const destroy = vi.spyOn(Context.get(services, Database).kysely, "destroy");
+        const { auth } = Context.get(services, Issuer);
+        const handler = auth.handler;
+        let stalledCallFailed: unknown;
 
-test("POST preserves provider body bytes and content type", async () => {
-  const body = ' { "email": "owner@example.internal" }\n';
+        vi.spyOn(auth, "handler").mockImplementation(async (request) => {
+          if (new URL(request.url).pathname.endsWith("/jwks")) {
+            entered.resolve();
+            await release.promise;
+            // Work still owned by the provider must not encounter a closed database.
+            await Effect.runPromiseWith(services)(Database.use(({ sql }) => sql`SELECT 1`)).catch(
+              (cause: unknown) => {
+                stalledCallFailed = cause;
+              },
+            );
+          }
 
-  const handler = vi
-    .spyOn(issuer.get(Issuer).auth, "handler")
-    .mockImplementation(async (request) => {
-      expect(request.method).toBe("POST");
-      expect(request.headers.get("content-type")).toBe("application/json; charset=utf-8");
-      expect(new Uint8Array(await request.arrayBuffer())).toEqual(new TextEncoder().encode(body));
+          return handler(request);
+        });
 
-      return new Response("ok");
-    });
+        const { privateKey } = yield* Effect.promise(() => generateKeyPair("EdDSA"));
 
-  const response = await fetch(`${url}/api/auth/sign-in/email`, {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body,
-  });
+        const token = yield* Effect.promise(() =>
+          new SignJWT({
+            scope: "clankerauth:read clankerauth:write",
+            client_id: "stalled",
+            azp: "stalled",
+          })
+            .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "unknown" })
+            .setIssuer("https://issuer.example/api/auth")
+            .setAudience("https://issuer.example/")
+            .setSubject("owner")
+            .setIssuedAt()
+            .setExpirationTime("5m")
+            .setJti("stalled")
+            .sign(privateKey),
+        );
 
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe("ok");
-  expect(handler).toHaveBeenCalledTimes(1);
-});
+        let answered = false;
 
-test.each([
+        const response = yield* Effect.forkChild(
+          Effect.promise(() =>
+            fetch(
+              webMcpRequest({
+                method: "tools/list",
+                url: `${url}/mcp`,
+                headers: { authorization: `Bearer ${token}` },
+              }),
+            ),
+          ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                answered = true;
+              }),
+            ),
+          ),
+        );
+
+        yield* Effect.promise(() => entered.promise);
+        const closing = yield* Effect.forkChild(shutdown, { startImmediately: true });
+        // Past the deadline a Resource would apply: the raw verifier has none, so the request
+        // fiber is still waiting on the provider, and shutdown is still waiting on the fiber.
+        yield* Effect.sleep("5500 millis");
+        expect(answered).toBe(false);
+        expect(destroy).not.toHaveBeenCalled();
+        release.resolve();
+        // Shutdown interrupts the request once its provider work is done, so the client
+        // sees the interruption, not a verdict; the provider's query still reached SQLite.
+        yield* Fiber.join(response);
+        yield* Fiber.join(closing);
+        expect(destroy).toHaveBeenCalledTimes(1);
+        expect(stalledCallFailed).toBeUndefined();
+      }),
+    ),
+  15000,
+);
+
+it.live.each(["GET", "HEAD"])("%s reaches the provider without a body", (method) =>
+  served(
+    Effect.gen(function* () {
+      const { services, url } = yield* listen;
+
+      const handler = vi
+        .spyOn(Context.get(services, Issuer).auth, "handler")
+        .mockImplementation(async (request) => {
+          expect(request.method).toBe(method);
+          expect(request.body).toBeNull();
+
+          return new Response("provider response");
+        });
+
+      const response = yield* Effect.promise(() => fetch(`${url}/api/auth/jwks`, { method }));
+      expect(response.status).toBe(200);
+      expect(yield* Effect.promise(() => response.text())).toBe(
+        method === "HEAD" ? "" : "provider response",
+      );
+      expect(handler).toHaveBeenCalledTimes(1);
+    }),
+  ),
+);
+
+it.live("POST preserves provider body bytes and content type", () =>
+  served(
+    Effect.gen(function* () {
+      const { services, url } = yield* listen;
+      const body = ' { "email": "owner@example.internal" }\n';
+
+      const handler = vi
+        .spyOn(Context.get(services, Issuer).auth, "handler")
+        .mockImplementation(async (request) => {
+          expect(request.method).toBe("POST");
+          expect(request.headers.get("content-type")).toBe("application/json; charset=utf-8");
+          expect(new Uint8Array(await request.arrayBuffer())).toEqual(
+            new TextEncoder().encode(body),
+          );
+
+          return new Response("ok");
+        });
+
+      const response = yield* Effect.promise(() =>
+        fetch(`${url}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body,
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(yield* Effect.promise(() => response.text())).toBe("ok");
+      expect(handler).toHaveBeenCalledTimes(1);
+    }),
+  ),
+);
+
+it.live.each([
   ["missing resource", "", 400, false],
   ["unknown resource", "?resource=https://unknown.example", 400, false],
   [
@@ -241,44 +298,69 @@ test.each([
     false,
   ],
   ["known resource", "?resource=https://issuer.example/", 200, true],
-])("authorization resource admission: %s", async (_name, query, status, admitted) => {
-  const handler = vi
-    .spyOn(issuer.get(Issuer).auth, "handler")
-    .mockResolvedValue(new Response("provider"));
+] as const)("authorization resource admission: %s", ([_name, query, status, admitted]) =>
+  served(
+    Effect.gen(function* () {
+      const { services, url } = yield* listen;
 
-  const response = await fetch(`${url}/api/auth/oauth2/authorize${query}`);
-  expect(response.status).toBe(status);
-  await response.text();
-  expect(handler).toHaveBeenCalledTimes(admitted ? 1 : 0);
-});
+      const handler = vi
+        .spyOn(Context.get(services, Issuer).auth, "handler")
+        .mockResolvedValue(new Response("provider"));
 
-test("bodies above 64 KiB are disconnected before reaching the provider", async () => {
-  const handler = vi
-    .spyOn(issuer.get(Issuer).auth, "handler")
-    .mockResolvedValue(new Response("provider"));
+      const response = yield* Effect.promise(() =>
+        fetch(`${url}/api/auth/oauth2/authorize${query}`),
+      );
 
-  await expect(
-    fetch(`${url}/api/auth/oauth2/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `grant_type=${"x".repeat(65536)}`,
+      expect(response.status).toBe(status);
+      yield* Effect.promise(() => response.text());
+      expect(handler).toHaveBeenCalledTimes(admitted ? 1 : 0);
     }),
-  ).rejects.toThrow();
-  expect(handler).not.toHaveBeenCalled();
-});
+  ),
+);
 
-test("token requests reach the provider without resource pre-checks", async () => {
-  const handler = vi
-    .spyOn(issuer.get(Issuer).auth, "handler")
-    .mockResolvedValue(new Response("provider"));
+it.live("bodies above 64 KiB are disconnected before reaching the provider", () =>
+  served(
+    Effect.gen(function* () {
+      const { services, url } = yield* listen;
 
-  const response = await fetch(`${url}/api/auth/oauth2/token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: "grant_type=refresh_token",
-  });
+      const handler = vi
+        .spyOn(Context.get(services, Issuer).auth, "handler")
+        .mockResolvedValue(new Response("provider"));
 
-  expect(response.status).toBe(200);
-  await response.text();
-  expect(handler).toHaveBeenCalledTimes(1);
-});
+      yield* Effect.flip(
+        Effect.tryPromise(() =>
+          fetch(`${url}/api/auth/oauth2/token`, {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: `grant_type=${"x".repeat(65536)}`,
+          }),
+        ),
+      );
+      expect(handler).not.toHaveBeenCalled();
+    }),
+  ),
+);
+
+it.live("token requests reach the provider without resource pre-checks", () =>
+  served(
+    Effect.gen(function* () {
+      const { services, url } = yield* listen;
+
+      const handler = vi
+        .spyOn(Context.get(services, Issuer).auth, "handler")
+        .mockResolvedValue(new Response("provider"));
+
+      const response = yield* Effect.promise(() =>
+        fetch(`${url}/api/auth/oauth2/token`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: "grant_type=refresh_token",
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      yield* Effect.promise(() => response.text());
+      expect(handler).toHaveBeenCalledTimes(1);
+    }),
+  ),
+);

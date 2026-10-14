@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { JWTPayload } from "jose";
-import { test } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { Verifier } from "../src/index.ts";
 import {
@@ -13,59 +13,51 @@ import { publicUrl, startIssuer, withHttp } from "./support.ts";
 
 const resource = `${publicUrl}/api`;
 
-type Issuer = Awaited<ReturnType<typeof startIssuer>>;
+type Issuer = Effect.Success<ReturnType<typeof startIssuer>>;
 
 const verifierFor = (issuer: Issuer, target = resource) =>
-  Effect.runPromise(
-    withHttp(
-      Verifier.make({ issuer: issuer.issuer, resource: target, requiredScopes: ["notes:read"] }),
-    ),
+  withHttp(
+    Verifier.make({ issuer: issuer.issuer, resource: target, requiredScopes: ["notes:read"] }),
   );
 
-const withIssuer = async (body: (verifier: Verifier.Verifier, issuer: Issuer) => Promise<void>) => {
-  const issuer = await startIssuer(resource);
+const withIssuer = Effect.gen(function* () {
+  const issuer = yield* startIssuer(resource);
 
-  try {
-    await body(await verifierFor(issuer), issuer);
-  } finally {
-    await issuer.close();
-  }
-};
+  return { verifier: yield* verifierFor(issuer), issuer };
+});
 
-const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(effect));
+const sign = (issuer: Issuer, ...args: Parameters<Issuer["sign"]>) =>
+  Effect.promise(() => issuer.sign(...args));
 
-test("API keys verify offline against one key list, with their actor, scopes and expiry", () =>
-  withIssuer(async (verifier, issuer) => {
-    const principal = await Effect.runPromise(verifier.verifyToken(issuer.key));
+it.live("API keys verify offline against one key list, with their actor, scopes and expiry", () =>
+  Effect.gen(function* () {
+    const { verifier, issuer } = yield* withIssuer;
+    const principal = yield* verifier.verifyToken(issuer.key);
     assert.equal(principal.subject, "owner");
     assert.deepEqual(principal.actor, { kind: "key", keyId: "key-1" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(principal.expiresAt, undefined);
-    assert.deepEqual((await Effect.runPromise(verifier.verifyToken(issuer.readOnlyKey))).scopes, [
-      "notes:read",
-    ]);
+    assert.deepEqual((yield* verifier.verifyToken(issuer.readOnlyKey)).scopes, ["notes:read"]);
     assert.equal(issuer.keyLists(), 1);
 
     // An unknown key has no entry to find.
     assert(
-      (await failure(verifier.verifyToken(`clankerauth_${"x".repeat(43)}`))) instanceof
+      (yield* Effect.flip(verifier.verifyToken(`clankerauth_${"x".repeat(43)}`))) instanceof
         Unauthorized,
     );
 
     // Revocation reaches a verifier with its next list; a new one reads it now.
     issuer.revoke(issuer.key);
-    await Effect.runPromise(verifier.verifyToken(issuer.key));
+    yield* verifier.verifyToken(issuer.key);
     assert(
-      (await failure((await verifierFor(issuer)).verifyToken(issuer.key))) instanceof Unauthorized,
+      (yield* Effect.flip((yield* verifierFor(issuer)).verifyToken(issuer.key))) instanceof
+        Unauthorized,
     );
 
     const expiresAt = new Date(Date.now() + 60_000);
     const expiring = issuer.apiKey(undefined, expiresAt);
-    const listed = await verifierFor(issuer);
-    assert.equal(
-      (await Effect.runPromise(listed.verifyToken(expiring))).expiresAt,
-      expiresAt.getTime(),
-    );
+    const listed = yield* verifierFor(issuer);
+    assert.equal((yield* listed.verifyToken(expiring)).expiresAt, expiresAt.getTime());
 
     // One key reaches several resources, with each resource's own scopes.
     const reports = "https://reports.internal/api";
@@ -75,26 +67,28 @@ test("API keys verify offline against one key list, with their actor, scopes and
       [reports]: ["notes:read"],
     });
 
-    const elsewhere = await verifierFor(issuer, reports);
-    assert.deepEqual((await Effect.runPromise(elsewhere.verifyToken(both))).scopes, ["notes:read"]);
+    const elsewhere = yield* verifierFor(issuer, reports);
+    assert.deepEqual((yield* elsewhere.verifyToken(both)).scopes, ["notes:read"]);
 
     // A key with no grant on a resource is not that resource's credential at all.
-    assert((await failure(elsewhere.verifyToken(issuer.readOnlyKey))) instanceof Unauthorized);
-  }));
+    assert((yield* Effect.flip(elsewhere.verifyToken(issuer.readOnlyKey))) instanceof Unauthorized);
+  }),
+);
 
-test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", () =>
-  withIssuer(async (verifier, issuer) => {
-    const token = await issuer.sign();
-    const principal = await Effect.runPromise(verifier.verifyToken(token));
+it.live("JWTs bind exact issuer, audience, claims, lifetime and required scopes", () =>
+  Effect.gen(function* () {
+    const { verifier, issuer } = yield* withIssuer;
+    const token = yield* sign(issuer);
+    const principal = yield* verifier.verifyToken(token);
     assert.deepEqual(principal.actor, { kind: "client", clientId: "fixture" });
     assert.deepEqual(principal.scopes, ["notes:read", "notes:write"]);
     assert.equal(issuer.keyLists(), 0);
 
-    const other = await Effect.runPromise(
-      withHttp(Verifier.make({ issuer: issuer.issuer, resource: `${publicUrl}/mcp` })),
+    const other = yield* withHttp(
+      Verifier.make({ issuer: issuer.issuer, resource: `${publicUrl}/mcp` }),
     );
 
-    assert((await failure(other.verifyToken(token))) instanceof Unauthorized);
+    assert((yield* Effect.flip(other.verifyToken(token))) instanceof Unauthorized);
 
     const claims: JWTPayload[] = [
       { iss: "https://evil.example/api/auth" },
@@ -109,27 +103,32 @@ test("JWTs bind exact issuer, audience, claims, lifetime and required scopes", (
 
     for (const claim of claims)
       assert(
-        (await failure(verifier.verifyToken(await issuer.sign(claim)))) instanceof Unauthorized,
+        (yield* Effect.flip(verifier.verifyToken(yield* sign(issuer, claim)))) instanceof
+          Unauthorized,
       );
     assert(
-      (await failure(verifier.verifyToken(await issuer.sign({}, "JWT")))) instanceof Unauthorized,
+      (yield* Effect.flip(verifier.verifyToken(yield* sign(issuer, {}, "JWT")))) instanceof
+        Unauthorized,
     );
-    await Effect.runPromise(
-      verifier.verifyToken(await issuer.sign({ aud: [resource, "https://reports.internal/api"] })),
+    yield* verifier.verifyToken(
+      yield* sign(issuer, { aud: [resource, "https://reports.internal/api"] }),
     );
     // A missing required scope is the one 403: it names only the scope that is missing, and
     // the credential's actor, which decides whether the caller can step up to it.
     assert.deepEqual(
-      await failure(verifier.verifyToken(await issuer.sign({ scope: "notes:write" }))),
+      yield* Effect.flip(verifier.verifyToken(yield* sign(issuer, { scope: "notes:write" }))),
       new InsufficientScope({
         scope: "notes:read",
         actor: { kind: "client", clientId: "fixture" },
       }),
     );
-  }));
+  }),
+);
 
-test("malformed credentials and outages remain distinct typed outcomes", () =>
-  withIssuer(async (verifier, issuer) => {
+it.live("malformed credentials and outages remain distinct typed outcomes", () =>
+  Effect.gen(function* () {
+    const { verifier, issuer } = yield* withIssuer;
+
     for (const token of [
       "",
       "invalid,",
@@ -138,39 +137,41 @@ test("malformed credentials and outages remain distinct typed outcomes", () =>
       // A token that does not name its key is refused before any key lookup.
       `${Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "at+jwt" })).toString("base64url")}.e30.AA`,
     ])
-      assert((await failure(verifier.verifyToken(token))) instanceof Unauthorized);
+      assert((yield* Effect.flip(verifier.verifyToken(token))) instanceof Unauthorized);
     assert.equal(issuer.keyLists(), 0);
     // Before any list is read, an unreachable issuer leaves a key undecided.
     issuer.fail(503);
-    assert((await failure(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
+    assert((yield* Effect.flip(verifier.verifyToken(issuer.key))) instanceof ProviderUnavailable);
     assert(
-      (await failure(verifier.verifyToken(await issuer.sign()))) instanceof ProviderUnavailable,
+      (yield* Effect.flip(verifier.verifyToken(yield* sign(issuer)))) instanceof
+        ProviderUnavailable,
     );
-  }));
+  }),
+);
 
-test("invalid standalone verifier configuration fails at construction", async () => {
-  const error = await Effect.runPromise(
-    Effect.flip(withHttp(Verifier.make({ issuer: "not a URL", resource }))),
-  );
+it.effect("invalid standalone verifier configuration fails at construction", () =>
+  Effect.gen(function* () {
+    const error = yield* Effect.flip(withHttp(Verifier.make({ issuer: "not a URL", resource })));
 
-  assert(error instanceof ConfigurationError);
-});
+    assert(error instanceof ConfigurationError);
+  }),
+);
 
-test("the fake issuer rejects malformed key list requests", async () => {
-  const issuer = await startIssuer(resource);
+it.live("the fake issuer rejects malformed key list requests", () =>
+  Effect.gen(function* () {
+    const issuer = yield* startIssuer(resource);
 
-  try {
     for (const body of ["invalid", "{}", "[]", "null", '{"resource":42}']) {
-      const response = await fetch(new URL("/api/keyList", issuer.issuer), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
+      const response = yield* Effect.promise(() =>
+        fetch(new URL("/api/keyList", issuer.issuer), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      );
 
       assert.equal(response.status, 400);
-      await response.body?.cancel();
+      yield* Effect.promise(async () => response.body?.cancel());
     }
-  } finally {
-    await issuer.close();
-  }
-});
+  }),
+);

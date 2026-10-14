@@ -7,7 +7,7 @@ import * as KeyList from "../src/key-list.ts";
 import { Resource } from "../src/effect-actions.ts";
 import { CurrentPrincipal } from "../src/session.ts";
 import { ProviderUnavailable } from "../src/errors.ts";
-import { startFakeIssuer } from "../src/testing.ts";
+import { startFakeIssuer, type FakeIssuerOptions } from "../src/testing.ts";
 
 export const publicUrl = "http://127.0.0.1:7337";
 
@@ -47,12 +47,28 @@ export const resourceOf = <const Scope extends string>({
   return Effect.provide(Effect.service(declared.service), declared.layer(options));
 };
 
-/** The published fake issuer, with a read-write key (`key-1`) and a read-only key (`key-2`). */
-export const startIssuer = async (resource: string) => {
-  const fake = await startFakeIssuer({ resource, scopes: ["notes:read", "notes:write"] });
+/** The published fake issuer, closed with the test's scope. */
+export const fakeIssuer = (options: FakeIssuerOptions) =>
+  Effect.acquireRelease(
+    Effect.promise(() => startFakeIssuer(options)),
+    (fake) => Effect.promise(() => fake.close()),
+  );
 
-  return { ...fake, key: fake.apiKey(), readOnlyKey: fake.apiKey({ [resource]: ["notes:read"] }) };
-};
+/** The published fake issuer, with a read-write key (`key-1`) and a read-only key (`key-2`). */
+export const startIssuer = (resource: string) =>
+  Effect.map(fakeIssuer({ resource, scopes: ["notes:read", "notes:write"] }), (fake) => ({
+    ...fake,
+    key: fake.apiKey(),
+    readOnlyKey: fake.apiKey({ [resource]: ["notes:read"] }),
+  }));
+
+/** A web handler built by `build`, disposed with the test's scope. */
+export const webHandler = <Web extends { readonly dispose: () => Promise<void> }>(
+  build: () => Web,
+) => Effect.acquireRelease(Effect.sync(build), (web) => Effect.promise(() => web.dispose()));
+
+/** A response's JSON body. */
+export const json = (response: Response) => Effect.promise(() => response.json());
 
 /** A key list as the issuer signs it: sealed entries, its `typ`, and the format's lifetime. */
 export const signList = async (
