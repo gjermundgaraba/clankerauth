@@ -15,6 +15,8 @@ export default defineConfig({
       ".roo/**",
       ".windsurf/**",
       "tools/oxlint/anti-slop/**",
+      // The vendored Foldkit reference is read, never checked here.
+      "repos/**",
     ],
   },
   lint: {
@@ -32,6 +34,7 @@ export default defineConfig({
       ".roo/**",
       ".windsurf/**",
       "tools/oxlint/anti-slop/**",
+      "repos/**",
     ],
     jsPlugins: [
       { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
