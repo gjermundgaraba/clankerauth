@@ -7,7 +7,7 @@ import { InternalServerError } from "@clankerauth/admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { nodeHandler } from "../src/http/application.ts";
-import { createNodeServer } from "../src/platform/node-http.ts";
+import { listen } from "../src/platform/node-http.ts";
 import {
   issuerGeneration,
   testSettings,
@@ -26,8 +26,6 @@ import { Issuer } from "../src/issuer/issuer.ts";
 import { Resources } from "../src/resources/resources.ts";
 
 const baseURL = "http://localhost:3000";
-
-const ListenAddress = Schema.Struct({ port: Schema.Number });
 
 type JsonPrimitive = string | number | boolean | null;
 
@@ -234,7 +232,7 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
 
       return createClient(context);
     });
-    vi.spyOn(yield* Resources, "setAccess").mockReturnValue(
+    vi.spyOn(yield* Resources, "link").mockReturnValue(
       Effect.fail(new InternalServerError({ message: "Request could not be completed" })),
     );
     vi.spyOn(api, "deleteOAuthClient").mockImplementation(async (context) => {
@@ -245,18 +243,11 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
     });
 
     // why: served as main.ts serves, so the server's scope owns its request fibers
-    const scope = yield* Scope.make();
-
-    const server = createNodeServer(
-      yield* nodeHandler().pipe(Effect.provideService(Scope.Scope, scope)),
-    );
+    const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
+    const { port, serve } = yield* listen(0, "127.0.0.1").pipe(Scope.provide(scope));
+    yield* serve(yield* nodeHandler().pipe(Scope.provide(scope))).pipe(Scope.provide(scope));
 
     yield* Effect.gen(function* () {
-      yield* Effect.promise(
-        () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
-      );
-      const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
-
       const request = webMcpRequest({
         method: "tools/call",
         url: `http://127.0.0.1:${port}/mcp`,
@@ -278,9 +269,6 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
       controller.abort();
       yield* Effect.promise(() => expect(call).rejects.toThrow());
 
-      server.close();
-      server.closeAllConnections();
-
       const stopping = yield* Effect.forkChild(
         Scope.close(scope, Exit.void).pipe(
           Effect.map(() => {
@@ -300,7 +288,6 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
       Effect.ensuring(
         Effect.suspend(() => {
           release.resolve();
-          server.close();
 
           return Scope.close(scope, Exit.void);
         }),

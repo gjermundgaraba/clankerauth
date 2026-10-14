@@ -10,9 +10,10 @@ and suites over the composed application sit at the root of `tests/`.
 
 - `owner/`: the sole account: setup, sessions, owner authentication for the dashboard, MCP and
   `/api/owner`, and the temporary provider sessions administration acts through.
-- `clients/`: OAuth clients: listing, registration, editing, blocking, revocation and connections.
-- `resources/`: the resource catalog (`catalog.ts`, reads) and its writes and client access
-  (`resources.ts`).
+- `clients/`: OAuth clients: listing, registration, editing, blocking, revocation and connections;
+  `managed.ts` tells a managed client from one that registered itself.
+- `resources/`: the resource catalog (`catalog.ts`: reads, and which resource is built in) and its
+  writes and client access (`resources.ts`).
 - `authorization/`: stored authorization (consents, codes and tokens), keyed by resource reference.
 - `api-keys/`: API keys and the signed key lists resource servers verify them against.
 - `forward-auth/`: the reverse-proxy forward-auth routes.
@@ -21,7 +22,7 @@ and suites over the composed application sit at the root of `tests/`.
 
 Better Auth is the framework the issuer is built on, as Foldkit is the web app's: domains call its
 API through the `Issuer` service. Other technology enters only through `platform/`: SQLite
-(`sqlite.ts`), Node's HTTP server and request policy (`node-http.ts`), and the CIMD transport
+(`sqlite.ts`), Node's HTTP listener and request policy (`node-http.ts`), and the CIMD transport
 (`cimd-transport.ts`).
 
 Every domain service is a `Context.Service` with a declared interface, built by a Layer beside it
@@ -62,8 +63,9 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
 - **Errors that carry context**: each contract error names its subject (`clientId`,
   `identifier`, `keyId`) and carries its sentence as a declared `message`, built once in the
   error's `of`; each action lists only the failures it can produce, which `Action.implement`
-  checks. A provider call fails with `ProviderFailure`, keeping the provider's status, and its
-  caller names what that status means (`refused`, `missing`, `internal` in `issuer/errors.ts`).
+  checks. A provider call names what each provider status means to it (`provider` in
+  `issuer/errors.ts`, such as `{ refused: refusal, missing: … }`); any other failure is
+  `InternalServerError`.
 - **Effect-aware tests**: the server's and the SDK's tests are `@effect/vitest` tests that return
   Effects. Server tests take the issuer from the Layers in `tests/test-issuer.ts`, built fresh for
   each test; a test that reads wall-clock time, directly or through a library, is `it.live`.

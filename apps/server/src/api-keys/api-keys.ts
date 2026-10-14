@@ -1,8 +1,7 @@
-import { Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Record, Schema, type Scope } from "effect";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
-  administrationIdentifier,
   CurrentOwner,
   KeyPermissions,
   type ApiKeyId,
@@ -15,16 +14,8 @@ import {
 } from "@clankerauth/admin-api";
 import { Database } from "../platform/sqlite.ts";
 import { Issuer } from "../issuer/issuer.ts";
-import { Settings } from "../issuer/settings.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
-import {
-  internal,
-  invalidInput,
-  missing,
-  provider,
-  refused,
-  refusedOrMissing,
-} from "../issuer/errors.ts";
+import { invalidInput, provider, refusal } from "../issuer/errors.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
 
@@ -106,7 +97,6 @@ export class ApiKeys extends Context.Service<
     ApiKeys,
     Effect.gen(function* () {
       const { auth } = yield* Issuer;
-      const { baseURL } = yield* Settings;
       const { sql } = yield* Database;
       const catalog = yield* ResourceCatalog;
 
@@ -116,12 +106,13 @@ export class ApiKeys extends Context.Service<
         if (grants === undefined) return;
 
         for (const [identifier, scopes] of Object.entries(grants)) {
-          if (identifier === administrationIdentifier(baseURL))
+          const resource = yield* catalog.get(identifier);
+
+          if (resource?.builtIn)
             return yield* invalidInput(
               ["permissions", identifier],
               "Administration requires OAuth access tokens, not API keys",
             );
-          const resource = yield* catalog.get(identifier);
 
           if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
             return yield* invalidInput(
@@ -136,13 +127,11 @@ export class ApiKeys extends Context.Service<
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          const result = yield* internal(
-            provider(() =>
-              auth.api.listApiKeys({
-                headers,
-                query: { sortBy: "createdAt", sortDirection: "asc" },
-              }),
-            ),
+          const result = yield* provider(() =>
+            auth.api.listApiKeys({
+              headers,
+              query: { sortBy: "createdAt", sortDirection: "asc" },
+            }),
           );
 
           return { keys: yield* Effect.forEach(result.apiKeys, summary) };
@@ -159,19 +148,17 @@ export class ApiKeys extends Context.Service<
           if (expiresIn !== null && expiresIn < 1)
             return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
 
-          const key = yield* refused(
-            provider(() =>
+          const key = yield* provider(
+            () =>
               auth.api.createApiKey({
                 body: {
                   userId: owner.userId,
                   name: input.name.trim(),
-                  permissions: Object.fromEntries(
-                    Object.entries(input.permissions).map(([id, scopes]) => [id, [...scopes]]),
-                  ),
+                  permissions: Record.map(input.permissions, (scopes) => [...scopes]),
                   expiresIn,
                 },
               }),
-            ),
+            { refused: refusal },
           );
 
           return { ...(yield* summary(key)), key: key.key };
@@ -181,45 +168,34 @@ export class ApiKeys extends Context.Service<
           yield* validate(input.permissions);
 
           return yield* summary(
-            yield* refusedOrMissing(() => ApiKeyNotFound.of(input.keyId))(
-              provider(() =>
+            yield* provider(
+              () =>
                 auth.api.updateApiKey({
                   body: {
                     userId: owner.userId,
                     keyId: input.keyId,
                     name: input.name?.trim(),
                     enabled: input.enabled,
-                    permissions: input.permissions
-                      ? Object.fromEntries(
-                          Object.entries(input.permissions).map(([id, scopes]) => [
-                            id,
-                            [...scopes],
-                          ]),
-                        )
-                      : undefined,
+                    permissions:
+                      input.permissions && Record.map(input.permissions, (scopes) => [...scopes]),
                   },
                 }),
-              ),
+              { refused: refusal, missing: () => ApiKeyNotFound.of(input.keyId) },
             ),
           );
         }),
         delete: Effect.fn("ApiKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
-          yield* missing(() => ApiKeyNotFound.of(keyId))(
-            provider(() => auth.api.deleteApiKey({ headers, body: { keyId } })),
-          );
+          yield* provider(() => auth.api.deleteApiKey({ headers, body: { keyId } }), {
+            missing: () => ApiKeyNotFound.of(keyId),
+          });
 
           return { deleted: true };
         }),
         keyList: Effect.fn("ApiKeys.keyList")(function* (identifier: string) {
           const now = yield* Clock.currentTimeMillis;
-          const resource = yield* catalog.get(identifier);
-
-          const available =
-            resource === undefined || identifier === administrationIdentifier(baseURL)
-              ? []
-              : resource.scopes;
+          const available = (yield* catalog.application(identifier))?.scopes ?? [];
 
           const rows = available.length
             ? yield* sql`
@@ -266,20 +242,18 @@ export class ApiKeys extends Context.Service<
 
           const iat = Math.floor(now / 1000);
 
-          const { token } = yield* internal(
-            provider(() =>
-              auth.api.signDocument({
-                body: {
-                  typ: KeyList.type,
-                  payload: {
-                    aud: identifier,
-                    iat,
-                    exp: iat + KeyList.lifetime,
-                    keys: entries.flat(),
-                  },
+          const { token } = yield* provider(() =>
+            auth.api.signDocument({
+              body: {
+                typ: KeyList.type,
+                payload: {
+                  aud: identifier,
+                  iat,
+                  exp: iat + KeyList.lifetime,
+                  keys: entries.flat(),
                 },
-              }),
-            ),
+              },
+            }),
           );
 
           return { list: token };

@@ -63,4 +63,7 @@ export class CimdTransport extends Context.Service<
   static readonly layer = Layer.succeed(CimdTransport, {
     fetch: createAbortAwareTransport(secureFetch),
   });
+
+  static readonly layerWith = (fetch: ClientMetadataResourceFetch | undefined) =>
+    fetch === undefined ? CimdTransport.layer : Layer.succeed(CimdTransport, { fetch });
 }

@@ -12,7 +12,7 @@ import {
 } from "@clankerauth/admin-api";
 import type { OwnerSession } from "@clankerauth/admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
-import { provider, undecided } from "../issuer/errors.ts";
+import { provider, unavailability } from "../issuer/errors.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
 import { OwnerAccount } from "./owner.ts";
 import { Issuer } from "../issuer/issuer.ts";
@@ -27,7 +27,9 @@ export const sessionOwner = (authentication: typeof OwnerSession) =>
           const request = yield* HttpServerRequest.HttpServerRequest;
           const headers = new Headers(request.headers);
 
-          const session = yield* undecided(provider(() => issuer.auth.api.getSession({ headers })));
+          const session = yield* provider(() => issuer.auth.api.getSession({ headers }), {
+            unavailable: unavailability,
+          });
 
           if (!session)
             return yield* new Action.Unauthenticated({ message: "Owner session required" });

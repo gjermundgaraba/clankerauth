@@ -1,54 +1,33 @@
 import { it } from "@effect/vitest";
 import { expect, vi } from "vite-plus/test";
-import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { Context, Effect, Exit, Fiber, Schema, Scope } from "effect";
+import { Context, Effect, Exit, Fiber, Scope } from "effect";
 import { generateKeyPair, SignJWT } from "jose";
 import { webMcpRequest } from "./mcp.ts";
 import { nodeHandler } from "../src/http/application.ts";
 import { startGeneration, testSettings } from "./test-issuer.ts";
-import { createNodeServer } from "../src/platform/node-http.ts";
+import { listen } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { Issuer } from "../src/issuer/issuer.ts";
 import { Settings } from "../src/issuer/settings.ts";
 
 const settings = testSettings({ baseURL: "https://issuer.example" });
 
-const listen = Effect.gen(function* () {
+const start = Effect.gen(function* () {
   const { context: services, scope: generation } = yield* startGeneration();
   yield* Effect.addFinalizer(() => Effect.sync(() => vi.restoreAllMocks()));
   const handlerScope = yield* Scope.fork(yield* Effect.scope, "sequential");
+  const listener = yield* listen(0, "127.0.0.1");
 
-  const listener = yield* nodeHandler().pipe(
-    Effect.provideContext(services),
-    Scope.provide(handlerScope),
-  );
-
-  const server = yield* Effect.acquireRelease(
-    Effect.promise(async () => {
-      const server = createNodeServer(listener);
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-
-      return server;
-    }),
-    (server) =>
-      Effect.promise(() => {
-        server.closeAllConnections();
-
-        return new Promise<void>((resolve) => server.close(() => resolve()));
-      }),
-  );
-
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
+  yield* listener.serve(
+    yield* nodeHandler().pipe(Effect.provideContext(services), Scope.provide(handlerScope)),
   );
 
   const shutdown = Scope.close(handlerScope, Exit.void).pipe(
     Effect.andThen(Scope.close(generation, Exit.void)),
   );
 
-  return { services, shutdown, url: `http://127.0.0.1:${port}` };
+  return { services, shutdown, url: `http://127.0.0.1:${listener.port}` };
 });
 
 const served = <A, E>(test: Effect.Effect<A, E, Scope.Scope | Settings>) =>
@@ -57,7 +36,7 @@ const served = <A, E>(test: Effect.Effect<A, E, Scope.Scope | Settings>) =>
 it.live("shutdown waits for a provider request to settle after its client disconnects", () =>
   served(
     Effect.gen(function* () {
-      const { services, shutdown, url } = yield* listen;
+      const { services, shutdown, url } = yield* start;
       const entered = Promise.withResolvers<Request>();
       const release = Promise.withResolvers<void>();
       yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
@@ -96,7 +75,7 @@ it.live("shutdown waits for a provider request to settle after its client discon
 it.live("disconnect does not abandon an uncancellable SDK call in an action route", () =>
   served(
     Effect.gen(function* () {
-      const { services, shutdown, url } = yield* listen;
+      const { services, shutdown, url } = yield* start;
       const { database } = yield* Settings;
       const entered = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
@@ -149,7 +128,7 @@ it.live(
   () =>
     served(
       Effect.gen(function* () {
-        const { services, shutdown, url } = yield* listen;
+        const { services, shutdown, url } = yield* start;
         const entered = Promise.withResolvers<void>();
         const release = Promise.withResolvers<void>();
         yield* Effect.addFinalizer(() => Effect.sync(() => release.resolve()));
@@ -229,7 +208,7 @@ it.live(
 it.live.each(["GET", "HEAD"])("%s reaches the provider without a body", (method) =>
   served(
     Effect.gen(function* () {
-      const { services, url } = yield* listen;
+      const { services, url } = yield* start;
 
       const handler = vi
         .spyOn(Context.get(services, Issuer).auth, "handler")
@@ -253,7 +232,7 @@ it.live.each(["GET", "HEAD"])("%s reaches the provider without a body", (method)
 it.live("POST preserves provider body bytes and content type", () =>
   served(
     Effect.gen(function* () {
-      const { services, url } = yield* listen;
+      const { services, url } = yield* start;
       const body = ' { "email": "owner@example.internal" }\n';
 
       const handler = vi
@@ -296,7 +275,7 @@ it.live.each([
 ] as const)("authorization resource admission: %s", ([_name, query, status, admitted]) =>
   served(
     Effect.gen(function* () {
-      const { services, url } = yield* listen;
+      const { services, url } = yield* start;
 
       const handler = vi
         .spyOn(Context.get(services, Issuer).auth, "handler")
@@ -316,7 +295,7 @@ it.live.each([
 it.live("bodies above 64 KiB are disconnected before reaching the provider", () =>
   served(
     Effect.gen(function* () {
-      const { services, url } = yield* listen;
+      const { services, url } = yield* start;
 
       const handler = vi
         .spyOn(Context.get(services, Issuer).auth, "handler")
@@ -339,7 +318,7 @@ it.live("bodies above 64 KiB are disconnected before reaching the provider", () 
 it.live("token requests reach the provider without resource pre-checks", () =>
   served(
     Effect.gen(function* () {
-      const { services, url } = yield* listen;
+      const { services, url } = yield* start;
 
       const handler = vi
         .spyOn(Context.get(services, Issuer).auth, "handler")

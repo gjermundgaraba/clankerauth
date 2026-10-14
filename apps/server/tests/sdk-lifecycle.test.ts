@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { type IncomingMessage, type ServerResponse } from "node:http";
 import { it } from "@effect/vitest";
 import { nodeHandler } from "../src/http/application.ts";
 import { forwardClientId } from "../src/forward-auth/forward-auth.ts";
 import { testIssuer } from "./test-issuer.ts";
-import { createNodeServer } from "../src/platform/node-http.ts";
+import { listen } from "../src/platform/node-http.ts";
 import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
@@ -17,42 +16,20 @@ const owner = { email: "owner@example.internal", password: randomBytes(24).toStr
 const ApiKeyCreated = Schema.Struct({ key: Schema.String, keyId: Schema.String });
 
 const startServer = Effect.gen(function* () {
-  let serve = (_incoming: IncomingMessage, outgoing: ServerResponse) => {
-    outgoing.writeHead(503).end();
-  };
-
-  const server = createNodeServer((incoming, outgoing) => {
-    serve(incoming, outgoing);
-  });
-
   // why: no host, so `*.localhost` names reach it over either loopback family
-  yield* Effect.acquireRelease(
-    Effect.callback<void>((resume) => {
-      server.listen(0, () => resume(Effect.void));
-    }),
-    () =>
-      Effect.callback<void>((resume) => {
-        server.closeAllConnections();
-        server.close(() => resume(Effect.void));
-      }),
-  );
-  const address = server.address();
-
-  if (address === null || !(address instanceof Object) || !("port" in address))
-    return yield* Effect.die(new Error("Expected TCP listener"));
-  const { port } = address;
-  const url = `http://clankerauth.home.localhost:${port}`;
+  const listener = yield* listen(0);
+  const url = `http://clankerauth.home.localhost:${listener.port}`;
 
   const services = yield* Layer.build(
     testIssuer({
       baseURL: url,
-      port,
+      port: listener.port,
       allowInsecureHttp: true,
       cookieDomain: "home.localhost",
     }),
   );
 
-  serve = yield* nodeHandler().pipe(Effect.provideContext(services));
+  yield* listener.serve(yield* nodeHandler().pipe(Effect.provideContext(services)));
   const cookies = new Map<string, string>();
   const cookieHeader = () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 

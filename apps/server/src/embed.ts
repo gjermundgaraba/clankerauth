@@ -10,7 +10,7 @@ export { OwnerAccount } from "./owner/owner.ts";
 
 export { CimdTransport } from "./platform/cimd-transport.ts";
 
-export { createNodeServer } from "./platform/node-http.ts";
+export { listen } from "./platform/node-http.ts";
 
 export { ResourceCatalog } from "./resources/catalog.ts";
 

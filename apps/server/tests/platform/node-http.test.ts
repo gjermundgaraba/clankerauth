@@ -1,16 +1,14 @@
 import { it } from "@effect/vitest";
 import { expect, vi } from "vite-plus/test";
 import { request } from "node:http";
-import { Deferred, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
-import { createNodeServer, requestPolicy } from "../../src/platform/node-http.ts";
-
-const ListenAddress = Schema.Struct({ port: Schema.Number });
+import { createNodeServer, listen, requestPolicy } from "../../src/platform/node-http.ts";
 
 const baseURL = "https://issuer.example";
 
-const listen = Effect.fnUntraced(function* <E>(
+const serve = Effect.fnUntraced(function* <E>(
   handler: Effect.Effect<
     HttpServerResponse.HttpServerResponse,
     E,
@@ -19,25 +17,16 @@ const listen = Effect.fnUntraced(function* <E>(
   trustProxy = false,
 ) {
   const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
-  const server = createNodeServer();
-  yield* Effect.gen(function* () {
-    const http = yield* NodeHttpServer.make(() => server, {
-      port: 0,
-      host: "127.0.0.1",
-      disablePreemptiveShutdown: true,
-    });
+  const listener = yield* listen(0, "127.0.0.1").pipe(Scope.provide(scope));
 
-    yield* http.serve(requestPolicy({ baseURL, trustProxy })(handler));
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        server.close();
-        server.closeAllConnections();
-      }),
-    );
-  }).pipe(Scope.provide(scope));
-  const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
+  const nodeHandler = yield* NodeHttpServer.makeHandler(
+    requestPolicy({ baseURL, trustProxy })(handler),
+    { scope },
+  );
 
-  return { scope, server, url: `http://127.0.0.1:${port}` };
+  yield* listener.serve(nodeHandler).pipe(Scope.provide(scope));
+
+  return { scope, url: `http://127.0.0.1:${listener.port}` };
 });
 
 const rawRequest = (url: string, path: string) =>
@@ -56,7 +45,7 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
   Effect.gen(function* () {
     const called = vi.fn();
 
-    const { server, url } = yield* listen(
+    const { url } = yield* serve(
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
         expect(req.url).toBe("/path?query=value");
@@ -82,8 +71,8 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
       }),
     );
 
-    expect(server.requestTimeout).toBe(15000);
-    expect(server.headersTimeout).toBe(10000);
+    expect(createNodeServer().requestTimeout).toBe(15000);
+    expect(createNodeServer().headersTimeout).toBe(10000);
 
     const response = yield* Effect.promise(() =>
       fetch(`${url}/path?query=value`, {
@@ -109,7 +98,7 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
 
 it.live("the forward-auth check alone keeps the proxy's forwarded host and scheme", () =>
   Effect.gen(function* () {
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
         expect(req.headers.host).toBe("issuer.example");
@@ -141,7 +130,7 @@ it.live("a trusted proxy's last X-Forwarded-For hop becomes the peer address", (
   Effect.gen(function* () {
     const peers: string[] = [];
 
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
         peers.push(req.headers["x-clankerauth-peer"] ?? "");
@@ -163,7 +152,7 @@ it.live("a trusted proxy's last X-Forwarded-For hop becomes the peer address", (
 it.live("rejects non-origin request targets before calling the handler", () =>
   Effect.gen(function* () {
     const called = vi.fn(() => HttpServerResponse.text("unexpected"));
-    const { url } = yield* listen(Effect.sync(called));
+    const { url } = yield* serve(Effect.sync(called));
 
     for (const path of ["//evil.example/path", "http://evil.example/path", "*"])
       expect(yield* Effect.promise(() => rawRequest(url, path))).toBe(400);
@@ -173,7 +162,7 @@ it.live("rejects non-origin request targets before calling the handler", () =>
 
 it.live("handler failure produces a generic 500 without leaking details", () =>
   Effect.gen(function* () {
-    const { url } = yield* listen(Effect.fail(new Error("private failure details")));
+    const { url } = yield* serve(Effect.fail(new Error("private failure details")));
     const response = yield* Effect.promise(() => fetch(url));
     expect(response.status).toBe(500);
     expect(yield* Effect.promise(() => response.text())).not.toContain("private failure details");
@@ -192,7 +181,7 @@ it.live.each([false, true])("responses stream before completion; late failure=%s
       ),
     );
 
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.succeed(
         HttpServerResponse.stream(
           Stream.concat(Stream.succeed(Buffer.from("first")), Stream.fromEffect(next)),
@@ -228,7 +217,7 @@ it.live("disconnect interrupts native work and runs request finalizers", () =>
     const entered = Promise.withResolvers<void>();
     const finalized = Promise.withResolvers<void>();
 
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() => Effect.sync(() => finalized.resolve()));
         entered.resolve();
@@ -252,7 +241,7 @@ it.live("disconnect interrupts native work and runs request finalizers", () =>
 
 it.live("an immediately failing response stream cannot appear successful", () =>
   Effect.gen(function* () {
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.succeed(
         HttpServerResponse.stream(Stream.fail(new Error("private failure details")), {
           status: 201,
@@ -269,7 +258,7 @@ it.live("streaming retains the request scope until the client disconnects", () =
     const finalized = Promise.withResolvers<void>();
     const release = vi.fn(() => finalized.resolve());
 
-    const { url } = yield* listen(
+    const { url } = yield* serve(
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() => Effect.sync(release));
 
@@ -300,7 +289,7 @@ it.live("shutdown interrupts an open response stream before closing request scop
   Effect.gen(function* () {
     const finalized = vi.fn();
 
-    const { scope, url } = yield* listen(
+    const { scope, url } = yield* serve(
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() => Effect.sync(finalized));
 

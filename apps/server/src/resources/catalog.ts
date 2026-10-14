@@ -1,20 +1,22 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { ClientAccess, type InternalServerError, type Resource } from "@clankerauth/admin-api";
-import { Database, persisted, sqlFragment, type Sql, type SqliteRow } from "../platform/sqlite.ts";
+import {
+  administrationIdentifier,
+  ClientAccess,
+  type InternalServerError,
+  type Resource,
+  type ResourceSummary,
+} from "@clankerauth/admin-api";
+import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
+import { Settings } from "../issuer/settings.ts";
 
 export const exactlyOneResource = "Exactly one configured resource is required";
-
-// why: a client that registered itself, through DCR or CIMD, has no owning user
-export const isAutomatic = (client: { readonly userId: string | null }) => client.userId === null;
-
-export const automatic = (table = "oauthClient") => sqlFragment(`${table}.userId IS NULL`);
-
-export const managed = (table = "oauthClient") => sqlFragment(`${table}.userId IS NOT NULL`);
 
 export const protocolScopes = ["offline_access"];
 
 export type ResourceValue = typeof Resource.Type;
+
+type CatalogResource = typeof ResourceSummary.Type;
 
 const decodeScopes = persisted(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -37,7 +39,7 @@ export const scopesOf = (catalog: readonly ResourceValue[], identifiers: readonl
   ]),
 ];
 
-export const validateSelection = Effect.fn("Resources.validateSelection")(function* (
+export const validateSelection = Effect.fn("ResourceCatalog.validateSelection")(function* (
   catalog: readonly ResourceValue[],
   identifiers: readonly string[],
 ) {
@@ -48,7 +50,7 @@ export const validateSelection = Effect.fn("Resources.validateSelection")(functi
   if (unknown !== -1) return yield* invalidInput(["resources", unknown], "Unknown Resource");
 });
 
-export const accessForClient = Effect.fn("Resources.accessForClient")(function* (
+export const accessForClient = Effect.fn("ResourceCatalog.accessForClient")(function* (
   clientId: string,
   query: Sql,
 ) {
@@ -60,10 +62,15 @@ export const accessForClient = Effect.fn("Resources.accessForClient")(function* 
 export class ResourceCatalog extends Context.Service<
   ResourceCatalog,
   {
-    readonly list: () => Effect.Effect<ResourceValue[], InternalServerError>;
+    /** Every resource, administration's built in among them. */
+    readonly list: () => Effect.Effect<CatalogResource[], InternalServerError>;
     readonly get: (
       identifier: string,
-    ) => Effect.Effect<ResourceValue | undefined, InternalServerError>;
+    ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
+    /** A resource an application serves: any but administration's. */
+    readonly application: (
+      identifier: string,
+    ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
     /** Every managed client's resource links; automatic clients have none. */
     readonly access: () => Effect.Effect<
       ReadonlyArray<typeof ClientAccess.Type>,
@@ -84,8 +91,9 @@ export class ResourceCatalog extends Context.Service<
     ResourceCatalog,
     Effect.gen(function* () {
       const { sql } = yield* Database;
+      const builtIn = administrationIdentifier((yield* Settings).baseURL);
 
-      const decodeResource = Effect.fn("Resources.decode")(function* (value: SqliteRow) {
+      const decodeResource = Effect.fn("ResourceCatalog.decode")(function* (value: SqliteRow) {
         const row = yield* decodeResourceRow(value);
         const scopes = yield* decodeScopes(row.allowedScopes);
 
@@ -93,40 +101,47 @@ export class ResourceCatalog extends Context.Service<
           identifier: row.identifier,
           name: row.name,
           scopes: scopes.filter((scope) => !protocolScopes.includes(scope)),
+          builtIn: row.identifier === builtIn,
         };
       });
 
-      const list = Effect.fn("Resources.list")(function* () {
+      const list = Effect.fn("ResourceCatalog.list")(function* () {
         const rows =
           yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource ORDER BY createdAt, identifier`;
 
         return yield* Effect.forEach(rows, decodeResource);
       });
 
+      const get = Effect.fn("ResourceCatalog.get")(function* (identifier: string) {
+        const rows =
+          yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource WHERE identifier = ${identifier}`;
+
+        return rows[0] ? yield* decodeResource(rows[0]) : undefined;
+      });
+
       return {
         list,
-        get: Effect.fn("Resources.get")(function* (identifier: string) {
-          const rows =
-            yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource WHERE identifier = ${identifier}`;
-
-          return rows[0] ? yield* decodeResource(rows[0]) : undefined;
-        }),
-        access: Effect.fn("Resources.access")(function* () {
+        get,
+        application: (identifier) =>
+          Effect.map(get(identifier), (resource) => (resource?.builtIn ? undefined : resource)),
+        access: Effect.fn("ResourceCatalog.access")(function* () {
           return yield* accessRows(
             yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId`,
           );
         }),
-        hasAccess: Effect.fn("Resources.hasAccess")(function* (
+        hasAccess: Effect.fn("ResourceCatalog.hasAccess")(function* (
           clientId: string,
           identifier: string,
         ) {
           const rows =
-            yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (${automatic("c")}
+            yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (c.userId IS NULL
             OR EXISTS (SELECT 1 FROM oauthClientResource l WHERE l.clientId = c.clientId AND l.resourceId = ${identifier}))`;
 
           return rows.length > 0;
         }),
-        scopesFor: Effect.fn("Resources.scopesFor")(function* (identifiers: readonly string[]) {
+        scopesFor: Effect.fn("ResourceCatalog.scopesFor")(function* (
+          identifiers: readonly string[],
+        ) {
           const catalog = yield* list();
           yield* validateSelection(catalog, identifiers);
 

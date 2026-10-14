@@ -1,11 +1,15 @@
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { Effect, Schema } from "effect";
-import { InternalServerError, ProviderRefused, UnreadableRequest } from "@clankerauth/admin-api";
+import {
+  InternalServerError,
+  ProviderRefused,
+  UnreadableRequest,
+  type IssuerError,
+} from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { HttpServerResponse } from "effect/http";
-import { provider, respond } from "../src/issuer/errors.ts";
+import { provider, refusal, respond } from "../src/issuer/errors.ts";
 import { testWebApplication, WebApplication } from "./test-issuer.ts";
 
 it("an internal failure keeps its cause for diagnostics and never puts it on the wire", () => {
@@ -57,36 +61,37 @@ it.live("the provider bridge answers an unreadable body as a 400", () =>
   }).pipe(Effect.provide(testWebApplication({ baseURL }))),
 );
 
-it.effect(
-  "a route's own failures keep their bodies, and a provider refusal is the built-in 403",
-  () =>
-    Effect.gen(function* () {
-      const answered = (cause: unknown) =>
-        Effect.gen(function* () {
-          const failure = yield* Effect.flip(provider(() => Promise.reject(cause)));
-          const response = HttpServerResponse.toWeb(yield* respond(failure));
+it.effect("a provider status means only what its caller names; any other is internal", () =>
+  Effect.gen(function* () {
+    const refusedBy = (cause: unknown) =>
+      Effect.flip(provider(() => Promise.reject(cause), { refused: refusal }));
 
-          return { status: response.status, body: yield* Effect.promise(() => response.json()) };
-        });
+    const answered = (failure: IssuerError) =>
+      Effect.gen(function* () {
+        const response = HttpServerResponse.toWeb(yield* respond(failure));
 
-      expect(yield* answered(new Error("SQLITE_BUSY"))).toEqual({
-        status: 500,
-        body: Schema.encodeSync(InternalServerError)(
-          new InternalServerError({ message: "Request could not be completed" }),
-        ),
-      });
-      expect(yield* answered(new APIError("BAD_REQUEST", { message: "Bad target" }))).toEqual({
-        status: 400,
-        body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
+        return { status: response.status, body: yield* Effect.promise(() => response.json()) };
       });
 
-      for (const status of ["UNAUTHORIZED", "FORBIDDEN"] as const) {
-        expect(yield* answered(new APIError(status, { message: "Not the owner" }))).toEqual({
-          status: 403,
-          body: Schema.encodeSync(Action.Forbidden)(
-            new Action.Forbidden({ message: "Not the owner" }),
-          ),
-        });
-      }
-    }),
+    const internal = {
+      status: 500,
+      body: Schema.encodeSync(InternalServerError)(
+        new InternalServerError({ message: "Request could not be completed" }),
+      ),
+    };
+
+    expect(yield* answered(yield* refusedBy(new Error("SQLITE_BUSY")))).toEqual(internal);
+    expect(
+      yield* answered(yield* refusedBy(new APIError("BAD_REQUEST", { message: "Bad target" }))),
+    ).toEqual({
+      status: 400,
+      body: Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Bad target" })),
+    });
+
+    for (const status of ["NOT_FOUND", "UNAUTHORIZED", "SERVICE_UNAVAILABLE"] as const) {
+      expect(
+        yield* answered(yield* refusedBy(new APIError(status, { message: "Not this caller's" }))),
+      ).toEqual(internal);
+    }
+  }),
 );

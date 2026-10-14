@@ -11,7 +11,7 @@ import { decodeJwt, decodeProtectedHeader } from "jose";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import { Administration, InternalServerError } from "@clankerauth/admin-api";
-import { createNodeServer } from "../../src/platform/node-http.ts";
+import { listen } from "../../src/platform/node-http.ts";
 import { testWebApplication, WebApplication } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
@@ -19,8 +19,6 @@ import { OwnerAccount } from "../../src/owner/owner.ts";
 const origin = "http://localhost:3000";
 
 const resource = "https://example.internal/api";
-
-const ListenAddress = Schema.Struct({ port: Schema.Number });
 
 const CreatedApiKey = Schema.Struct({ key: Schema.String, keyId: Schema.String });
 
@@ -602,23 +600,8 @@ it.live(
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const listener = yield* nodeHandler();
-
-          const server = createNodeServer(listener);
-          yield* Effect.acquireRelease(
-            Effect.promise(
-              () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
-            ),
-            () =>
-              Effect.promise(
-                () =>
-                  new Promise<void>((resolve, reject) =>
-                    server.close((error) => (error ? reject(error) : resolve())),
-                  ),
-              ),
-          );
-
-          const { port } = Schema.decodeUnknownSync(ListenAddress)(server.address());
+          const { port, serve } = yield* listen(0, "127.0.0.1");
+          yield* serve(yield* nodeHandler());
           yield* Effect.promise(() =>
             withMcpClient(
               {
