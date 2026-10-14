@@ -1,18 +1,28 @@
 import { AsyncData } from "foldkit";
 import { Command, given, message, model, story } from "foldkit/story";
 import { modifyFields } from "foldkit/struct";
-import { Array, Option, Result } from "effect";
+import { Array, Option } from "effect";
 import { Dialog as UiDialog } from "@foldkit/ui";
 import { ConfirmDialog, CopyButton, Dialog, Focus } from "@gjermundgaraba-designs/pixel-paper";
 import { describe, expect, test } from "vite-plus/test";
 
 import { Change, Credential } from "./change.ts";
-import { Announce, FetchListing, SaveChange, SignOut } from "./command.ts";
+import { Announce, SaveChange, SignOut } from "./command.ts";
 import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
+import {
+  SECOND_READ,
+  THIRD_READ,
+  failedReadOf,
+  listed,
+  listing,
+  readOf,
+  rereading,
+  staleListed,
+} from "./dashboard.fixture.ts";
+import { listingQuery } from "./listing.ts";
 import { Message } from "./message.ts";
-import { listed, listing, reread } from "./dashboard.fixture.ts";
-import { Activity, ListingData, type Model, isHeld, refusalAt } from "./model.ts";
+import { Activity, type Model, isHeld, listingOf, refusalAt } from "./model.ts";
 import { update } from "./update.ts";
 
 const apiKey = Credential.ApiKey({ keyId: "fixture-key", name: "Automation", key: "once-only" });
@@ -71,10 +81,13 @@ describe("dashboard update", () => {
       ),
       model((next) => {
         expect(next.activity).toEqual(Activity.Idle());
-        expect(AsyncData.isRefreshing(next.listing)).toBe(true);
+        expect(AsyncData.isRefreshing(listingOf(next))).toBe(true);
         expect(isHeld(next)).toBe(true);
       }),
-      Command.resolveAll([FetchListing, reread], [Announce, Message.CompletedAnnounce()]),
+      Command.resolveAll(
+        [listingQuery.Fetch, readOf(SECOND_READ, listing)],
+        [Announce, Message.CompletedAnnounce()],
+      ),
       model((next) => {
         expect(isHeld(next)).toBe(false);
       }),
@@ -118,7 +131,7 @@ describe("dashboard update", () => {
       ),
       Command.resolveAll(
         [UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog()],
-        [FetchListing, reread],
+        [listingQuery.Fetch, readOf(SECOND_READ, listing)],
         [Announce, Message.CompletedAnnounce()],
       ),
       model((next) => {
@@ -184,7 +197,7 @@ describe("dashboard update", () => {
       ),
       Command.resolveAll(
         [UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog()],
-        [FetchListing, reread],
+        [listingQuery.Fetch, readOf(SECOND_READ, listing)],
         [Announce, Message.CompletedAnnounce()],
       ),
       model((next) => {
@@ -267,15 +280,10 @@ describe("dashboard update", () => {
   test("credentials outlive a reread that fails", () => {
     story(
       update,
-      given(
-        showing(
-          modifyFields(listed, { listing: () => ListingData.Refreshing({ data: listing }) }),
-          apiKey,
-        ),
-      ),
-      message(Message.SettledFetchListing({ result: Result.fail("Fixture request failed") })),
+      given(showing(rereading(listed), apiKey)),
+      message(Message.GotListingMessage({ message: failedReadOf(SECOND_READ) })),
       model((next) => {
-        expect(AsyncData.isStale(next.listing)).toBe(true);
+        expect(AsyncData.isStale(listingOf(next))).toBe(true);
         expect(Array.map(next.credentials, ({ credential }) => credential)).toEqual([apiKey]);
         expect(isHeld(next)).toBe(true);
       }),
@@ -292,14 +300,11 @@ describe("dashboard update", () => {
         expect(next.credentials).toEqual([]);
       }),
       Command.resolveAll(
-        [
-          FetchListing,
-          Message.SettledFetchListing({ result: Result.fail("Fixture request failed") }),
-        ],
+        [listingQuery.Fetch, failedReadOf(SECOND_READ)],
         [Announce({ text: "Key deleted." }), Message.CompletedAnnounce()],
       ),
       model((next) => {
-        expect(AsyncData.isStale(next.listing)).toBe(true);
+        expect(AsyncData.isStale(listingOf(next))).toBe(true);
         expect(next.credentials).toEqual([]);
       }),
       Command.resolve(Announce({ text: NOT_REFRESHED }), Message.CompletedAnnounce()),
@@ -307,21 +312,17 @@ describe("dashboard update", () => {
   });
 
   test("a stale listing is read again on request, and only then", () => {
-    const stale = modifyFields(listed, {
-      listing: () => ListingData.Stale({ data: listing, error: "Fixture request failed" }),
-    });
-
     story(
       update,
-      given(stale),
+      given(staleListed),
       message(Message.ClickedRetryListing()),
-      Command.expectExact(FetchListing()),
+      Command.expectExact(listingQuery.Fetch({ generation: THIRD_READ })),
       model((next) => {
-        expect(AsyncData.isRefreshing(next.listing)).toBe(true);
+        expect(AsyncData.isRefreshing(listingOf(next))).toBe(true);
       }),
-      Command.resolve(FetchListing, reread),
+      Command.resolve(listingQuery.Fetch, readOf(THIRD_READ, listing)),
       model((next) => {
-        expect(AsyncData.isSuccess(next.listing)).toBe(true);
+        expect(AsyncData.isSuccess(listingOf(next))).toBe(true);
         expect(isHeld(next)).toBe(false);
       }),
     );
@@ -330,7 +331,7 @@ describe("dashboard update", () => {
   test("a form is not opened while the dashboard is held", () => {
     story(
       update,
-      given(modifyFields(listed, { listing: () => ListingData.Refreshing({ data: listing }) })),
+      given(rereading(listed)),
       message(Message.ClickedOpenForm({ form: Form.addResource() })),
       Command.expectNone(),
       model((next) => {

@@ -25,6 +25,12 @@ const foldkitOverrides = [
     excludeFiles: within(override.excludeFiles),
     rules: levels(override.rules),
   })),
+  // The dashboard's fixtures read its listing as the tests do, answering the Query's fetches
+  // with the Query's own Messages.
+  {
+    files: [`${foldkitSource}/dashboard/dashboard.fixture.ts`],
+    rules: levels({ "foldkit/no-child-message-construction-in-root": "off" }),
+  },
 ];
 
 export default defineConfig({

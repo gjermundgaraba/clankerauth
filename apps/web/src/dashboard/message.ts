@@ -4,10 +4,10 @@ import { ConfirmDialog, CopyButton, Dialog, TopBar } from "@gjermundgaraba-desig
 
 import { Change, Credential } from "./change.ts";
 import * as Form from "./form.ts";
-import { Listing } from "./model.ts";
+import { listingQuery } from "./listing.ts";
 
 export const Message = defineMessageUnion({
-  SettledFetchListing: { result: Schema.Result(Listing, Schema.String) },
+  GotListingMessage: { message: listingQuery.Message },
   ClickedRetryListing: {},
   ClickedOpenForm: { form: Form.Model },
   GotFormMessage: { message: Form.Message },

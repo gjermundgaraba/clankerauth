@@ -38,14 +38,15 @@ import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
 import * as FormView from "./formView.ts";
 import { grantableResources, keysHeadView, keysPanels } from "./keys.ts";
+import type { Listing } from "./listing.ts";
 import { Message } from "./message.ts";
 import {
   Activity,
-  type Listing,
   type Model,
   type PendingCredential,
   isHeld,
   isSaving,
+  listingOf,
   pendingConfirmation,
   refusalAt,
 } from "./model.ts";
@@ -148,7 +149,7 @@ const topBarView = (
   );
 
 const noticesView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
-  ...(AsyncData.isStale(model.listing)
+  ...(AsyncData.isStale(listingOf(model))
     ? [
         Notice.view(
           {
@@ -465,7 +466,7 @@ const consoleView = (
 };
 
 export const view = defineView<Model, Message, ViewInputs>((model, { section }, h): Html =>
-  AsyncData.match(model.listing, {
+  AsyncData.match(listingOf(model), {
     onIdle: () => waitingView(h),
     onLoading: () => waitingView(h),
     onFailure: (reason) => unavailableView(reason, h),

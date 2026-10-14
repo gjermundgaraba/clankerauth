@@ -1,11 +1,11 @@
-import { Option, Result } from "effect";
+import { Option } from "effect";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
 import type { Url } from "foldkit/url";
 import { describe, expect, test } from "vite-plus/test";
 
-import { FetchListing } from "./dashboard/command.ts";
-import * as Dashboard from "./dashboard/index.ts";
+import { FIRST_READ, failedReadOf } from "./dashboard/dashboard.fixture.ts";
+import { listingQuery } from "./dashboard/listing.ts";
 import { urlAt } from "./fixture.ts";
 import {
   CheckAccess,
@@ -24,9 +24,7 @@ import * as Setup from "./page/setup.ts";
 
 const startedAt = (url: Url) => given(init(url).model);
 
-const listingFailed = Dashboard.Message.SettledFetchListing({
-  result: Result.fail("Fixture request failed"),
-});
+const listingFailed = failedReadOf(FIRST_READ);
 
 const loginContinuationOf = (page: Page) =>
   Page.matchOrElse(page, { Login: ({ login }) => Option.some(login.continuation) }, () =>
@@ -115,7 +113,7 @@ describe("application update", () => {
       model((next) => {
         expect(Page.guards.Dashboard(next.page)).toBe(true);
       }),
-      Command.resolve(FetchListing(), listingFailed),
+      Command.resolve(listingQuery.Fetch({ generation: FIRST_READ }), listingFailed),
     );
   });
 
@@ -157,7 +155,7 @@ describe("application update", () => {
       update,
       startedAt(urlAt("/")),
       message(Message.SucceededCheckAccess({ access: Access.SignedIn() })),
-      Command.resolve(FetchListing, listingFailed),
+      Command.resolve(listingQuery.Fetch, listingFailed),
       message(Message.ChangedUrl({ url: urlAt("/consent", "sig=fixture") })),
       Command.resolve(ReloadPage(), Message.CompletedReloadPage()),
       model((next) => {
@@ -171,7 +169,7 @@ describe("application update", () => {
       update,
       startedAt(urlAt("/")),
       message(Message.SucceededCheckAccess({ access: Access.SignedIn() })),
-      Command.resolve(FetchListing(), listingFailed),
+      Command.resolve(listingQuery.Fetch({ generation: FIRST_READ }), listingFailed),
       message(Message.ClickedLink({ request: UrlRequest.Internal({ url: urlAt("/keys") }) })),
       Command.resolve(
         NavigateInternal({ url: "https://issuer.fixture.invalid/keys" }),
@@ -242,9 +240,9 @@ describe("application update", () => {
       model((next) => {
         expect(Page.guards.Dashboard(next.page)).toBe(true);
       }),
-      Command.expectExact(FetchListing(), ReplaceUrl({ url: "/" })),
+      Command.expectExact(listingQuery.Fetch({ generation: FIRST_READ }), ReplaceUrl({ url: "/" })),
       Command.resolveAll(
-        [FetchListing, listingFailed],
+        [listingQuery.Fetch, listingFailed],
         [ReplaceUrl, Message.CompletedReplaceUrl()],
       ),
     );

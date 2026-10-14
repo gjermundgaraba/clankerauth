@@ -89,21 +89,6 @@ const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, st
 
 // COMMAND
 
-export const FetchListing = Command.define("FetchListing", {
-  messages: [Message.SettledFetchListing],
-  execute: Effect.all(
-    {
-      overview: issuer.listClients(),
-      keys: Effect.map(issuer.listApiKeys(), ({ keys }) => keys),
-    },
-    { concurrency: "unbounded" },
-  ).pipe(
-    toOwnerSentence,
-    Effect.result,
-    Effect.map((result) => Message.SettledFetchListing({ result })),
-  ),
-});
-
 export const SaveChange = Command.define("SaveChange", {
   args: { change: Change },
   messages: [Message.SucceededSaveChange, Message.FailedSaveChange],
