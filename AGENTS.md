@@ -16,8 +16,8 @@ and suites over the composed application sit at the root of `tests/`.
 - `authorization/`: stored authorization (consents, codes and tokens), keyed by resource reference.
 - `api-keys/`: API keys and the signed key lists resource servers verify them against.
 - `forward-auth/`: the reverse-proxy forward-auth routes.
-- `issuer/`: settings, and the Better Auth instance the issuer is built on, with its plugins and
-  the translation of its errors into the contract's.
+- `issuer/`: settings, and the Better Auth instance the issuer is built on, with its plugins,
+  the translation of its errors into the contract's, and its cookie signing and sealing.
 
 Better Auth is the framework the issuer is built on, as Foldkit is the web app's: domains call its
 API through the `Issuer` service. Other technology enters only through `platform/`: SQLite
@@ -78,3 +78,16 @@ issuer serves the document at are `src/document-paths.ts`, exported to the serve
   headers in `apps/web/src`; and one-line `// why:` comments for a reason no type or test can
   carry, such as a provider workaround or a shutdown order. `clankerauth/no-prose-comments`
   (`tools/oxlint/clankerauth`) enforces it.
+- **A lint fence**: `tools/oxlint/clankerauth` holds the repository's own rules, configured in the
+  root `vite.config.ts` and proved by `tools/oxlint/clankerauth/tests/policy.test.mjs`.
+  `import-fence` is an allow-list per folder: a server domain folder imports only `effect`,
+  effect-actions, the SDK, `@clankerauth/admin-api` and the other folders of `src` except
+  `http/`; `http/` adds the Node platform, the web app's document paths, `node:path`,
+  `node:url` and the server's `package.json`; `platform/`, `issuer/` and the root files are
+  unfenced. Outside `apps/server`, server source is reachable only as
+  `@clankerauth/server/embed`. `no-manual-effect-run` refuses `Effect.run*`, `runMain` and
+  `ManagedRuntime` except in the entries (`apps/server/src/main.ts`, `apps/cli/src/main.ts`,
+  `packages/dev/src/index.ts`, scripts), and allows only `Effect.runPromiseWith` in the
+  provider bridge (`issuer/issuer.ts`) and the server's and the SDK's tests. The rules read
+  syntax: they do not prove that a test's `runPromiseWith` sits inside a callback, and an
+  import through a re-export is judged by the file that writes it.

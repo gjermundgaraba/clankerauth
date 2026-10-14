@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Clock, Context, Effect, Layer, Schema, Scope, Semaphore } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
@@ -242,7 +241,7 @@ export class Resources extends Context.Service<
 
               for (const identifier of identifiers)
                 yield* query`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt)
-                  VALUES (${randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
+                  VALUES (${crypto.randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
               yield* syncClient(query, resources, clientId);
             }),
           );
