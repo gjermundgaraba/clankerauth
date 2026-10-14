@@ -5,7 +5,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, ServiceUnavailable } from "@clankerauth/admin-api";
 import { APIError } from "better-auth/api";
 import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type Issuer } from "./issuer.ts";
+import { openIssuer, type Issuer } from "./open-issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 

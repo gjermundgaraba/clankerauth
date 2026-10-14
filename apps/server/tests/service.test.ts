@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { createHash, randomBytes } from "node:crypto";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { webApplication as application } from "./web-application.ts";
-import { openIssuer, type Issuer } from "./issuer.ts";
+import { openIssuer, type Issuer } from "./open-issuer.ts";
 
 import { administrationResource } from "./mcp-oauth-helper.ts";
 

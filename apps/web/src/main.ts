@@ -8,7 +8,7 @@ import { type Url, toString as urlToString } from "foldkit/url";
 import { SkipLink, Tips } from "@gjermundgaraba-designs/pixel-paper";
 
 import { isSignedIn, issuer, toOwnerSentence } from "./api.ts";
-import * as Dashboard from "./dashboard/index.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import { Message } from "./message.ts";
 import { Access, type Model, Page, routeOf } from "./model.ts";
 import * as Consent from "./page/consent.ts";

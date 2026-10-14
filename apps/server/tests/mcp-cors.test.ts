@@ -1,8 +1,8 @@
 import { webMcpRequest } from "./mcp.ts";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { webApplication as application } from "./web-application.ts";
-import { createOwner } from "../src/auth.ts";
-import { openIssuer, type Issuer } from "./issuer.ts";
+import { createOwner } from "../src/owner/setup.ts";
+import { openIssuer, type Issuer } from "./open-issuer.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
 
 const baseURL = "http://localhost:3000";

@@ -100,7 +100,7 @@ test("tests are not blanket-exempted from tagged construction", async () => {
 
 test("actual boundary exceptions remain valid under repository configuration", () => {
   const result = spawnSync("vp", [
-    "lint", "apps/server/src/onboarding.ts", "apps/server/src/resources.ts",
+    "lint", "apps/server/src/platform/sqlite.ts",
     "--report-unused-disable-directives-severity", "error",
   ], { cwd: root, encoding: "utf8", timeout: 30_000 });
   assert.ifError(result.error);
