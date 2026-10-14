@@ -4,11 +4,17 @@ packages:
 
 catalogMode: prefer
 catalog:
+  "@effect/platform-browser": 4.0.4
   "@effect/platform-node": 4.0.4
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.4
+  foldkit: 0.168.0
+  "@foldkit/ui": 0.168.0
+  "@foldkit/vite-plugin": 0.27.1
+  "@foldkit/oxlint-plugin": 0.15.3
+  happy-dom: 20.14.5
   "@better-auth/oauth-provider": 1.7.7
   "@better-auth/api-key": 1.7.7
   better-auth: 1.7.7
@@ -27,6 +33,7 @@ catalog:
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.87.0
   "@gjermundgaraba/effect-actions": 0.16.0
+  "@gjermundgaraba-designs/pixel-paper": 0.11.0
   oauth4webapi: 3.8.8
 
 overrides:
@@ -35,6 +42,10 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "*"
+    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.4 instance serves all.
+    effect: 4.0.4
+    "@effect/platform-browser": 4.0.4
+    "@effect/platform-node": 4.0.4
   allowAny:
     - vite
 # Registry releases wait one day unless explicitly approved below.
@@ -42,6 +53,7 @@ minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
   - "@gjermundgaraba/effect-actions"
+  - "@gjermundgaraba-designs/pixel-paper"
   - "@voidzero-dev/*"
   - oxlint
   - "@oxlint/*"
@@ -53,8 +65,13 @@ minimumReleaseAgeExclude:
   - "@vitest/*"
   # Effect 4.0.4 is newer than the one-day release age; drop these once it is not.
   - effect@4.0.4
+  - "@effect/platform-browser@4.0.4"
   - "@effect/platform-node@4.0.4"
   - "@effect/platform-node-shared@4.0.4"
+  # Foldkit 0.168.0 is newer than the one-day release age; drop these once it is not.
+  - foldkit@0.168.0
+  - "@foldkit/ui@0.168.0"
+  - "@foldkit/vite-plugin@0.27.1"
   # Playwright 1.64.0 is newer than the one-day release age; drop these once it is not.
   - playwright@1.64.0
   - playwright-core@1.64.0

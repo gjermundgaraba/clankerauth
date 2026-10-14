@@ -462,7 +462,7 @@ describe("owner boundary", () => {
   test("serves the built web workspace rather than the server working directory", async () => {
     const assets = new Set<string>();
 
-    for (const path of ["/", "/setup", "/login", "/consent"]) {
+    for (const path of ["/", "/resources", "/keys", "/setup", "/login", "/consent"]) {
       const response = await request(path);
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
@@ -474,13 +474,26 @@ describe("owner boundary", () => {
       for (const reference of references) assets.add(reference[1]!);
     }
 
+    const fonts = new Set<string>();
+
     for (const asset of assets) {
       const result = await request(asset);
       expect(result.status).toBe(200);
       expect(result.headers.get("content-type")).toBe(
         asset.endsWith(".js") ? "text/javascript" : "text/css",
       );
-      expect(await result.text()).not.toBe("");
+      const body = await result.text();
+      expect(body).not.toBe("");
+
+      for (const font of body.matchAll(/url\((\/assets\/[^)]+\.woff2)\)/g)) fonts.add(font[1]!);
+    }
+
+    expect(fonts.size).toBeGreaterThan(0);
+
+    for (const font of fonts) {
+      const result = await request(font);
+      expect(result.status).toBe(200);
+      expect(result.headers.get("content-type")).toBe("font/woff2");
     }
 
     expect((await request("/src/main.ts")).status).toBe(404);

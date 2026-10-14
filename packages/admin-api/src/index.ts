@@ -126,6 +126,12 @@ export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentO
   error: errors,
 });
 
+/** The owner's password length: the issuer enforces it, and the setup page checks it first so
+ *  it can name the field. */
+export const MINIMUM_PASSWORD_LENGTH = 8;
+
+export const MAXIMUM_PASSWORD_LENGTH = 128;
+
 export const SetupInput = Schema.Struct({ email: Schema.String, password: Schema.String });
 
 export const ClientAuthMethod = Schema.Literals([

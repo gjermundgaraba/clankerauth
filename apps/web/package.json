@@ -11,15 +11,22 @@
   },
   "scripts": {
     "build": "tsc && vp build",
-    "test": "node scripts/dashboard-smoke.mjs",
+    "test": "vp test",
+    "test:smoke": "node scripts/dashboard-smoke.mjs",
     "dev": "vp dev"
   },
   "devDependencies": {
     "@better-auth/oauth-provider": "catalog:",
     "@clankerauth/admin-api": "workspace:*",
+    "@effect/platform-browser": "catalog:",
+    "@foldkit/ui": "catalog:",
+    "@foldkit/vite-plugin": "catalog:",
+    "@gjermundgaraba-designs/pixel-paper": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
     "better-auth": "catalog:",
     "effect": "catalog:",
+    "foldkit": "catalog:",
+    "happy-dom": "catalog:",
     "playwright": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

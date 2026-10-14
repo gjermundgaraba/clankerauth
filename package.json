@@ -8,12 +8,13 @@
     "build": "vp run -r build",
     "check": "vp run @gjermundgaraba/clankerauth-sdk#build && vp run @clankerauth/admin-api#build && vp check && vp run test:lint",
     "test": "vp run -r test",
-    "ready": "vp run check && vp run -r build && vp run -r test",
+    "ready": "vp run check && vp run -r build && vp run -r test && vp run @clankerauth/web#test:smoke",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
     "test:package": "node apps/server/scripts/production-smoke.mjs",
     "test:lint": "node --test tools/oxlint/anti-slop/tests/policy.test.mjs"
   },
   "devDependencies": {
+    "@foldkit/oxlint-plugin": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
