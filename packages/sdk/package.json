@@ -56,10 +56,11 @@
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "^0.16.0",
+    "@gjermundgaraba/effect-actions": "^0.17.0",
     "effect": "^4.0.4"
   },
   "peerDependenciesMeta": {
