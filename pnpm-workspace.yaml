@@ -34,7 +34,7 @@ catalog:
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.87.0
   "@gjermundgaraba/effect-actions": 0.17.0
-  "@gjermundgaraba-designs/pixel-paper": 0.12.0
+  "@gjermundgaraba-designs/pixel-paper": 0.13.0
   oauth4webapi: 3.8.8
   vitest: 5.0.4
 
