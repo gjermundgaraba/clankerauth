@@ -93,12 +93,12 @@ const signedInOwner = Layer.effect(
     const session = cookieHeader(login);
 
     expect(
-      (yield* send(session, "/api/createResource", {
+      (yield* send(session, "/api/putResource", {
         identifier: resource,
         name: "Notes",
         scopes: ["notes:read", "notes:write"],
       })).status,
-    ).toBe(201);
+    ).toBe(200);
 
     return session;
   }),

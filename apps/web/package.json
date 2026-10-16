@@ -18,11 +18,11 @@
   },
   "devDependencies": {
     "@better-auth/oauth-provider": "catalog:",
-    "@clankerauth/admin-api": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@foldkit/ui": "catalog:",
     "@foldkit/vite-plugin": "catalog:",
     "@gjermundgaraba-designs/pixel-paper": "catalog:",
+    "@gjermundgaraba/clankerauth-admin-api": "workspace:*",
     "@gjermundgaraba/clankerauth-sdk": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
     "better-auth": "catalog:",

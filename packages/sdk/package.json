@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-sdk",
-  "version": "0.23.1",
+  "version": "0.24.0",
   "description": "Effect-native clankerauth access-token and offline API-key verification, with optional effect-actions integration",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,10 @@
       "types": "./dist/key-list.d.ts",
       "import": "./dist/key-list.js"
     },
+    "./credentials": {
+      "types": "./dist/credentials.d.ts",
+      "import": "./dist/credentials.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
@@ -46,13 +50,16 @@
     "test": "vp test && node scripts/package-smoke.mjs"
   },
   "dependencies": {
-    "jose": "catalog:"
+    "jose": "catalog:",
+    "oauth4webapi": "catalog:",
+    "proper-lockfile": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
     "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "catalog:",
+    "@types/proper-lockfile": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
@@ -60,7 +67,7 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "^0.17.0",
+    "@gjermundgaraba/effect-actions": "^0.18.0",
     "effect": "^4.0.4"
   },
   "peerDependenciesMeta": {

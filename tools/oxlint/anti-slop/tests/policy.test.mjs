@@ -81,7 +81,7 @@ test("documented adapter import passes without an unused suppression", async () 
 test("tagged wire expectations use constructors and encoders", async () => {
   const result = await lint(`
     import { Schema } from "effect";
-    import { ProviderRefused } from "@clankerauth/admin-api";
+    import { ProviderRefused } from "@gjermundgaraba/clankerauth-admin-api";
 
     export const expected = Schema.encodeSync(ProviderRefused)(new ProviderRefused({ message: "Invalid request" }));
   `, "anti-slop-effect/no-manual-tagged-construction", "contract.test.ts");

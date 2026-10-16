@@ -84,7 +84,7 @@ try {
   let isSignedIn = true;
   let machineKeys = [];
   let listResponse = async () => ok(data);
-  let resourceResponse = () => ok(resource, 201);
+  let resourceResponse = () => ok({ resource, created: true });
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -164,7 +164,7 @@ try {
         case "POST /api/listClients":
           response = await listResponse();
           break;
-        case "POST /api/createResource":
+        case "POST /api/putResource":
           response = resourceResponse();
           break;
         case "POST /api/createClient":
@@ -329,11 +329,11 @@ try {
   await dialog.locator("#form-scopes").fill("fixture:read fixture:write");
   await submitForm("add resource");
   await dialog.getByText(unservable).waitFor();
-  resourceResponse = () => ok(resource, 201);
+  resourceResponse = () => ok({ resource, created: true });
   await submitForm("add resource");
   await dialog.waitFor({ state: "detached" });
   await waitForIdle();
-  assert.deepEqual(bodies.get("POST /api/createResource"), [
+  assert.deepEqual(bodies.get("POST /api/putResource"), [
     {
       identifier: "https://fixture.invalid/second",
       name: "Second API",

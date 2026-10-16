@@ -3,7 +3,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import * as Testing from "@gjermundgaraba/effect-actions/Testing";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
-import { Administration } from "@clankerauth/admin-api";
+import { Administration } from "@gjermundgaraba/clankerauth-admin-api";
 
 interface WebMcpRequest {
   readonly method: string;

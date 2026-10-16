@@ -5,7 +5,7 @@ import {
   type InternalServerError,
   type Resource,
   type ResourceSummary,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
 import { invalidInput } from "../issuer/errors.ts";
 import { Settings } from "../issuer/settings.ts";

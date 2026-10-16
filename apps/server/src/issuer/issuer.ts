@@ -18,7 +18,7 @@ import {
   administrationScopes,
   MAXIMUM_PASSWORD_LENGTH,
   MINIMUM_PASSWORD_LENGTH,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database, type DatabaseSchema } from "../platform/sqlite.ts";
 import { CimdTransport } from "../platform/cimd-transport.ts";
 import { peerHeader } from "../platform/node-http.ts";

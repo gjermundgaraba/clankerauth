@@ -1,127 +1,147 @@
 #!/usr/bin/env node
-import { Console, Effect, Option, type Schema } from "effect";
+import { Config, Console, Effect, Option, Redacted, type Schema } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import * as ActionCli from "@gjermundgaraba/effect-actions/ActionCli";
-import { Administration, administrationIdentifier, OwnerHttp } from "@clankerauth/admin-api";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
+import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
+import {
+  Administration,
+  administrationIdentifier,
+  OwnerHttp,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import manifest from "../package.json" with { type: "json" };
-import { readCredentials, type CredentialsError } from "./credentials.ts";
-import { accessToken, administrationScope, login, logout } from "./login.ts";
-import type { OAuthError } from "./oauth.ts";
 
-const refused = (error: OAuthError | CredentialsError) =>
+const refused = (error: { readonly message: string }) =>
   new CliError.UserError({ cause: error, userMessage: error.message });
 
 const json = (value: Schema.Json) => Console.log(JSON.stringify(value, null, 2));
 
-const resourceFlag = (description: string) =>
-  Flag.String("resource").pipe(
-    Flag.withDescription(description),
-    Flag.mapTryCatch(
-      (resource) => new URL(resource).href,
-      () => "--resource must be a URL, such as https://notes.example/",
+const urlArgument = (description: string) =>
+  Argument.String("url").pipe(Argument.withDescription(description), Argument.optional);
+
+const approve = (page: URL) =>
+  Effect.sync(() =>
+    process.stderr.write(
+      `Open this URL in your browser to approve the sign-in:\n\n  ${page.href}\n\n`,
     ),
-    Flag.optional,
   );
-
-const scopeFor = Effect.fn("Cli.scopeFor")(function* (
-  resource: Option.Option<string>,
-  scope: Option.Option<string>,
-) {
-  if (Option.isSome(scope)) return scope.value;
-
-  if (Option.isNone(resource)) return administrationScope;
-
-  const message = `Name the scopes to ask ${resource.value} for with --scope.`;
-
-  return yield* new CliError.UserError({ cause: message, userMessage: message });
-});
 
 const loginCommand = Command.make(
   "login",
   {
     url: Argument.String("url").pipe(
-      Argument.withDescription("The issuer's origin, its CLANKERAUTH_BASE_URL"),
-    ),
-    resource: resourceFlag(
-      "Sign in to this resource instead of administration, for `token` to use",
+      Argument.withDescription(
+        "The resource to sign in to: an application's URL, such as https://notes.example, or the issuer's origin, its CLANKERAUTH_BASE_URL, for administration",
+      ),
     ),
     scope: Flag.String("scope").pipe(
       Flag.withDescription(
-        `The scopes to ask for, space-separated: needed with --resource, and "${administrationScope}" for administration by default`,
+        "The scopes to ask for, space-separated: every scope the resource publishes by default",
       ),
       Flag.optional,
     ),
   },
-  ({ url, resource, scope }) =>
-    scopeFor(resource, scope).pipe(
-      Effect.flatMap((asked) => login(url, resource, asked).pipe(Effect.mapError(refused))),
+  ({ url, scope }) =>
+    Credentials.signIn(url, { scope: Option.getOrUndefined(scope), approve }).pipe(
+      Effect.mapError(refused),
       Effect.flatMap(json),
     ),
 ).pipe(
   Command.withDescription(
-    "Sign in to an issuer as its owner, for administration or, with --resource, for another resource: approve the URL it prints in the browser. Sign-ins are kept in ~/.config/clankerauth.",
+    "Sign in as the issuer's owner to a resource: approve the URL it prints in the browser. The resource's issuer and scopes are read from its /.well-known/oauth-protected-resource. Sign-ins are kept in ~/.config/clankerauth, each beside the others, whatever its issuer.",
   ),
 );
 
 const logoutCommand = Command.make(
   "logout",
-  { resource: resourceFlag("Sign out of this resource alone") },
-  ({ resource }) => logout(resource).pipe(Effect.mapError(refused), Effect.flatMap(json)),
-).pipe(Command.withDescription("Revoke the sign-ins, or the one to --resource, and forget them."));
+  { url: urlArgument("Sign out of the resource this URL is under alone") },
+  ({ url }) =>
+    Credentials.signOut(Option.getOrUndefined(url)).pipe(
+      Effect.mapError(refused),
+      Effect.flatMap(json),
+    ),
+).pipe(
+  Command.withDescription(
+    "Revoke the sign-ins, or the one to the resource a URL is under, and forget them.",
+  ),
+);
 
-const signedIn = Effect.gen(function* () {
-  const stored = yield* readCredentials().pipe(Effect.mapError(refused));
+const notSignedIn = new CliError.UserError({
+  cause: "not signed in",
+  userMessage: "Not signed in: run `clankerauth login <url>` first.",
+});
 
-  if (Option.isNone(stored))
+const administrationSignIn = Effect.gen(function* () {
+  const named = yield* Config.option(Config.String("CLANKERAUTH_URL")).pipe(
+    Effect.mapError(refused),
+  );
+
+  if (Option.exists(named, (url) => !URL.canParse(url)))
     return yield* new CliError.UserError({
-      cause: "not signed in",
-      userMessage: "Not signed in: run `clankerauth login <url>` first.",
+      cause: "CLANKERAUTH_URL",
+      userMessage:
+        "CLANKERAUTH_URL is no URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
     });
 
-  return stored.value;
+  const kept = (yield* Credentials.list().pipe(Effect.mapError(refused)))
+    .filter((signIn) => signIn.resource === administrationIdentifier(signIn.url))
+    .filter((signIn) =>
+      Option.match(named, {
+        onNone: () => true,
+        onSome: (url) => new URL(url).origin === signIn.url,
+      }),
+    );
+
+  const [only, ...others] = kept;
+
+  if (only === undefined) return yield* notSignedIn;
+
+  if (others.length > 0)
+    return yield* new CliError.UserError({
+      cause: "several issuers",
+      userMessage: `Signed in to administration at ${kept.map((signIn) => signIn.url).join(", ")}: name one with CLANKERAUTH_URL.`,
+    });
+
+  return only;
 });
 
 const tokenCommand = Command.make(
   "token",
-  { resource: resourceFlag("The resource whose token to print; administration by default") },
-  ({ resource }) =>
+  {
+    url: urlArgument(
+      "An address under the resource whose token to print, such as the application's URL; administration by default",
+    ),
+  },
+  ({ url }) =>
     Effect.gen(function* () {
-      const credentials = yield* signedIn;
+      const named = Option.isSome(url) ? url.value : (yield* administrationSignIn).resource;
 
-      const token = yield* accessToken(
-        credentials,
-        Option.getOrElse(resource, () => administrationIdentifier(credentials.url)),
-      ).pipe(Effect.mapError(refused));
+      const token = yield* Credentials.token({ url: named }).pipe(Effect.mapError(refused));
 
-      yield* Effect.sync(() => process.stdout.write(`${token}\n`));
+      yield* Effect.sync(() => process.stdout.write(`${Redacted.value(token)}\n`));
     }),
 ).pipe(
   Command.withDescription(
-    "Print a current access token for a resource signed in to, refreshing it first when it has expired.",
+    "Print a current access token for the resource signed in to that a URL is under, refreshing it first when it has expired.",
   ),
 );
 
-const administrationClient = Effect.gen(function* () {
-  const credentials = yield* signedIn;
-
-  const token = yield* accessToken(credentials, administrationIdentifier(credentials.url)).pipe(
-    Effect.mapError(refused),
-  );
-
-  return HttpClient.mapRequest(yield* HttpClient.HttpClient, (request) =>
-    request.pipe(
-      HttpClientRequest.prependUrl(credentials.url),
-      HttpClientRequest.bearerToken(token),
-    ),
-  );
-});
+const administrationClient = Effect.flatMap(administrationSignIn, (signIn) =>
+  ActionHttp.client(OwnerHttp, {
+    baseUrl: signIn.url,
+    transformClient: (client) =>
+      HttpClient.catchTag(
+        Credentials.authorizing({ url: signIn.resource })(client),
+        ["SignInRequired", "TokenUnavailable"],
+        (error) => Effect.fail(refused(error)),
+      ),
+  }),
+);
 
 const administration = Administration.map((action) =>
-  ActionCli.remoteCommand(OwnerHttp, action).pipe(
-    Command.provideEffect(HttpClient.HttpClient, administrationClient),
-  ),
+  ActionCli.remoteCommand(OwnerHttp, action, { client: administrationClient }),
 );
 
 const cli = Command.make("clankerauth").pipe(

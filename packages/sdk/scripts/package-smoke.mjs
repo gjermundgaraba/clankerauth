@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { installPacked, packDependency } from "../../../scripts/package-install.mjs";
 import { build } from "vite";
 
 const execute = promisify(execFile);
@@ -54,23 +55,6 @@ const emitDeclarations = (...files) =>
     { cwd: directory },
   );
 
-const tested = async (dependency) => {
-  const { stdout } = await execute(
-    "npm",
-    [
-      "pack",
-      "--json",
-      "--ignore-scripts",
-      "--pack-destination",
-      directory,
-      await realpath(join(root, "node_modules", dependency)),
-    ],
-    { cwd: directory },
-  );
-
-  return join(directory, JSON.parse(stdout)[0].filename);
-};
-
 const load = async (specifier) => {
   const file = join(directory, `${specifier.replaceAll(/[^\w-]/gu, "_")}.mjs`);
   await writeFile(file, `export * from "${specifier}";`);
@@ -79,27 +63,7 @@ const load = async (specifier) => {
 };
 
 try {
-  // why: pnpm pack resolves the workspace catalog protocol in the manifest; npm pack would not.
-  await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: root });
-  const tarball = (await readdir(directory)).find((file) => file.endsWith(".tgz"));
-
-  if (tarball === undefined) throw new Error(`pnpm pack wrote no tarball to ${directory}`);
-  await writeFile(
-    join(directory, "package.json"),
-    JSON.stringify({ private: true, type: "module" }),
-  );
-  await execute(
-    "npm",
-    [
-      "install",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      join(directory, tarball),
-      await tested("effect"),
-    ],
-    { cwd: directory },
-  );
+  await installPacked(directory, root, ["effect"]);
   const installed = join(directory, "node_modules", name);
   const manifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
   assert.equal(manifest.version, version);
@@ -187,6 +151,26 @@ void verification;
   ])
     assert(exported in keyList, `Missing key-list export: ${exported}`);
 
+  const credentials = await load(`${name}/credentials`);
+
+  for (const exported of [
+    "signIn",
+    "token",
+    "authorizing",
+    "signOut",
+    "list",
+    "path",
+    "SignIn",
+    "SignInRequired",
+    "TokenUnavailable",
+    "SignInFailed",
+  ])
+    assert(exported in credentials, `Missing credentials export: ${exported}`);
+
+  process.env["XDG_CONFIG_HOME"] = join(directory, "config");
+  assert.deepEqual(await Effect.runPromise(credentials.signOut()), { signedOut: false });
+  assert.deepEqual(await Effect.runPromise(credentials.list()), []);
+
   const { startFakeIssuer } = await load(`${name}/testing`);
   const notes = "http://127.0.0.1:7337/";
   const issuer = await startFakeIssuer({ resource: notes, scopes: ["notes:read", "notes:write"] });
@@ -218,7 +202,7 @@ void verification;
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      await tested("@gjermundgaraba/effect-actions"),
+      await packDependency(directory, root, "@gjermundgaraba/effect-actions"),
     ],
     { cwd: directory },
   );

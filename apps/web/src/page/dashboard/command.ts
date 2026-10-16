@@ -1,4 +1,4 @@
-import type { ClientCredentials } from "@clankerauth/admin-api";
+import type { ClientCredentials } from "@gjermundgaraba/clankerauth-admin-api";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { load } from "foldkit/navigation";
@@ -25,10 +25,8 @@ const nothingShown = Effect.as(Option.none<Credential>());
 const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, string> =>
   toOwnerSentence<Option.Option<Credential>, unknown>(
     Change.match(change, {
-      CreateResource: ({ identifier, name, scopes }) =>
-        issuer.createResource({ identifier, name, scopes }).pipe(nothingShown),
-      UpdateResource: ({ identifier, name, scopes }) =>
-        issuer.updateResource({ identifier, name, scopes }).pipe(nothingShown),
+      PutResource: ({ identifier, name, scopes }) =>
+        issuer.putResource({ identifier, name, scopes }).pipe(nothingShown),
       DeleteResource: ({ identifier }) => issuer.deleteResource({ identifier }).pipe(nothingShown),
       // why: a `datetime-local` value has no zone, so `new Date` reads it in the browser's zone
       CreateKey: ({ name, permissions, maybeExpiry }) =>

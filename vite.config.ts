@@ -23,7 +23,7 @@ const proseComments = (options: {
 
 const commentOverrides = [
   {
-    files: ["packages/sdk/src/**", "packages/dev/src/**"],
+    files: ["packages/sdk/src/**", "packages/dev/src/**", "packages/admin-api/src/**"],
     rules: { "clankerauth/no-prose-comments": proseComments({ docBlocks: "all" }) },
   },
   {
@@ -36,7 +36,7 @@ const domainImports = [
   "^effect(/|$)",
   "^@gjermundgaraba/effect-actions/",
   "^@gjermundgaraba/clankerauth-sdk(/|$)",
-  "^@clankerauth/admin-api$",
+  "^@gjermundgaraba/clankerauth-admin-api$",
   "^apps/server/src/(?!http/)[^/]+/",
 ];
 

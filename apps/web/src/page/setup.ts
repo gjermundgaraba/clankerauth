@@ -1,4 +1,4 @@
-import { passwordRule } from "@clankerauth/admin-api";
+import { passwordRule } from "@gjermundgaraba/clankerauth-admin-api";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
 import { Command } from "foldkit";

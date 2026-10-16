@@ -472,11 +472,48 @@ await test(
   },
 );
 
-await test("a data directory keeps the owner, the secret, the client and the keys across restarts, provisioning once", async () => {
+const administered = async (issuer) => {
+  const session = await login(issuer);
+  assert.equal(session.status, 200);
+  await session.body.cancel();
+
+  const cookie = session.headers
+    .getSetCookie()
+    .map((part) => part.split(";")[0])
+    .join("; ");
+
+  return (
+    await fetch(`${issuer.url}/api/listClients`, {
+      method: "POST",
+      headers: { cookie, origin: issuer.url, "content-type": "application/json" },
+      body: "{}",
+    })
+  ).json();
+};
+
+await test("a data directory keeps the owner, the secret, the client, its access and the keys across restarts, and applies changed resources", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clankerauth-workspace-"));
   const port = await reserveLoopbackPort();
   const workspace = { ...options, dataDir: directory, port };
   const first = await startDisposableIssuer(workspace);
+
+  const kept = async (issuer, definition) => {
+    const state = await administered(issuer);
+
+    assert.equal(state.clients.length, 1);
+    assert.equal(state.resources.length, 2);
+
+    assert.deepEqual(
+      state.resources.find((entry) => entry.identifier === resource.identifier),
+      { ...definition, builtIn: false },
+    );
+
+    assert.deepEqual(state.clientAccess, [
+      { client_id: first.clientId, resource: resource.identifier },
+    ]);
+
+    assert.equal((await listed(`${issuer.url}/api/auth`, resource.identifier)).length, 1);
+  };
 
   try {
     assert.equal(first.directory, directory);
@@ -493,29 +530,24 @@ await test("a data directory keeps the owner, the secret, the client and the key
       assert.deepEqual(second.owner, first.owner);
       assert.equal(second.clientId, first.clientId);
       assert.equal(second.clientSecret, first.clientSecret);
-      const session = await login(second);
-      assert.equal(session.status, 200);
-      await session.body.cancel();
-
-      const cookie = session.headers
-        .getSetCookie()
-        .map((part) => part.split(";")[0])
-        .join("; ");
-
-      const state = await (
-        await fetch(`${second.url}/api/listClients`, {
-          method: "POST",
-          headers: { cookie, origin: second.url, "content-type": "application/json" },
-          body: "{}",
-        })
-      ).json();
-
-      assert.equal(state.clients.length, 1);
-      assert.equal(state.resources.length, 2);
-
-      assert.equal((await listed(`${second.url}/api/auth`, resource.identifier)).length, 1);
+      await kept(second, resource);
     } finally {
       await second.close();
+    }
+
+    const changed = {
+      ...resource,
+      name: "Renamed development API",
+      scopes: [...resource.scopes, "example:admin"],
+    };
+
+    const third = await startDisposableIssuer({ ...workspace, resources: [changed] });
+
+    try {
+      assert.equal(third.clientId, first.clientId);
+      await kept(third, changed);
+    } finally {
+      await third.close();
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

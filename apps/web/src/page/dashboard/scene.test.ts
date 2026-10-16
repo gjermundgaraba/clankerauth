@@ -124,7 +124,7 @@ describe("dashboard view", () => {
       ),
       Command.resolve(
         SaveChange({
-          change: Change.CreateResource({
+          change: Change.PutResource({
             identifier: "https://second.fixture.invalid",
             name: "Second API",
             scopes: ["read", "write"],

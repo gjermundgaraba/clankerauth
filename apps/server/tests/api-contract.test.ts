@@ -3,7 +3,7 @@ import { describe, expect, vi } from "vite-plus/test";
 import { Context, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Http, ServiceUnavailable } from "@clankerauth/admin-api";
+import { Http, ServiceUnavailable } from "@gjermundgaraba/clankerauth-admin-api";
 import { APIError } from "better-auth/api";
 import { signIn, testWebApplication, WebApplication } from "./test-issuer.ts";
 import { peerHeader } from "../src/platform/node-http.ts";
@@ -90,7 +90,7 @@ describe("API integration", () => {
       };
 
       expect((yield* api.listClients()).resources).toEqual([administrationResource(baseURL)]);
-      yield* api.createResource(resourceInput);
+      yield* api.putResource(resourceInput);
 
       const created = yield* api.createClient({
         client_name: "Contract test client",
@@ -129,7 +129,7 @@ describe("API integration", () => {
         scopes: ["example:read", "example:write"],
       };
 
-      expect(yield* api.updateResource(updatedResource)).toEqual(updatedResource);
+      expect((yield* api.putResource(updatedResource)).resource).toEqual(updatedResource);
       expect(yield* api.setClientAccess({ client_id: created.client_id, resources: [] })).toEqual({
         clientAccess: [],
       });
@@ -154,7 +154,7 @@ describe("API integration", () => {
         blocked: true,
       });
       expect((yield* api.listClients()).clients[0]?.blocked).toBe(true);
-      expect(yield* api.updateResource(updatedResource)).toEqual(updatedResource);
+      expect((yield* api.putResource(updatedResource)).resource).toEqual(updatedResource);
       expect(yield* api.blockClient({ client_id: created.client_id, blocked: false })).toEqual({
         blocked: false,
       });
@@ -207,6 +207,46 @@ describe("API integration", () => {
       }).pipe(Effect.provide(contractIssuer())),
   );
 
+  it.live("getResource reads one resource and putResource creates it, then updates it", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const api = yield* apiClient(baseURL);
+      yield* api.setupOwner({ email, password });
+      browser.cookie = yield* signIn(browser.handle, baseURL, { email, password });
+
+      const missing = yield* Effect.flip(api.getResource({ identifier: resource }));
+      expect(missing._tag).toBe("ResourceNotFound");
+      expect(missing.message).toBe(`No resource ${resource} exists`);
+
+      const first = { identifier: resource, name: "MCP", scopes: ["example:read"] };
+      expect(yield* api.putResource(first)).toEqual({ resource: first, created: true });
+      expect(yield* api.getResource({ identifier: resource })).toEqual({
+        ...first,
+        builtIn: false,
+      });
+
+      const second = { ...first, name: "Renamed", scopes: ["example:read", "example:write"] };
+      expect(yield* api.putResource(second)).toEqual({ resource: second, created: false });
+      expect(yield* api.putResource(second)).toEqual({ resource: second, created: false });
+      expect((yield* api.listClients()).resources).toEqual([
+        administrationResource(baseURL),
+        { ...second, builtIn: false },
+      ]);
+
+      expect(yield* api.getResource({ identifier: `${baseURL}/` })).toEqual(
+        administrationResource(baseURL),
+      );
+      expect(
+        (yield* Effect.flip(
+          api.putResource({ identifier: `${baseURL}/`, name: "Mine", scopes: ["mine:read"] }),
+        ))._tag,
+      ).toBe("InvalidInput");
+      expect(
+        (yield* Effect.flip(api.putResource({ ...first, scopes: ["offline_access"] })))._tag,
+      ).toBe("InvalidInput");
+    }).pipe(Effect.provide(contractIssuer())),
+  );
+
   it.live("automatic clients are visible and manageable through the generated owner API", () =>
     Effect.gen(function* () {
       const browser = yield* Browser;
@@ -215,7 +255,7 @@ describe("API integration", () => {
       yield* api.setupOwner({ email, password });
 
       browser.cookie = yield* signIn(browser.handle, baseURL, { email, password });
-      yield* api.createResource({
+      yield* api.putResource({
         identifier: resource,
         name: "MCP",
         scopes: ["example:read"],

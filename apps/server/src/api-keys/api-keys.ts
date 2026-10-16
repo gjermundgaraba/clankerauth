@@ -11,7 +11,7 @@ import {
   ApiKeyNotFound,
   type InternalServerError,
   type ProviderRefused,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database } from "../platform/sqlite.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";

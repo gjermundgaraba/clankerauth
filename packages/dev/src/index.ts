@@ -12,12 +12,11 @@ import {
   listen,
   nodeHandler,
   OwnerAccount,
-  ResourceCatalog,
   Resources,
   Settings,
   validateSettings,
 } from "@clankerauth/server/embed";
-import { CurrentOwner } from "@clankerauth/admin-api";
+import { CurrentOwner } from "@gjermundgaraba/clankerauth-admin-api";
 import type { DisposableIssuer, DisposableIssuerOptions, Identity } from "./types.d.ts";
 
 const credentialsFile = "credentials.json";
@@ -173,7 +172,6 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
   );
 
   const account = Context.get(issuer, OwnerAccount);
-  const catalog = Context.get(issuer, ResourceCatalog);
 
   const requests = yield* Scope.fork(yield* Effect.scope);
 
@@ -227,11 +225,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
     yield* account.create(owner).pipe(Effect.mapError(provisioningFailed));
 
   yield* asOwner(() =>
-    Effect.forEach(options.resources, (resource) =>
-      Effect.flatMap(catalog.get(resource.identifier), (existing) =>
-        existing ? Effect.void : Effect.asVoid(resources.create(resource)),
-      ),
-    ),
+    Effect.forEach(options.resources, (resource) => resources.put(resource), { discard: true }),
   );
 
   const registered = yield* asOwner(() =>

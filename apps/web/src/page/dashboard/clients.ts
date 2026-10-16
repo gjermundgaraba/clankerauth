@@ -1,4 +1,4 @@
-import type { Client, Connection } from "@clankerauth/admin-api";
+import type { Client, Connection } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {

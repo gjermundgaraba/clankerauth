@@ -12,7 +12,7 @@ import {
   ownerSession,
   OwnerHttp,
   OwnerToken,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import manifest from "../../package.json" with { type: "json" };
 import { Clients } from "../clients/clients.ts";
 import { Resources } from "../resources/resources.ts";
@@ -43,8 +43,8 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
           blockClient: clients.block,
           rotateClientSecret: clients.rotate,
           setClientAccess: resources.setAccess,
-          createResource: resources.create,
-          updateResource: resources.update,
+          getResource: resources.get,
+          putResource: resources.put,
           deleteResource: resources.delete,
           listApiKeys: keys.list,
           createApiKey: keys.create,

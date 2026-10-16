@@ -33,11 +33,12 @@ Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `
 
 ## Packages
 
-- `packages/admin-api`: the administration contract: actions, schemas and errors.
+- `packages/admin-api` (published): the administration contract: actions, schemas and errors.
 - `packages/sdk` (published): one module per entry; owns the protocol constants resource
   servers share with the issuer.
 - `packages/dev` (published): the development issuer, built on the embed entry.
-- `apps/cli` (published): the CLI; `oauth.ts` is its OAuth adapter.
+- `apps/cli` (published): the CLI; the SDK's `/credentials` owns signing in, the sign-in file
+  and its refresh.
 
 ## Rules
 

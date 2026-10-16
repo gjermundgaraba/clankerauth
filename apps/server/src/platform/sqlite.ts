@@ -4,7 +4,7 @@ import { Kysely, sql as query } from "kysely";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { InternalServerError } from "@clankerauth/admin-api";
+import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 
 /** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;

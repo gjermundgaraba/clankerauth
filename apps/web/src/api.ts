@@ -1,5 +1,5 @@
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
-import { Http, errors } from "@clankerauth/admin-api";
+import { Http, errors } from "@gjermundgaraba/clankerauth-admin-api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { createAuthClient } from "better-auth/client";

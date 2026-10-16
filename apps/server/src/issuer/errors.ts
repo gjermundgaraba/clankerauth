@@ -9,7 +9,7 @@ import {
   ServiceUnavailable,
   UnreadableRequest,
   type IssuerError,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 
 // why: Better Auth core errors carry `message`; its OAuth provider sends `error_description`
 const ProviderErrorBody = Schema.Struct({

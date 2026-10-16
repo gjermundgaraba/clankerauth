@@ -1,4 +1,4 @@
-import { ClientAuthMethod, type ResourceSummary } from "@clankerauth/admin-api";
+import { ClientAuthMethod, type ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Record, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";

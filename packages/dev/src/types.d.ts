@@ -11,8 +11,9 @@ export interface DisposableIssuerOptions {
   /**
    * Keep the issuer's state in this directory instead of a temporary one: the owner
    * account and password, the signing secret, the registered client and the database
-   * survive `close()` and the next start. Provisioning is idempotent, so the same
-   * resources and client are reused. The directory is never deleted. Treat it as the
+   * survive `close()` and the next start. Provisioning is idempotent: the same client is
+   * reused, and each resource is set to its name and scopes as given. The directory is never
+   * deleted. Treat it as the
    * whole secret of the workspace, and keep it out of version control.
    */
   dataDir?: string;

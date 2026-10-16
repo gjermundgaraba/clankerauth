@@ -47,8 +47,8 @@ const askingToCloseEditor = Message.GotEditorMessage({
   message: Dialog.Message.GotDialogMessage({ message: UiDialog.Message.RequestedClose() }),
 });
 
-const created = Change.CreateResource({
-  identifier: "https://api.fixture.invalid",
+const created = Change.PutResource({
+  identifier: "https://second.fixture.invalid",
   name: "Fixture API",
   scopes: ["read", "write"],
 });
@@ -184,7 +184,9 @@ describe("dashboard update", () => {
       Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
       message(editing(Form.Message.UpdatedResourceName({ value: " Fixture API " }))),
       message(
-        editing(Form.Message.UpdatedResourceIdentifier({ value: "https://api.fixture.invalid" })),
+        editing(
+          Form.Message.UpdatedResourceIdentifier({ value: "https://second.fixture.invalid" }),
+        ),
       ),
       message(editing(Form.Message.UpdatedResourceScopes({ value: "read  write" }))),
       message(Message.SubmittedForm()),
@@ -221,6 +223,26 @@ describe("dashboard update", () => {
       Command.expectNone(),
       model((next) => {
         expect(Dialog.isOpen(next.editor)).toBe(true);
+      }),
+    );
+  });
+
+  test("adding a resource the listing already holds is refused in the editor", () => {
+    story(
+      update,
+      given(listed),
+      message(Message.ClickedOpenForm({ form: Form.addResource() })),
+      Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
+      message(editing(Form.Message.UpdatedResourceName({ value: "Again" }))),
+      message(
+        editing(Form.Message.UpdatedResourceIdentifier({ value: " https://api.fixture.invalid " })),
+      ),
+      message(Message.SubmittedForm()),
+      Command.expectNone(),
+      model((next) => {
+        expect(Option.map(refusalAt(next, "Editor"), ({ reason }) => reason)).toEqual(
+          Option.some("A Resource with this identifier exists already: edit it instead."),
+        );
       }),
     );
   });

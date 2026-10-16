@@ -4,7 +4,7 @@ import {
   type InternalServerError,
   type Owner,
   type ProviderRefused,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database, persisted } from "../platform/sqlite.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";

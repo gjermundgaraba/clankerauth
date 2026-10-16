@@ -9,8 +9,8 @@ import {
   CurrentOwner,
   OwnerToken,
   ServiceUnavailable,
-} from "@clankerauth/admin-api";
-import type { OwnerSession } from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
+import type { OwnerSession } from "@gjermundgaraba/clankerauth-admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
 import { provider, unavailability } from "../issuer/errors.ts";
 import { Database, persisted } from "../platform/sqlite.ts";

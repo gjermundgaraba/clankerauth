@@ -1,4 +1,7 @@
-import { administrationScopes, administrationIdentifier } from "@clankerauth/admin-api";
+import {
+  administrationScopes,
+  administrationIdentifier,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Effect, Layer } from "effect";
 import type * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { FetchHttpClient } from "effect/http";

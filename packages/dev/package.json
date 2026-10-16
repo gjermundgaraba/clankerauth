@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-dev",
-  "version": "0.23.1",
+  "version": "0.24.0",
   "description": "Disposable local clankerauth issuer for application development",
   "license": "MIT",
   "repository": {
@@ -30,10 +30,10 @@
     "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
-    "@clankerauth/admin-api": "workspace:*",
     "@clankerauth/server": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/clankerauth-admin-api": "workspace:*",
     "@opentelemetry/api": "catalog:",
     "effect": "catalog:",
     "jose": "catalog:",

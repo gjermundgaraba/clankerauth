@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { ClientNotFound } from "@clankerauth/admin-api";
+import { ClientNotFound } from "@gjermundgaraba/clankerauth-admin-api";
 import { Cause, Effect, Exit, Result } from "effect";
 import { sql as query } from "kysely";
 import { mkdtemp, rm } from "node:fs/promises";

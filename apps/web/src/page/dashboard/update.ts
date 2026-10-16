@@ -224,11 +224,17 @@ const refused = (model: Model, reason: string): UpdateReturn => {
     : { model: nextModel };
 };
 
+const resourceIdentifiers = (model: Model): ReadonlyArray<string> =>
+  Option.match(AsyncData.getData(listingOf(model)), {
+    onNone: () => [],
+    onSome: ({ overview }) => Array.map(overview.resources, ({ identifier }) => identifier),
+  });
+
 const submitted = (model: Model): UpdateReturn =>
   Option.match(model.maybeForm, {
     onNone: () => ({ model }),
     onSome: (form) =>
-      Result.match(Form.changeOf(form), {
+      Result.match(Form.changeOf(form, resourceIdentifiers(model)), {
         onFailure: (reason) => ({
           model: modifyFields(model, {
             maybeRefusal: () =>

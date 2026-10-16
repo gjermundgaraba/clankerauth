@@ -1,4 +1,4 @@
-import { ClientListResult, ApiKey } from "@clankerauth/admin-api";
+import { ClientListResult, ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
 import { Effect, Schema } from "effect";
 import { Query } from "foldkit/experimental";
 

@@ -3,7 +3,7 @@ import { expect, vi } from "vite-plus/test";
 import { administrationTools, webMcpRequest, withMcpClient } from "./mcp.ts";
 import { Context, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-import { InternalServerError } from "@clankerauth/admin-api";
+import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 import { randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { nodeHandler } from "../src/http/application.ts";
@@ -301,12 +301,12 @@ it.live(
 
       const target = "https://resource.example/api";
       expect(
-        (yield* admin("createResource", {
+        (yield* admin("putResource", {
           identifier: target,
           name: "Other audience",
           scopes: ["read"],
         })).status,
-      ).toBe(201);
+      ).toBe(200);
 
       const created = yield* admin("createApiKey", {
         name: "Not an OAuth token",
@@ -355,8 +355,8 @@ it.live("the administration resource is fixed, and every start restores it", () 
     const resource = administrationResource(baseURL);
 
     const cookie = yield* Effect.gen(function* () {
-      expect((yield* admin("createResource", resource)).status).toBe(400);
-      expect((yield* admin("updateResource", { ...resource, name: "Renamed" })).status).toBe(400);
+      expect((yield* admin("putResource", resource)).status).toBe(400);
+      expect((yield* admin("putResource", { ...resource, name: "Renamed" })).status).toBe(400);
       expect((yield* admin("deleteResource", { identifier: resource.identifier })).status).toBe(
         400,
       );
@@ -533,12 +533,12 @@ it.live("MCP protocol and owner-identity operations do not acquire provider sess
     const { handle } = yield* Dashboard;
     const resource = "https://automation.example/api";
     expect(
-      (yield* admin("createResource", {
+      (yield* admin("putResource", {
         identifier: resource,
         name: "Automation",
         scopes: ["read"],
       })).status,
-    ).toBe(201);
+    ).toBe(200);
     const { tokens } = yield* grant();
     const target = yield* grant();
     const { context } = yield* Issuer;
@@ -628,7 +628,7 @@ it.live(
           },
           async (client) => {
             const result = await client.callTool({
-              name: "createResource",
+              name: "putResource",
               arguments: {
                 identifier: "https://temporary-session.example/api",
                 name: "Created with OAuth",
@@ -638,16 +638,12 @@ it.live(
 
             expect(result.isError).toBe(false);
 
-            const duplicate = await client.callTool({
-              name: "createResource",
-              arguments: {
-                identifier: "https://temporary-session.example/api",
-                name: "Duplicate",
-                scopes: ["read"],
-              },
+            const missing = await client.callTool({
+              name: "deleteResource",
+              arguments: { identifier: "https://missing.example/api" },
             });
 
-            expect(duplicate.isError).toBe(true);
+            expect(missing.isError).toBe(true);
           },
         ),
       );
@@ -832,7 +828,7 @@ it.live("an access token administers over HTTP at /api/owner, as it does over MC
       scopes: ["notes:read"],
     };
 
-    expect((yield* admin("createResource", resource)).status).toBe(201);
+    expect((yield* admin("putResource", resource)).status).toBe(200);
 
     const { tokens } = yield* grant();
 

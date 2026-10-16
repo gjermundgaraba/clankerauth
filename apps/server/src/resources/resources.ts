@@ -11,7 +11,8 @@ import {
   type InternalServerError,
   type ProviderRefused,
   type ResourceId,
-} from "@clankerauth/admin-api";
+  type ResourceSummary,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
 import { invalidInput, provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
@@ -66,12 +67,17 @@ type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 export class Resources extends Context.Service<
   Resources,
   {
-    readonly create: (
+    readonly get: (
+      input: typeof ResourceId.Type,
+    ) => Effect.Effect<typeof ResourceSummary.Type, InternalServerError | ResourceNotFound>;
+    /** Creates the resource, or updates the one with its identifier. */
+    readonly put: (
       input: ResourceValue,
-    ) => Effect.Effect<ResourceValue, Refusal, CurrentOwner | Scope.Scope>;
-    readonly update: (
-      input: ResourceValue,
-    ) => Effect.Effect<ResourceValue, Refusal | ResourceNotFound, CurrentOwner | Scope.Scope>;
+    ) => Effect.Effect<
+      { resource: ResourceValue; created: boolean },
+      Refusal,
+      CurrentOwner | Scope.Scope
+    >;
     readonly delete: (
       input: typeof ResourceId.Type,
     ) => Effect.Effect<
@@ -141,10 +147,10 @@ export class Resources extends Context.Service<
           yield* syncClient(sql, resources, client.clientId);
       });
 
-      const reserved = Effect.fn("Resources.reserved")(function* (identifier: string) {
-        if ((yield* catalog.get(identifier))?.builtIn)
-          return yield* invalidInput(["identifier"], "The administration Resource is fixed");
-      });
+      const reserved = (resource: typeof ResourceSummary.Type | undefined) =>
+        resource?.builtIn
+          ? Effect.fail(invalidInput(["identifier"], "The administration Resource is fixed"))
+          : Effect.void;
 
       const providerHeaders = Effect.flatMap(CurrentOwner, (owner) => owner.providerHeaders);
 
@@ -179,53 +185,47 @@ export class Resources extends Context.Service<
 
       return {
         link,
-        create: Effect.fn("Resources.create")(function* (input: ResourceValue) {
-          const resource = yield* validateInput(input);
-          const headers = yield* providerHeaders;
+        get: Effect.fn("Resources.get")(function* ({ identifier }: typeof ResourceId.Type) {
+          const resource = yield* catalog.get(identifier);
 
-          if (!(yield* catalog.get(resource.identifier)))
+          return resource ?? (yield* ResourceNotFound.of(identifier));
+        }),
+        put: Effect.fn("Resources.put")(function* (input: ResourceValue) {
+          const resource = yield* validateInput(input);
+          const existing = yield* catalog.get(resource.identifier);
+          yield* reserved(existing);
+          const headers = yield* providerHeaders;
+          const allowedScopes = [...protocolScopes, ...resource.scopes];
+
+          if (existing === undefined) {
             yield* transaction((query) =>
               clearAuthorization(query, { resource: resource.identifier }),
             );
-          yield* provider(
-            () =>
-              auth.api.adminCreateOAuthResource({
-                headers,
-                body: {
-                  identifier: resource.identifier,
-                  name: resource.name,
-                  allowedScopes: [...protocolScopes, ...resource.scopes],
-                },
-              }),
-            { refused: refusal },
-          );
+            yield* provider(
+              () =>
+                auth.api.adminCreateOAuthResource({
+                  headers,
+                  body: { identifier: resource.identifier, name: resource.name, allowedScopes },
+                }),
+              { refused: refusal },
+            );
+          } else
+            yield* provider(
+              () =>
+                auth.api.adminUpdateOAuthResource({
+                  headers,
+                  params: resourceParams(resource.identifier),
+                  body: { name: resource.name, allowedScopes },
+                }),
+              { refused: refusal },
+            );
+
           yield* synchronize();
 
-          return resource;
-        }, serialized),
-        update: Effect.fn("Resources.update")(function* (input: ResourceValue) {
-          const resource = yield* validateInput(input);
-          yield* reserved(resource.identifier);
-          const headers = yield* providerHeaders;
-
-          yield* provider(
-            () =>
-              auth.api.adminUpdateOAuthResource({
-                headers,
-                params: resourceParams(resource.identifier),
-                body: {
-                  name: resource.name,
-                  allowedScopes: [...protocolScopes, ...resource.scopes],
-                },
-              }),
-            { refused: refusal, missing: () => ResourceNotFound.of(resource.identifier) },
-          );
-          yield* synchronize();
-
-          return resource;
+          return { resource, created: existing === undefined };
         }, serialized),
         delete: Effect.fn("Resources.delete")(function* ({ identifier }: typeof ResourceId.Type) {
-          yield* reserved(identifier);
+          yield* reserved(yield* catalog.get(identifier));
           const headers = yield* providerHeaders;
 
           yield* provider(

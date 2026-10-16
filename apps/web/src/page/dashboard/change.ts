@@ -1,16 +1,15 @@
-import { ApplicationType, ClientAuthMethod, KeyPermissions } from "@clankerauth/admin-api";
+import {
+  ApplicationType,
+  ClientAuthMethod,
+  KeyPermissions,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Schema, String, pipe } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
 // CHANGE
 
 export const Change = defineTaggedUnion({
-  CreateResource: {
-    identifier: Schema.String,
-    name: Schema.String,
-    scopes: Schema.Array(Schema.String),
-  },
-  UpdateResource: {
+  PutResource: {
     identifier: Schema.String,
     name: Schema.String,
     scopes: Schema.Array(Schema.String),
@@ -180,8 +179,7 @@ export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
 
 export const announcementOf = (change: Change): string =>
   Change.match(change, {
-    CreateResource: () => "Resource added.",
-    UpdateResource: () => "Resource saved.",
+    PutResource: () => "Resource saved.",
     DeleteResource: () => "Resource deleted.",
     CreateKey: () => "API key created. Store it now.",
     RenameKey: () => "Key renamed.",

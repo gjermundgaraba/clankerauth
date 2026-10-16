@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import type { SetupInput } from "@clankerauth/admin-api";
+import type { SetupInput } from "@gjermundgaraba/clankerauth-admin-api";
 import { OwnerAccount } from "./owner.ts";
 
 export class ResponseCookies extends Context.Service<

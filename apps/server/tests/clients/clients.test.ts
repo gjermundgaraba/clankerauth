@@ -1,6 +1,10 @@
 import { it } from "@effect/vitest";
 import { Context, Effect, Exit, Layer } from "effect";
-import { ClientIsAutomatic, ClientNotFound, CurrentOwner } from "@clankerauth/admin-api";
+import {
+  ClientIsAutomatic,
+  ClientNotFound,
+  CurrentOwner,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { beforeEach, expect } from "vite-plus/test";
 import { createHash } from "node:crypto";
 import { issuerGeneration, signIn, testIssuer, testSettings } from "../test-issuer.ts";
@@ -206,7 +210,7 @@ const consentRequired = (id: string, identifier = resource, scope?: string) =>
 
 const createResource = (identifier: string, name: string, scopes: ReadonlyArray<string>) =>
   Effect.flatMap(Resources, (resources) =>
-    asOwner(resources.create({ identifier, name, scopes: [...scopes] })),
+    asOwner(resources.put({ identifier, name, scopes: [...scopes] })),
   );
 
 const second = "https://second.example/mcp";

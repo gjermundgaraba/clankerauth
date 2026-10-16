@@ -10,7 +10,7 @@ import type * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
-import { Administration, InternalServerError } from "@clankerauth/admin-api";
+import { Administration, InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 import { listen } from "../../src/platform/node-http.ts";
 import { signIn, testWebApplication, WebApplication } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
@@ -88,12 +88,12 @@ const signedInOwner = Layer.effect(
     });
 
     expect(
-      (yield* send(cookie, "/api/createResource", {
+      (yield* send(cookie, "/api/putResource", {
         identifier: resource,
         name: "Example",
         scopes: ["example:read", "example:write"],
       })).status,
-    ).toBe(201);
+    ).toBe(200);
 
     return cookie;
   }),
@@ -214,12 +214,12 @@ it.live("one key reaches several resources, each with only its own scopes", () =
   Effect.gen(function* () {
     const host = "https://host.example.internal/";
     expect(
-      (yield* call("/api/createResource", {
+      (yield* call("/api/putResource", {
         identifier: host,
         name: "Host",
         scopes: ["host:read", "host:write"],
       })).status,
-    ).toBe(201);
+    ).toBe(200);
 
     const created = yield* call("/api/createApiKey", {
       name: "Controller",
@@ -239,13 +239,13 @@ it.live("one key reaches several resources, each with only its own scopes", () =
 it.live("resource policy removal and restoration retains only explicit grants", () =>
   Effect.gen(function* () {
     const key = yield* create;
-    yield* call("/api/updateResource", {
+    yield* call("/api/putResource", {
       identifier: resource,
       name: "Example",
       scopes: ["example:write"],
     });
     expect(yield* verify(key.key)).toBe("Unauthorized");
-    yield* call("/api/updateResource", {
+    yield* call("/api/putResource", {
       identifier: resource,
       name: "Example",
       scopes: ["example:read", "example:write", "example:new"],
@@ -253,7 +253,7 @@ it.live("resource policy removal and restoration retains only explicit grants", 
     expect(yield* verify(key.key)).toMatchObject({ scopes: ["example:read"] });
     yield* call("/api/deleteResource", { identifier: resource });
     expect(yield* verify(key.key)).toBe("Unauthorized");
-    yield* call("/api/createResource", {
+    yield* call("/api/putResource", {
       identifier: resource,
       name: "Example",
       scopes: ["example:read", "example:write"],
@@ -461,7 +461,7 @@ it.live("HTTP and MCP share administration contracts, writes, secrets and revoca
     expect(yield* verify(key.key)).toBe("Unauthorized");
 
     const refused = yield* Effect.flip(
-      administration.createResource({ identifier: "not a URL", name: "Invalid", scopes: [] }),
+      administration.putResource({ identifier: "not a URL", name: "Invalid", scopes: [] }),
     );
 
     expect(refused instanceof Action.InvalidInput ? refused.issues : refused).toEqual([

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { ClientIsAutomatic, ClientNotFound } from "@clankerauth/admin-api";
+import { ClientIsAutomatic, ClientNotFound } from "@gjermundgaraba/clankerauth-admin-api";
 import { persisted, type Sql } from "../platform/sqlite.ts";
 
 // why: a client that registered itself, through DCR or CIMD, has no owning user

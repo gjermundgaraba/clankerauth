@@ -128,12 +128,12 @@ try {
 
   assert.deepEqual(empty.resources, [builtin]);
 
-  const createdResource = await post("/api/createResource", resource, {
+  const createdResource = await post("/api/putResource", resource, {
     cookie,
     origin: baseURL,
   });
 
-  assert.equal(createdResource.status, 201, await createdResource.clone().text());
+  assert.equal(createdResource.status, 200, await createdResource.clone().text());
 
   const metadata = await (
     await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)

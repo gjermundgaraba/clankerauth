@@ -1,4 +1,4 @@
-import type { ResourceSummary } from "@clankerauth/admin-api";
+import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, flow, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {

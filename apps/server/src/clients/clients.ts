@@ -15,7 +15,7 @@ import {
   type ClientUpdateInput,
   type Client,
   type Connection,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Database, persisted, type Sql } from "../platform/sqlite.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";

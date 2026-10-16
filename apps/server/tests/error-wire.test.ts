@@ -6,7 +6,7 @@ import {
   ProviderRefused,
   UnreadableRequest,
   type IssuerError,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { APIError } from "better-auth/api";
 import { HttpServerResponse } from "effect/http";
 import { provider, refusal, respond } from "../src/issuer/errors.ts";

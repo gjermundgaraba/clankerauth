@@ -1,4 +1,4 @@
-import type { ApiKey, ResourceSummary } from "@clankerauth/admin-api";
+import type { ApiKey, ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Record } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {

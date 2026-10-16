@@ -213,12 +213,14 @@ curl "$CLANKERAUTH_BASE_URL/api/listClients" \
 
 [`@gjermundgaraba/clankerauth`](apps/cli/README.md) is the `clankerauth` command. `clankerauth
 login <url>` signs in as the owner through the browser, and every administration action is a
-command over `/api/owner` printing JSON. `login --resource <identifier> --scope <scopes>` signs
-in to an application's resource too, and `clankerauth token --resource <identifier>` prints a
-current access token for it, so a script takes its bearer token from there instead of keeping
-an API key.
+command over `/api/owner` printing JSON. `clankerauth login <application URL>` signs in to that
+application's resource too, with the scopes it publishes, and `clankerauth token <application
+URL>` prints a current access token for it, so a script takes its bearer token from
+there instead of keeping an API key. A program written with Effect takes it from `token` of
+the SDK's `/credentials` instead, and calls administration in process with
+[`@gjermundgaraba/clankerauth-admin-api`](packages/admin-api/README.md).
 
-See the breaking [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code, and [AGENTS.md](AGENTS.md) how the code is laid out.
 

@@ -1,25 +1,41 @@
 {
-  "name": "@clankerauth/admin-api",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@gjermundgaraba/clankerauth-admin-api",
+  "version": "0.24.0",
+  "description": "The clankerauth administration contract: its effect-actions actions, schemas, errors and HTTP bindings, for administering an issuer from a program.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerauth.git",
+    "directory": "packages/admin-api"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
-  "scripts": {
-    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput"
+  "publishConfig": {
+    "access": "public"
   },
-  "dependencies": {
-    "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "catalog:"
+  "scripts": {
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "test": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
+    "@gjermundgaraba/effect-actions": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@gjermundgaraba/effect-actions": "^0.18.0",
+    "effect": "^4.0.4"
+  },
+  "engines": {
+    "node": ">=26"
   }
 }

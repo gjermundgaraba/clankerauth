@@ -80,12 +80,12 @@ it.live(
       assert.equal((yield* issuer.call("/api/auth/sign-in/email", owner)).status, 200);
 
       assert.equal(
-        (yield* issuer.call("/api/createResource", {
+        (yield* issuer.call("/api/putResource", {
           identifier: resource,
           name: "Notes",
           scopes: ["notes:read", "notes:write"],
         })).status,
-        201,
+        200,
       );
 
       const verifierFor = () =>

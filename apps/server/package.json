@@ -1,6 +1,6 @@
 {
   "name": "@clankerauth/server",
-  "version": "0.23.1",
+  "version": "0.24.0",
   "private": true,
   "files": [
     "dist"
@@ -21,9 +21,9 @@
     "@better-auth/core": "catalog:",
     "@better-auth/kysely-adapter": "catalog:",
     "@better-auth/oauth-provider": "catalog:",
-    "@clankerauth/admin-api": "workspace:*",
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/clankerauth-admin-api": "workspace:*",
     "@gjermundgaraba/clankerauth-sdk": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
     "better-auth": "catalog:",

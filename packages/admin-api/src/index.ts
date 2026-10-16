@@ -227,6 +227,9 @@ export const ResourceInput = Schema.Struct({
 
 export const ResourceId = Schema.Struct({ identifier: Schema.String });
 
+/** What `putResource` stored, and whether it created the resource rather than updating it. */
+export const PutResourceResult = Schema.Struct({ resource: Resource, created: Schema.Boolean });
+
 export const ClientAccess = Schema.Struct({
   client_id: Schema.String,
   resource: Schema.String,
@@ -411,21 +414,22 @@ export const Administration = [
     input: ClientAccessInput,
     success: ClientAccessResult,
   }),
-  Action.make("createResource", {
-    description: "Create an OAuth resource and its scopes.",
+  Action.make("getResource", {
+    description: "Get one resource and its scopes by identifier.",
+    readOnly: true,
+    ...owned,
+    error: [ResourceNotFound, InternalServerError],
+    input: ResourceId,
+    success: ResourceSummary,
+  }),
+  Action.make("putResource", {
+    description:
+      "Create an OAuth resource, or update the one with its identifier, to exactly these name and scopes.",
     readOnly: false,
     ...owned,
     error: [ProviderRefused, InternalServerError],
     input: ResourceInput,
-    success: Resource.pipe(HttpApiSchema.status(201)),
-  }),
-  Action.make("updateResource", {
-    description: "Update an OAuth resource and its scopes.",
-    readOnly: false,
-    ...owned,
-    error: [ResourceNotFound, ProviderRefused, InternalServerError],
-    input: ResourceInput,
-    success: Resource,
+    success: PutResourceResult,
   }),
   Action.make("deleteResource", {
     description:

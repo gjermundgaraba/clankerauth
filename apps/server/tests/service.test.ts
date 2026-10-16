@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Context, Effect, Layer, Schema } from "effect";
 import { documentPaths } from "@clankerauth/web/document-paths";
-import { InternalServerError } from "@clankerauth/admin-api";
+import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 import { sql as query } from "kysely";
 import { describe, expect } from "vite-plus/test";
 import { createHash, randomBytes } from "node:crypto";
@@ -111,7 +111,7 @@ const resourceFixtures = [
   { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
 ];
 
-const createResourceFixtures = Effect.gen(function* () {
+const putResourceFixtures = Effect.gen(function* () {
   const listing = yield* json(yield* request("/api/listClients", {}));
 
   for (const resource of resourceFixtures) {
@@ -121,14 +121,14 @@ const createResourceFixtures = Effect.gen(function* () {
       )
     )
       continue;
-    const response = yield* request("/api/createResource", resource);
-    expect(response.status, yield* text(response)).toBe(201);
+    const response = yield* request("/api/putResource", resource);
+    expect(response.status, yield* text(response)).toBe(200);
   }
 });
 
 const client = (resource = resourceA, confidential = false) =>
   Effect.gen(function* () {
-    yield* createResourceFixtures;
+    yield* putResourceFixtures;
 
     const response = yield* request("/api/createClient", {
       client_name: "Test application",
@@ -144,7 +144,7 @@ const client = (resource = resourceA, confidential = false) =>
   });
 
 const dynamicClient = Effect.gen(function* () {
-  yield* createResourceFixtures;
+  yield* putResourceFixtures;
 
   const response = yield* request(
     "/api/auth/oauth2/register",
@@ -995,8 +995,8 @@ describe("dashboard resources and client access", () => {
   const access = (clientId: string, resources: string[]) =>
     request("/api/setClientAccess", { client_id: clientId, resources });
 
-  const updateResource = (identifier: string, scopes: string[], name = "Updated resource") =>
-    request("/api/updateResource", { identifier, name, scopes });
+  const putResource = (identifier: string, scopes: string[], name = "Updated resource") =>
+    request("/api/putResource", { identifier, name, scopes });
 
   const exchange = (
     clientId: string,
@@ -1044,9 +1044,15 @@ describe("dashboard resources and client access", () => {
         yield* onGeneration(
           Effect.gen(function* () {
             expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
-            expect((yield* request("/api/createResource", resource)).status).toBe(201);
-            expect((yield* request("/api/createResource", resource)).status).toBe(400);
-            expect((yield* updateResource(resourceA, ["read"], "Renamed MCP")).status).toBe(200);
+            expect(yield* json(yield* request("/api/putResource", resource))).toEqual({
+              resource,
+              created: true,
+            });
+            expect(yield* json(yield* request("/api/putResource", resource))).toEqual({
+              resource,
+              created: false,
+            });
+            expect((yield* putResource(resourceA, ["read"], "Renamed MCP")).status).toBe(200);
           }),
         );
 
@@ -1065,7 +1071,9 @@ describe("dashboard resources and client access", () => {
         yield* onGeneration(
           Effect.gen(function* () {
             expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
-            expect((yield* updateResource(resourceA, ["read"])).status).toBe(404);
+            expect((yield* request("/api/getResource", { identifier: resourceA })).status).toBe(
+              404,
+            );
             expect((yield* request("/api/deleteResource", { identifier: resourceA })).status).toBe(
               404,
             );
@@ -1091,12 +1099,12 @@ describe("dashboard resources and client access", () => {
           { ...valid, scopes: ["réad"] },
           { ...valid, scopes: ["offline_access"] },
         ]) {
-          expect((yield* request("/api/createResource", input)).status, JSON.stringify(input)).toBe(
+          expect((yield* request("/api/putResource", input)).status, JSON.stringify(input)).toBe(
             400,
           );
         }
 
-        const fragment = yield* request("/api/createResource", {
+        const fragment = yield* request("/api/putResource", {
           ...valid,
           identifier: "https://api.internal/#fragment",
         });
@@ -1109,7 +1117,7 @@ describe("dashboard resources and client access", () => {
           },
         ]);
 
-        const reserved = yield* request("/api/createResource", {
+        const reserved = yield* request("/api/putResource", {
           ...valid,
           scopes: ["read", " offline_access "],
         });
@@ -1118,9 +1126,7 @@ describe("dashboard resources and client access", () => {
           { path: ["scopes", 1], message: "offline_access is reserved" },
         ]);
 
-        expect((yield* request("/api/createResource", valid, { anonymous: true })).status).toBe(
-          401,
-        );
+        expect((yield* request("/api/putResource", valid, { anonymous: true })).status).toBe(401);
         expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
         const { context } = yield* Issuer;
         const ownerId = yield* (yield* OwnerAccount).find();
@@ -1133,7 +1139,7 @@ describe("dashboard resources and client access", () => {
             update: { createdAt: new Date(Date.now() - 16 * 60_000) },
           }),
         );
-        expect((yield* request("/api/createResource", valid)).status).toBe(201);
+        expect((yield* request("/api/putResource", valid)).status).toBe(200);
         expect((yield* listing()).resources).toEqual([
           administrationResource(baseURL),
           { ...valid, builtIn: false },
@@ -1160,7 +1166,7 @@ describe("dashboard resources and client access", () => {
   it.live("domain refusals and internal failures share one wire vocabulary", () =>
     Effect.gen(function* () {
       const resource = { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read"] };
-      expect((yield* request("/api/createResource", resource)).status).toBe(201);
+      expect((yield* request("/api/putResource", resource)).status).toBe(200);
 
       const reserved = yield* request("/api/deleteResource", {
         identifier: `${baseURL}/`,
@@ -1193,12 +1199,12 @@ describe("dashboard resources and client access", () => {
   it.live("resources accept any absolute URI and may define no custom scopes", () =>
     Effect.gen(function* () {
       const urn = { identifier: "urn:example:reports", name: "Reports", scopes: [] };
-      expect((yield* request("/api/createResource", urn)).status).toBe(201);
+      expect((yield* request("/api/putResource", urn)).status).toBe(200);
       expect((yield* listing()).resources).toEqual([
         administrationResource(baseURL),
         { ...urn, builtIn: false },
       ]);
-      expect((yield* updateResource(urn.identifier, [], "Renamed reports")).status).toBe(200);
+      expect((yield* putResource(urn.identifier, [], "Renamed reports")).status).toBe(200);
       expect((yield* request("/api/deleteResource", { identifier: urn.identifier })).status).toBe(
         200,
       );
@@ -1281,8 +1287,8 @@ describe("dashboard resources and client access", () => {
           scopes: ["r", "Files.Read", "read_all"],
         };
 
-        const added = yield* request("/api/createResource", resource);
-        expect(added.status, yield* text(added)).toBe(201);
+        const added = yield* request("/api/putResource", resource);
+        expect(added.status, yield* text(added)).toBe(200);
         const flow = authorization(app.client_id, resource.identifier, { scope: "r" });
         const denied = yield* request(flow.path);
         expect(denied.status).not.toBe(200);
@@ -1360,7 +1366,7 @@ describe("dashboard resources and client access", () => {
   it.live("the same scope label has independent consent on each resource", () =>
     Effect.gen(function* () {
       const app = yield* dynamicClient;
-      expect((yield* updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
+      expect((yield* putResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
       yield* authorize(app.client_id, resourceA);
       const responseB = yield* request(unprompted(app.client_id, resourceB).path);
       const consentB = new URL(responseB.headers.get("location")!, baseURL);
@@ -1401,11 +1407,11 @@ describe("dashboard resources and client access", () => {
         const app = yield* dynamicClient;
         const issued = yield* tokens(app.client_id);
         expect(
-          (yield* updateResource(resourceA, ["notes:read", "notes:write"], "Renamed")).status,
+          (yield* putResource(resourceA, ["notes:read", "notes:write"], "Renamed")).status,
         ).toBe(200);
         expect((yield* refresh(app.client_id, issued.refresh_token, resourceA)).status).toBe(200);
         expect(
-          (yield* updateResource(resourceA, ["notes:read", "notes:write", "notes:admin"])).status,
+          (yield* putResource(resourceA, ["notes:read", "notes:write", "notes:admin"])).status,
         ).toBe(200);
 
         const metadata = yield* json(
@@ -1436,7 +1442,7 @@ describe("dashboard resources and client access", () => {
       Effect.gen(function* () {
         const app = yield* client();
         expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-        expect((yield* updateResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
+        expect((yield* putResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
         const sharedScopes = "offline_access notes:read";
         const issuedA = yield* tokens(app.client_id, resourceA);
         const retainedRefreshA = yield* tokens(app.client_id, resourceA);
@@ -1444,7 +1450,7 @@ describe("dashboard resources and client access", () => {
         const pendingA = yield* authorize(app.client_id, resourceA);
         const retainedA = yield* authorize(app.client_id, resourceA);
         const pendingB = yield* authorize(app.client_id, resourceB, sharedScopes);
-        expect((yield* updateResource(resourceA, ["notes:write"])).status).toBe(200);
+        expect((yield* putResource(resourceA, ["notes:write"])).status).toBe(200);
         const narrowed = yield* refresh(app.client_id, issuedA.refresh_token, resourceA);
         expect(narrowed.status).toBe(200);
         const narrowedToken = yield* json(narrowed);
@@ -1461,7 +1467,7 @@ describe("dashboard resources and client access", () => {
         expect((yield* json(narrowedCode)).scope.split(" ")).not.toContain("notes:read");
         expect((yield* refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
         expect((yield* exchange(app.client_id, pendingB, resourceB)).status).toBe(200);
-        expect((yield* updateResource(resourceA, ["notes:read", "notes:write"])).status).toBe(200);
+        expect((yield* putResource(resourceA, ["notes:read", "notes:write"])).status).toBe(200);
 
         const restoredRefresh = yield* refresh(
           app.client_id,
@@ -1528,9 +1534,7 @@ describe("dashboard resources and client access", () => {
         sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
         () =>
           Effect.gen(function* () {
-            expect((yield* updateResource(resourceA, ["notes:read", "new:scope"])).status).toBe(
-              500,
-            );
+            expect((yield* putResource(resourceA, ["notes:read", "new:scope"])).status).toBe(500);
             expect(yield* listing()).toEqual(before);
 
             const metadataAfter = yield* json(

@@ -132,7 +132,7 @@ await test("a domain folder imports Effect, the contracts and other domains, nev
       "apps/server/src/clients",
       imports(
         "effect",
-        "@clankerauth/admin-api",
+        "@gjermundgaraba/clankerauth-admin-api",
         "../../platform/sqlite.ts",
         "kysely",
         "node:crypto",

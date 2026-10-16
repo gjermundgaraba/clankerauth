@@ -17,7 +17,7 @@ vp add effect
 The `/session` and `/effect-actions` entry points also need effect-actions, an optional peer. Install this range: the SDK's declarations are built against it, and under `skipLibCheck` they silently degrade to `any` with another.
 
 ```sh
-vp add @gjermundgaraba/effect-actions@^0.17.0
+vp add @gjermundgaraba/effect-actions@^0.18.0
 ```
 
 ## Entry points
@@ -29,9 +29,37 @@ vp add @gjermundgaraba/effect-actions@^0.17.0
 | `…/clankerauth-sdk/session`        | yes                  | **yes**      | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl`, `signOutPath`, `returnToParameter` |
 | `…/clankerauth-sdk/effect-actions` | yes                  | no           | `Resource`                                                                                                                |
 | `…/clankerauth-sdk/key-list`       | no                   | no           | the key list format and `keyPrefix`, for issuers and fakes                                                                |
+| `…/clankerauth-sdk/credentials`    | no                   | no           | `token` and `authorizing`, a program's bearer token for an application; the owner's sign-ins the CLI keeps (Node only)    |
 | `…/clankerauth-sdk/testing`        | no                   | no           | `startFakeIssuer`, for tests (Node only)                                                                                  |
 
 The package is free of side effects, so a bundler drops what a page does not use. Errors are **not** re-exported from the root: a shared contract imports them from `/errors`, and nothing about that import pulls token verification into a browser bundle.
+
+## Call an application from a program
+
+A program calling an application behind clankerauth, such as the application's own CLI, takes its bearer token from `token` of `/credentials`, or has `authorizing` send it with each request. The owner signs in once with `clankerauth login https://notes.internal`, which reads the resource, its issuer and its scopes from the application's `/.well-known/oauth-protected-resource`; `token` then refreshes that sign-in as it expires. A token the environment gives, an access token or an API key, is returned instead when it is set, so the same program runs unattended.
+
+```ts
+import { Config, Effect } from "effect";
+import { HttpClient } from "effect/http";
+import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
+
+const notes = Credentials.authorizing({
+  url: "https://notes.internal",
+  token: Config.Redacted("NOTES_TOKEN"),
+});
+
+const program = Effect.gen(function* () {
+  const client = notes(yield* HttpClient.HttpClient);
+
+  return yield* client.get("https://notes.internal/api/notes");
+});
+```
+
+`authorizing` takes the options `token` does and is an effect-actions client's `transformClient`: `ActionHttp.client(NotesHttp, { baseUrl, transformClient: notes })` gives methods that fail with `SignInRequired` and `TokenUnavailable` too, and a long run is refreshed as it goes.
+
+`url` is any address under the resource, such as the one the program calls: the sign-in used is the one whose resource holds it, the most specific when several do. `token` fails with `SignInRequired` when there is no sign-in to use, its `command` the `clankerauth login` to run, and with `TokenUnavailable` when the file or the issuer fails. A token is never within a minute of expiring, so ask again for each call or each run. Programs and the CLI share the sign-in file, `~/.config/clankerauth/sign-ins.json`, one sign-in per resource whatever its issuer: every change to it holds its lock, so an expired sign-in is refreshed once, whoever asks, and a refresh that is interrupted still keeps the token the issuer rotated.
+
+A program that signs its user in itself, as the CLI's `login` does, calls `signIn(url, { scope, approve })`: `approve` shows the owner the issuer's approval page, and the sign-in is kept for `token`, revoking any it replaces. `list` gives the sign-ins kept, and `signOut(url?)` forgets and revokes the one whose resource holds `url`, or every one.
 
 ## Verify tokens directly
 

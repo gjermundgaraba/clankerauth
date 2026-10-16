@@ -4,7 +4,7 @@ import {
   type Client,
   type ApiKey,
   type ResourceSummary,
-} from "@clankerauth/admin-api";
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Record, Result, Schema, String, pipe } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -256,7 +256,13 @@ const expiryOf = (expiry: string): Result.Result<Option.Option<string>, string> 
 
 const applicationTypeOf = (draft: ClientDraft) => (draft.isNative ? "native" : "web");
 
-const resourceChangeOf = (mode: typeof ResourceMode.Type, draft: ResourceDraft): Change => {
+const DUPLICATE_RESOURCE = "A Resource with this identifier exists already: edit it instead.";
+
+const resourceChangeOf = (
+  mode: typeof ResourceMode.Type,
+  draft: ResourceDraft,
+  existing: ReadonlyArray<string>,
+): Result.Result<Change, string> => {
   const fields = {
     identifier: draft.identifier.trim(),
     name: draft.name.trim(),
@@ -264,8 +270,11 @@ const resourceChangeOf = (mode: typeof ResourceMode.Type, draft: ResourceDraft):
   };
 
   return ResourceMode.match(mode, {
-    Add: () => Change.CreateResource(fields),
-    Edit: () => Change.UpdateResource(fields),
+    Add: () =>
+      Array.contains(existing, fields.identifier)
+        ? Result.fail(DUPLICATE_RESOURCE)
+        : Result.succeed(Change.PutResource(fields)),
+    Edit: () => Result.succeed(Change.PutResource(fields)),
   });
 };
 
@@ -314,9 +323,12 @@ const clientChangeOf = (
       ),
   });
 
-export const changeOf = (form: Model): Result.Result<Change, string> =>
+export const changeOf = (
+  form: Model,
+  resources: ReadonlyArray<string>,
+): Result.Result<Change, string> =>
   Model.match(form, {
-    Resource: ({ mode, draft }) => Result.succeed(resourceChangeOf(mode, draft)),
+    Resource: ({ mode, draft }) => resourceChangeOf(mode, draft, resources),
     Key: ({ mode, draft }) => keyChangeOf(mode, draft),
     Client: ({ mode, draft }) => clientChangeOf(mode, draft),
   });
