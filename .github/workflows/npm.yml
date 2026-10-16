@@ -29,11 +29,16 @@ jobs:
       # pnpm resolves the workspace catalog protocol in the published manifest; npm would not.
       # Each package lists this repository and workflow as its npm trusted publisher, so
       # publishing authenticates with the job's OIDC token and attaches provenance.
-      - run: pnpm publish --no-git-checks
-        working-directory: packages/sdk
-      - run: pnpm publish --no-git-checks
-        working-directory: packages/admin-api
-      - run: pnpm publish --no-git-checks
-        working-directory: packages/dev
-      - run: pnpm publish --no-git-checks
-        working-directory: apps/cli
+      # A version npm has already, published by hand or by a run that failed partway, is skipped.
+      - name: Publish each package whose version npm does not have yet
+        run: |
+          for directory in packages/sdk packages/admin-api packages/dev apps/cli; do
+            name="$(node -p "require('./$directory/package.json').name")"
+            version="$(node -p "require('./$directory/package.json').version")"
+
+            if curl --silent --fail --output /dev/null "https://registry.npmjs.org/$name/$version"; then
+              echo "$name@$version is published already"
+            else
+              (cd "$directory" && pnpm publish --no-git-checks)
+            fi
+          done
