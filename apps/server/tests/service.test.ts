@@ -705,8 +705,8 @@ describe("OAuth boundaries and lifecycle", () => {
           { anonymous: true, form: true, authorization: basic(rotated.client_secret) },
         );
 
-        expect(refresh.status, yield* text(refresh)).toBe(400);
-        expect((yield* json(refresh)).error).toBe("invalid_grant");
+        expect(refresh.status, yield* text(refresh)).toBe(401);
+        expect((yield* json(refresh)).error).toBe("invalid_client");
       }).pipe(Effect.provide(ownerIssuer())),
   );
 
@@ -848,8 +848,8 @@ describe("OAuth boundaries and lifecycle", () => {
           { form: true, anonymous: true },
         );
 
-        expect(wrongVerifier.status).toBe(401);
-        expect((yield* json(wrongVerifier)).error).toBe("invalid_request");
+        expect(wrongVerifier.status).toBe(400);
+        expect((yield* json(wrongVerifier)).error).toBe("invalid_grant");
       }).pipe(Effect.provide(ownerIssuer())),
   );
 
