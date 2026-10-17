@@ -4,13 +4,13 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-browser": 4.0.4
-  "@effect/platform-node": 4.0.4
+  "@effect/platform-browser": 4.0.5
+  "@effect/platform-node": 4.0.5
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.0.4
-  "@effect/vitest": 4.0.4
+  "@effect/platform-node-shared": 4.0.5
+  "@effect/vitest": 4.0.5
   foldkit: 0.168.0
   "@foldkit/ui": 0.168.0
   "@foldkit/vite-plugin": 0.27.1
@@ -20,7 +20,7 @@ catalog:
   "@better-auth/api-key": 1.7.7
   better-auth: 1.7.7
   better-call: 1.4.0
-  effect: 4.0.4
+  effect: 4.0.5
   "@types/node": 26.6.4
   jose: 6.2.12
   typescript: 7.0.2
@@ -33,7 +33,7 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.7
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.88.0
-  "@gjermundgaraba/effect-actions": 0.18.0
+  "@gjermundgaraba/effect-actions": 0.18.2
   "@gjermundgaraba-designs/pixel-paper": 0.15.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2
@@ -47,10 +47,10 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "*"
-    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.4 instance serves all.
-    effect: 4.0.4
-    "@effect/platform-browser": 4.0.4
-    "@effect/platform-node": 4.0.4
+    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.5 instance serves all.
+    effect: 4.0.5
+    "@effect/platform-browser": 4.0.5
+    "@effect/platform-node": 4.0.5
     vitest: "*"
   allowAny:
     - vite
@@ -70,12 +70,6 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
-  # Effect 4.0.4 is newer than the one-day release age; drop these once it is not.
-  - effect@4.0.4
-  - "@effect/platform-browser@4.0.4"
-  - "@effect/platform-node@4.0.4"
-  - "@effect/platform-node-shared@4.0.4"
-  - "@effect/vitest@4.0.4"
   # Foldkit 0.168.0 is newer than the one-day release age; drop these once it is not.
   - foldkit@0.168.0
   - "@foldkit/ui@0.168.0"
