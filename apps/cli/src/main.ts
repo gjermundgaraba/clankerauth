@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { Config, Console, Effect, Option, Redacted, type Schema } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient } from "effect/http";
@@ -21,12 +22,42 @@ const json = (value: Schema.Json) => Console.log(JSON.stringify(value, null, 2))
 const urlArgument = (description: string) =>
   Argument.String("url").pipe(Argument.withDescription(description), Argument.optional);
 
-const approve = (page: URL) =>
-  Effect.sync(() =>
-    process.stderr.write(
-      `Open this URL in your browser to approve the sign-in:\n\n  ${page.href}\n\n`,
-    ),
-  );
+const browserOpener = (url: string): readonly [string, ReadonlyArray<string>] => {
+  switch (process.platform) {
+    case "darwin":
+      return ["open", [url]];
+    case "win32":
+      return ["rundll32", ["url.dll,FileProtocolHandler", url]];
+    default:
+      return ["xdg-open", [url]];
+  }
+};
+
+const openInBrowser = (page: URL) =>
+  Effect.sync(() => {
+    const [command, args] = browserOpener(page.href);
+
+    // why: best effort, as over SSH there is no browser to open; the URL is printed for that.
+    spawn(command, args, { stdio: "ignore", detached: true })
+      .on("error", () => undefined)
+      .unref();
+  });
+
+const approve = (browser: boolean) => (page: URL) =>
+  browser
+    ? Effect.andThen(
+        Effect.sync(() =>
+          process.stderr.write(
+            `Approve the sign-in in your browser. If it did not open, open this URL:\n\n  ${page.href}\n\n`,
+          ),
+        ),
+        openInBrowser(page),
+      )
+    : Effect.sync(() =>
+        process.stderr.write(
+          `Open this URL in your browser to approve the sign-in:\n\n  ${page.href}\n\n`,
+        ),
+      );
 
 const loginCommand = Command.make(
   "login",
@@ -42,15 +73,19 @@ const loginCommand = Command.make(
       ),
       Flag.optional,
     ),
-  },
-  ({ url, scope }) =>
-    Credentials.signIn(url, { scope: Option.getOrUndefined(scope), approve }).pipe(
-      Effect.mapError(refused),
-      Effect.flatMap(json),
+    noBrowser: Flag.Boolean("no-browser").pipe(
+      Flag.withDescription("Print the approval URL without opening it in the browser"),
+      Flag.withDefault(false),
     ),
+  },
+  ({ url, scope, noBrowser }) =>
+    Credentials.signIn(url, {
+      scope: Option.getOrUndefined(scope),
+      approve: approve(!noBrowser),
+    }).pipe(Effect.mapError(refused), Effect.flatMap(json)),
 ).pipe(
   Command.withDescription(
-    "Sign in as the issuer's owner to a resource: approve the URL it prints in the browser. The resource's issuer and scopes are read from its /.well-known/oauth-protected-resource. Sign-ins are kept in ~/.config/clankerauth, each beside the others, whatever its issuer.",
+    "Sign in as the issuer's owner to a resource: approve the page it opens in the browser, or the URL it prints. The resource's issuer and scopes are read from its /.well-known/oauth-protected-resource. Sign-ins are kept in ~/.config/clankerauth, each beside the others, whatever its issuer.",
   ),
 );
 

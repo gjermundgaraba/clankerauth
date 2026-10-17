@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -179,24 +179,35 @@ const home = async () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-  const loginAt = async (owner: Owner, url: string, ...flags: ReadonlyArray<string>) => {
-    let approving: Promise<void> | undefined;
+  const approving = async (
+    owner: Owner,
+    args: ReadonlyArray<string>,
+    env: Readonly<Record<string, string>> = {},
+  ) => {
+    let approval: Promise<void> | undefined;
 
-    const result = await run(["login", url, ...flags], (stderr, stop) => {
-      const url = /https?:\/\/\S+\/oauth2\/authorize\S+/.exec(stderr)?.[0];
+    const result = await run(
+      ["login", ...args],
+      (stderr, stop) => {
+        const url = /https?:\/\/\S+\/oauth2\/authorize\S+/.exec(stderr)?.[0];
 
-      // why: a failed approval would otherwise leave `login` waiting out its approval window.
-      if (url !== undefined && approving === undefined)
-        approving = approve(owner, url).catch((error: Error) => {
-          stop();
-          throw error;
-        });
-    });
+        // why: a failed approval would otherwise leave `login` waiting out its approval window.
+        if (url !== undefined && approval === undefined)
+          approval = approve(owner, url).catch((error: Error) => {
+            stop();
+            throw error;
+          });
+      },
+      env,
+    );
 
-    await approving;
+    await approval;
 
     return result;
   };
+
+  const loginAt = (owner: Owner, url: string, ...flags: ReadonlyArray<string>) =>
+    approving(owner, [url, "--no-browser", ...flags]);
 
   const stored = async () =>
     Schema.decodeUnknownSync(Schema.fromJsonString(SignIns))(await readFile(file, "utf8"));
@@ -222,7 +233,7 @@ const home = async () => {
   const login = (owner: Owner, ...flags: ReadonlyArray<string>) =>
     loginAt(owner, owner.issuer.url, ...flags);
 
-  return { file, run, login, loginAt, stored, rewrite, expireAll };
+  return { config, file, run, approving, login, loginAt, stored, rewrite, expireAll };
 };
 
 const signedIn = async (...flags: ReadonlyArray<string>) => {
@@ -325,6 +336,37 @@ test("login signs in through the owner's approval and keeps its tokens in an own
   expect(signIn.url).toBe(owner.issuer.url);
   expect(result.stdout + result.stderr).not.toContain(signIn.refreshToken);
   expect((await stat(cli.file)).mode & 0o777).toBe(0o600);
+});
+
+test("login opens the approval page in the browser, and prints its URL", async () => {
+  const owner = await startOwner();
+  const cli = await home();
+  const opened = join(cli.config, "opened");
+  const bin = join(cli.config, "bin");
+
+  await mkdir(bin);
+  await writeFile(
+    join(bin, process.platform === "darwin" ? "open" : "xdg-open"),
+    `#!/bin/sh\necho "$1" > "${opened}"\n`,
+    { mode: 0o755 },
+  );
+
+  const result = await cli.approving(owner, [owner.issuer.url], {
+    PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+  });
+
+  expect(result.code, result.stderr).toBe(0);
+  const printed = /https?:\/\/\S+\/oauth2\/authorize\S+/.exec(result.stderr)?.[0];
+  expect(printed).toBeDefined();
+  // why: the opener runs detached, so it may write after `login` has exited.
+  await expect
+    .poll(() =>
+      readFile(opened, "utf8").then(
+        (url) => url.trim(),
+        () => undefined,
+      ),
+    )
+    .toBe(printed);
 });
 
 test("login refuses an address the resource is not published at, and says which it is", async () => {
