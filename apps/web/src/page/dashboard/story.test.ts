@@ -3,12 +3,19 @@ import { Command, given, message, model, story } from "foldkit/story";
 import { modifyFields } from "foldkit/struct";
 import { Array, Option } from "effect";
 import { Dialog as UiDialog } from "@foldkit/ui";
-import { ConfirmDialog, CopyButton, Dialog, Focus } from "@gjermundgaraba-designs/pixel-paper";
+import {
+  Announcer,
+  Card,
+  ConfirmDialog,
+  CopyButton,
+  Dialog,
+  Focus,
+} from "@gjermundgaraba-designs/pixel-paper";
 import { describe, expect, test } from "vite-plus/test";
 
 import { Change, Credential } from "./change.ts";
-import { Announce, SaveChange, SignOut } from "./command.ts";
-import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
+import { SaveChange, SignOut } from "./command.ts";
+import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
 import {
   SECOND_READ,
@@ -43,15 +50,33 @@ const editing = (formMessage: Form.Message) => Message.GotFormMessage({ message:
 const confirming = (confirmMessage: ConfirmDialog.Message) =>
   Message.GotConfirmMessage({ message: confirmMessage });
 
-const askingToCloseEditor = Message.GotEditorMessage({
-  message: Dialog.Message.GotDialogMessage({ message: UiDialog.Message.RequestedClose() }),
+const requestingClose = Dialog.Message.GotDialogMessage({
+  message: UiDialog.Message.RequestedClose(),
 });
+
+const askingToCloseEditor = Message.GotEditorMessage({ message: requestingClose });
 
 const created = Change.PutResource({
   identifier: "https://second.fixture.invalid",
   name: "Fixture API",
   scopes: ["read", "write"],
 });
+
+const submittingCreated = [
+  message(Message.ClickedOpenForm({ form: Form.addResource() })),
+  Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
+  message(editing(Form.Message.UpdatedResourceName({ value: " Fixture API " }))),
+  message(
+    editing(Form.Message.UpdatedResourceIdentifier({ value: "https://second.fixture.invalid" })),
+  ),
+  message(editing(Form.Message.UpdatedResourceScopes({ value: "read  write" }))),
+  message(Message.SubmittedForm()),
+  Command.expectExact(
+    Focus.Focus({ id: Card.submitId(EDITOR_FORM_ID) }),
+    SaveChange({ change: created }),
+  ),
+  Command.resolve(Focus.Focus, Message.CompletedFocus()),
+];
 
 describe("dashboard update", () => {
   test("a change asked for while another saves is ignored", () => {
@@ -86,7 +111,7 @@ describe("dashboard update", () => {
       }),
       Command.resolveAll(
         [listingQuery.Fetch, readOf(SECOND_READ, listing)],
-        [Announce, Message.CompletedAnnounce()],
+        [Announcer.Announce, Message.CompletedAnnounce()],
       ),
       model((next) => {
         expect(isHeld(next)).toBe(false);
@@ -132,7 +157,7 @@ describe("dashboard update", () => {
       Command.resolveAll(
         [UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog()],
         [listingQuery.Fetch, readOf(SECOND_READ, listing)],
-        [Announce, Message.CompletedAnnounce()],
+        [Announcer.Announce, Message.CompletedAnnounce()],
       ),
       model((next) => {
         expect(ConfirmDialog.isOpen(next.confirm)).toBe(false);
@@ -180,17 +205,7 @@ describe("dashboard update", () => {
     story(
       update,
       given(listed),
-      message(Message.ClickedOpenForm({ form: Form.addResource() })),
-      Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
-      message(editing(Form.Message.UpdatedResourceName({ value: " Fixture API " }))),
-      message(
-        editing(
-          Form.Message.UpdatedResourceIdentifier({ value: "https://second.fixture.invalid" }),
-        ),
-      ),
-      message(editing(Form.Message.UpdatedResourceScopes({ value: "read  write" }))),
-      message(Message.SubmittedForm()),
-      Command.expectExact(SaveChange({ change: created })),
+      ...submittingCreated,
       model((next) => {
         expect(next.activity).toEqual(Activity.Saving());
       }),
@@ -201,7 +216,7 @@ describe("dashboard update", () => {
       Command.resolveAll(
         [UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog()],
         [listingQuery.Fetch, readOf(SECOND_READ, listing)],
-        [Announce, Message.CompletedAnnounce()],
+        [Announcer.Announce, Message.CompletedAnnounce()],
       ),
       model((next) => {
         expect(Dialog.isOpen(next.editor)).toBe(false);
@@ -210,19 +225,63 @@ describe("dashboard update", () => {
     );
   });
 
-  test("the editor stays open while its change saves", () => {
-    const savingInEditor = modifyFields(saving(listed), {
-      editor: (editor) => Dialog.open(editor).model,
-      maybeForm: () => Option.some(Form.addResource()),
-    });
-
+  test("the editor: a close while busy changes nothing", () => {
     story(
       update,
-      given(savingInEditor),
+      given(
+        saving(
+          modifyFields(listed, {
+            editor: (editor) => Dialog.open(editor).model,
+            maybeForm: () => Option.some(Form.addResource()),
+          }),
+        ),
+      ),
       message(askingToCloseEditor),
       Command.expectNone(),
       model((next) => {
         expect(Dialog.isOpen(next.editor)).toBe(true);
+      }),
+    );
+  });
+
+  test("the question: a close while busy changes nothing", () => {
+    story(
+      update,
+      given(
+        saving(
+          modifyFields(listed, {
+            confirm: (confirm) => ConfirmDialog.open(confirm).model,
+            maybePending: () => Option.some(deleteKey),
+          }),
+        ),
+      ),
+      message(confirming(ConfirmDialog.Message.GotDialogMessage({ message: requestingClose }))),
+      message(confirming(ConfirmDialog.Message.ClickedCancel())),
+      Command.expectNone(),
+      model((next) => {
+        expect(ConfirmDialog.isOpen(next.confirm)).toBe(true);
+      }),
+    );
+  });
+
+  test("the editor can be left once its save is refused", () => {
+    story(
+      update,
+      given(listed),
+      ...submittingCreated,
+      Command.resolve(SaveChange, Message.FailedSaveChange({ reason: "Fixture request failed" })),
+      Command.expectNone(),
+      model((next) => {
+        expect(next.activity).toEqual(Activity.Idle());
+        expect(Dialog.isOpen(next.editor)).toBe(true);
+        expect(Option.map(refusalAt(next, "Editor"), ({ reason }) => reason)).toEqual(
+          Option.some("Fixture request failed"),
+        );
+      }),
+      message(askingToCloseEditor),
+      Command.resolve(UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog()),
+      model((next) => {
+        expect(Dialog.isOpen(next.editor)).toBe(false);
       }),
     );
   });
@@ -287,11 +346,11 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({ change: rotate, maybeCredential: Option.some(secret) }),
       ),
       Command.expectExact(
-        Announce({ text: "Secret rotated. Store it now." }),
+        Announcer.Announce({ text: "Secret rotated. Store it now." }),
         Focus.Focus({ id: "copy-client:fixture-client" }),
       ),
       Command.resolveAll(
-        [Announce, Message.CompletedAnnounce()],
+        [Announcer.Announce, Message.CompletedAnnounce()],
         [Focus.Focus, Message.CompletedFocus()],
       ),
       model((next) => {
@@ -310,7 +369,7 @@ describe("dashboard update", () => {
         expect(Array.map(next.credentials, ({ credential }) => credential)).toEqual([apiKey]);
         expect(isHeld(next)).toBe(true);
       }),
-      Command.resolve(Announce({ text: NOT_REFRESHED }), Message.CompletedAnnounce()),
+      Command.resolve(Announcer.Announce({ text: NOT_REFRESHED }), Message.CompletedAnnounce()),
     );
   });
 
@@ -324,13 +383,13 @@ describe("dashboard update", () => {
       }),
       Command.resolveAll(
         [listingQuery.Fetch, failedReadOf(SECOND_READ)],
-        [Announce({ text: "Key deleted." }), Message.CompletedAnnounce()],
+        [Announcer.Announce({ text: "Key deleted." }), Message.CompletedAnnounce()],
       ),
       model((next) => {
         expect(AsyncData.isStale(listingOf(next))).toBe(true);
         expect(next.credentials).toEqual([]);
       }),
-      Command.resolve(Announce({ text: NOT_REFRESHED }), Message.CompletedAnnounce()),
+      Command.resolve(Announcer.Announce({ text: NOT_REFRESHED }), Message.CompletedAnnounce()),
     );
   });
 

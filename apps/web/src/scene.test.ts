@@ -17,7 +17,7 @@ import {
 import type { Url } from "foldkit/url";
 import { modifyFields } from "foldkit/struct";
 import { Dialog as UiDialog } from "@foldkit/ui";
-import { Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
 import { describe, test } from "vite-plus/test";
 
 import { listed } from "./page/dashboard/dashboard.fixture.ts";
@@ -42,6 +42,7 @@ describe("application view", () => {
       type(label("Email"), "owner@fixture.invalid"),
       type(label("Password"), "correct horse"),
       click(role("button", { name: "sign in" })),
+      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Login.Message.CompletedFocus()),
       Command.resolve(
         Login.SignIn({ email: "owner@fixture.invalid", password: "correct horse" }),
         Login.Message.SucceededSignIn(),
@@ -59,7 +60,8 @@ describe("application view", () => {
       given(checkedAt(urlAt("/login"), Access.SignedOut())),
       type(label("Email"), "owner@fixture.invalid"),
       type(label("Password"), "wrong"),
-      submit(role("form")),
+      submit(role("form", { name: "Sign in" })),
+      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Login.Message.CompletedFocus()),
       Command.resolve(Login.SignIn, Login.Message.FailedSignIn({ reason: "Sign-in failed." })),
       expect(text("Sign-in failed.", { exact: false })).toExist(),
       expect(role("button", { name: "sign in" })).toExist(),
@@ -107,17 +109,13 @@ describe("application view", () => {
           page: () => Page.Dashboard({ dashboard: listed }),
         }),
       ),
-      Mount.resolve(
-        { name: TopBar.MeasureHeight.name },
-        Dashboard.Message.GotTopBarMessage({ message: TopBar.Message.CompletedMeasureHeight() }),
+      Mount.resolveAll(
+        ...TopBar.sceneMounts((message) => Dashboard.Message.GotTopBarMessage({ message })),
       ),
       expectAll(all.role("status")).toHaveCount(1),
       click(role("button", { name: "delete Automation" })),
       Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
-      Mount.resolveAll(
-        [UiDialog.AcquireResources, UiDialog.Message.SucceededAcquireResources()],
-        [Dialog.BindActionKeys, Dialog.Message.PressedActionKey({ direction: "Next" })],
-      ),
+      Mount.resolveAll(...Dialog.sceneMounts),
       expectAll(all.role("status")).toHaveCount(1),
       inside(role("alertdialog", { name: "Delete API key" }), expect(role("status")).toExist()),
     );

@@ -34,7 +34,7 @@ import {
 } from "../../route.ts";
 import { Credential, credentialId } from "./change.ts";
 import { clientsHeadView, clientsPanels } from "./clients.ts";
-import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
+import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
 import * as FormView from "./formView.ts";
 import { grantableResources, keysHeadView, keysPanels } from "./keys.ts";
@@ -329,32 +329,17 @@ const editorCardView = (
 ): Html => {
   const { title, submit } = FormView.labelsOf(form);
 
-  const isFormSaving = isSaving(model);
-
-  return Card.view(
+  return Card.formView(
     {
+      id: EDITOR_FORM_ID,
       title,
       titleAttributes: render.title,
       closeAttributes: render.closeButton,
-      isCloseHeld: isFormSaving,
+      isBusy: isSaving(model),
       onSubmit: Message.SubmittedForm(),
       actionBarAttributes: render.actionBar,
-      actions: [
-        Button.view(
-          { label: "cancel", isDisabled: isFormSaving, attributes: render.closeButton },
-          h,
-        ),
-        Button.view(
-          {
-            label: submit,
-            type: "submit",
-            variant: "Primary",
-            isDefault: true,
-            isBusy: isFormSaving,
-          },
-          h,
-        ),
-      ],
+      cancel: "cancel",
+      submit,
       body: [
         ...Option.toArray(
           Option.map(refusalAt(model, "Editor"), ({ title: refusalTitle, reason }) =>
@@ -369,7 +354,6 @@ const editorCardView = (
             resources: Form.Model.guards.Key(form)
               ? grantableResources(context)
               : context.listing.overview.resources,
-            isSaving: isFormSaving,
             initialFocus: render.initialFocus,
           },
           toParentMessage: (message) => Message.GotFormMessage({ message }),
@@ -402,8 +386,6 @@ const editorView = (model: Model, context: SectionContext, h: HtmlBuilder<Messag
 const NO_CONFIRMATION = { title: "", question: "", body: "", label: "", isDanger: false };
 
 const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const isConfirmSaving = isSaving(model);
-
   const confirmation = Option.getOrElse(pendingConfirmation(model), () => NO_CONFIRMATION);
 
   return h.submodel({
@@ -416,8 +398,7 @@ const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
       body: [confirmation.body],
       label: confirmation.label,
       isDanger: confirmation.isDanger,
-      isBusy: isConfirmSaving,
-      isCloseHeld: isConfirmSaving,
+      isBusy: isSaving(model),
       toDetailView: Option.match(refusalAt(model, "Confirm"), {
         onNone: () => undefined,
         onSome:

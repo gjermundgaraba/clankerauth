@@ -1,5 +1,5 @@
 import { Option } from "effect";
-import { Focus } from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Focus } from "@gjermundgaraba-designs/pixel-paper";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, test } from "vite-plus/test";
 
@@ -30,10 +30,14 @@ describe("login update", () => {
       update,
       ...filledIn("rd=%2Fkeys"),
       message(Message.SubmittedSignIn()),
-      Command.expectExact(SignIn({ email: "owner@fixture.invalid", password: "correct horse" })),
+      Command.expectExact(
+        Focus.Focus({ id: Card.submitId("login") }),
+        SignIn({ email: "owner@fixture.invalid", password: "correct horse" }),
+      ),
       model((next) => {
         expect(next.isSigningIn).toBe(true);
       }),
+      Command.resolve(Focus.Focus, Message.CompletedFocus()),
       Command.resolve(SignIn, Message.SucceededSignIn()),
       Command.resolve(
         ContinueAfterSignIn({ destination: "/keys" }),
@@ -47,6 +51,7 @@ describe("login update", () => {
       update,
       ...filledIn("sig=fixture"),
       message(Message.SubmittedSignIn()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Message.CompletedFocus()),
       Command.resolve(SignIn, Message.SucceededSignIn()),
       Command.expectNone(),
       model((next) => {
@@ -60,6 +65,7 @@ describe("login update", () => {
       update,
       ...filledIn(""),
       message(Message.SubmittedSignIn()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Message.CompletedFocus()),
       Command.resolve(SignIn, Message.FailedSignIn({ reason: "Sign-in failed." })),
       model((next) => {
         expect(next.isSigningIn).toBe(false);
@@ -68,6 +74,7 @@ describe("login update", () => {
         );
       }),
       message(Message.SubmittedSignIn()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Message.CompletedFocus()),
       Command.resolve(
         SignIn({ email: "owner@fixture.invalid", password: "correct horse" }),
         Message.SucceededSignIn(),

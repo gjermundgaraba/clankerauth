@@ -20,7 +20,7 @@ export const Message = defineMessageUnion({
   CompletedReplaceUrl: {},
   CompletedLoadUrl: {},
   CompletedReloadPage: {},
-  CompletedFocusFragment: {},
+  CompletedScrollToFragment: {},
   GotSetupMessage: { message: Setup.Message },
   GotLoginMessage: { message: Login.Message },
   GotConsentMessage: { message: Consent.Message },

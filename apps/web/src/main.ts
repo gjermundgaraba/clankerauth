@@ -69,16 +69,6 @@ export const ReloadPage = Command.define("ReloadPage", {
   execute: Effect.sync(() => location.reload()).pipe(Effect.as(Message.CompletedReloadPage())),
 });
 
-export const FocusFragment = Command.define("FocusFragment", {
-  args: { maybeFragment: Schema.Option(Schema.String) },
-  messages: [Message.CompletedFocusFragment],
-  execute: ({ maybeFragment }) =>
-    Option.match(maybeFragment, {
-      onNone: () => Effect.sync(() => window.scrollTo(0, 0)),
-      onSome: SkipLink.focusFragment,
-    }).pipe(Effect.as(Message.CompletedFocusFragment())),
-});
-
 // PAGES
 
 const searchOf = (url: Url): string => Option.getOrElse(url.search, () => "");
@@ -260,7 +250,7 @@ const internalLinkClicked = (model: Model, url: Url): UpdateReturn =>
   Option.match(fragmentOf(model, url), {
     onSome: (fragment) => ({
       model,
-      commands: [FocusFragment({ maybeFragment: Option.some(fragment) })],
+      commands: [SkipLink.ScrollToFragment({ maybeFragment: Option.some(fragment) })],
     }),
     onNone: () =>
       isServedBy(model.page, urlToAppRoute(url))
@@ -278,7 +268,7 @@ const urlChanged = (model: Model, url: Url): UpdateReturn =>
   isServedBy(model.page, urlToAppRoute(url))
     ? {
         model: modifyFields(model, { url: () => url }),
-        commands: [FocusFragment({ maybeFragment: url.hash })],
+        commands: [SkipLink.ScrollToFragment({ maybeFragment: url.hash })],
       }
     : { model, commands: [ReloadPage()] };
 
@@ -296,7 +286,7 @@ export const update = (model: Model, message: Message) =>
     CompletedReplaceUrl: () => ({ model }),
     CompletedLoadUrl: () => ({ model }),
     CompletedReloadPage: () => ({ model }),
-    CompletedFocusFragment: () => ({ model }),
+    CompletedScrollToFragment: () => ({ model }),
     GotSetupMessage: ({ message }) => foldSetup(model, message),
     GotLoginMessage: ({ message }) => foldLogin(model, message),
     GotConsentMessage: ({ message }) => foldConsent(model, message),

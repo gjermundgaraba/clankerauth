@@ -3,7 +3,14 @@ import { Array, Option, Result } from "effect";
 import { AsyncData } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 import * as Update from "foldkit/update";
-import { ConfirmDialog, CopyButton, Dialog, Focus } from "@gjermundgaraba-designs/pixel-paper";
+import {
+  Announcer,
+  Card,
+  ConfirmDialog,
+  CopyButton,
+  Dialog,
+  Focus,
+} from "@gjermundgaraba-designs/pixel-paper";
 
 import {
   Change,
@@ -14,8 +21,8 @@ import {
   needsReread,
   type Credential,
 } from "./change.ts";
-import { Announce, SaveChange, SignOut } from "./command.ts";
-import { NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
+import { SaveChange, SignOut } from "./command.ts";
+import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
 import { listingQuery } from "./listing.ts";
 import { Message } from "./message.ts";
@@ -61,6 +68,7 @@ const editorFold = Dialog.foldDialog(Dialog, {
   write: (model: Model, nextEditor: Dialog.Model): Model =>
     modifyFields(model, { editor: () => nextEditor }),
   toParentMessage: (message: Dialog.Message) => Message.GotEditorMessage({ message }),
+  isCloseHeld: isSaving,
 });
 
 const withoutRefusalAt = (model: Model, place: Place): Model =>
@@ -68,12 +76,27 @@ const withoutRefusalAt = (model: Model, place: Place): Model =>
     maybeRefusal: Option.filter((refusal: Refusal) => refusal.place !== place),
   });
 
+const placeOf = (model: Model): Place => {
+  if (ConfirmDialog.isOpen(model.confirm)) {
+    return "Confirm";
+  }
+
+  if (Dialog.isOpen(model.editor)) {
+    return "Editor";
+  }
+
+  return "Page";
+};
+
 const saving = (model: Model, change: Change): UpdateReturn => ({
   model: modifyFields(model, {
     activity: () => Activity.Saving(),
     maybeRefusal: () => Option.none(),
   }),
-  commands: [SaveChange({ change })],
+  commands: [
+    ...(placeOf(model) === "Editor" ? [Focus.Focus({ id: Card.submitId(EDITOR_FORM_ID) })] : []),
+    SaveChange({ change }),
+  ],
 });
 
 const foldConfirmOutMessage = ConfirmDialog.OutMessage.match<Update.Step<Model, Message>>({
@@ -94,7 +117,12 @@ const confirmFold = {
   foldOutMessage: foldConfirmOutMessage,
 };
 
-const foldConfirm = Update.foldChild({ update: ConfirmDialog.update, ...confirmFold });
+const foldConfirm = (model: Model, message: ConfirmDialog.Message) =>
+  Update.foldChild({
+    update: (confirm: ConfirmDialog.Model, confirmMessage: ConfirmDialog.Message) =>
+      ConfirmDialog.update(confirm, confirmMessage, { isCloseHeld: isSaving(model) }),
+    ...confirmFold,
+  })(model, message);
 
 const foldConfirmOpen = Update.foldChildStep({ update: ConfirmDialog.open, ...confirmFold });
 
@@ -190,7 +218,7 @@ const saved = (
       (stepModel) => ({
         model: stepModel,
         commands: [
-          Announce({ text: announcementOf(change) }),
+          Announcer.Announce({ text: announcementOf(change) }),
           ...Array.fromOption(
             Option.map(maybeCredential, (credential) => Focus.Focus({ id: copyIdOf(credential) })),
           ),
@@ -198,18 +226,6 @@ const saved = (
       }),
     ],
   );
-
-const placeOf = (model: Model): Place => {
-  if (ConfirmDialog.isOpen(model.confirm)) {
-    return "Confirm";
-  }
-
-  if (Dialog.isOpen(model.editor)) {
-    return "Editor";
-  }
-
-  return "Page";
-};
 
 const refused = (model: Model, reason: string): UpdateReturn => {
   const place = placeOf(model);
@@ -260,7 +276,10 @@ export const update = (model: Model, message: Message) =>
       return !AsyncData.isStale(listingOf(model)) && AsyncData.isStale(listingOf(listingFold.model))
         ? {
             model: listingFold.model,
-            commands: [...(listingFold.commands ?? []), Announce({ text: NOT_REFRESHED })],
+            commands: [
+              ...(listingFold.commands ?? []),
+              Announcer.Announce({ text: NOT_REFRESHED }),
+            ],
           }
         : listingFold;
     },
@@ -292,10 +311,7 @@ export const update = (model: Model, message: Message) =>
       }),
       commands: [Focus.Focus({ id: REFUSAL_ID })],
     }),
-    GotEditorMessage: ({ message: editorMessage }) =>
-      isSaving(model) && Dialog.isCloseRequest(editorMessage)
-        ? { model }
-        : editorFold.update(model, editorMessage),
+    GotEditorMessage: ({ message: editorMessage }) => editorFold.update(model, editorMessage),
     GotConfirmMessage: ({ message: confirmMessage }) => foldConfirm(model, confirmMessage),
     GotCredentialCopyMessage: ({ credentialId: id, message: copyMessage }) =>
       foldCredentialCopy(model, id, copyMessage),

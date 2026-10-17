@@ -6,11 +6,11 @@ import {
   Choice,
   type Dialog,
   Field,
-  Fields,
   Fieldset,
   PropsList,
   Rows,
   SelectField,
+  Stack,
   TextareaField,
 } from "@gjermundgaraba-designs/pixel-paper";
 
@@ -25,11 +25,10 @@ type KeyForm = typeof Model.Key.Type;
 
 type ClientForm = typeof Model.Client.Type;
 
-/** What the open form needs from the dashboard: what may be granted, whether it saves, and the
- *  attributes of the control that takes focus when the dialog opens. */
+/** What the open form needs from the dashboard: what may be granted, and the attributes of the
+ *  control that takes focus when the dialog opens. */
 export type ViewInputs = Readonly<{
   resources: ReadonlyArray<ResourceView>;
-  isSaving: boolean;
   initialFocus: Dialog.RenderInfo["initialFocus"];
 }>;
 
@@ -355,9 +354,8 @@ const clientFields = (
 // VIEW
 
 export const view = defineView<Model, Message, ViewInputs>((form, inputs, h): Html =>
-  Fields.view(
+  Stack.view(
     {
-      isBusy: inputs.isSaving,
       body: Model.match(form, {
         Resource: (resourceForm) => resourceFields(resourceForm, inputs, h),
         Key: (keyForm) => keyFields(keyForm, inputs, h),

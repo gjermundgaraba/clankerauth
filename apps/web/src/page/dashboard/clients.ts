@@ -253,6 +253,7 @@ export const clientsPanels = (
             EmptyState.view(
               {
                 title: "No Clients registered",
+                headingLevel: 3,
                 body: [
                   "Connect your MCP client to a configured server to onboard automatically, or register a managed Client here.",
                 ],

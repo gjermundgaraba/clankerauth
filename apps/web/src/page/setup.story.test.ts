@@ -1,5 +1,5 @@
 import { Option } from "effect";
-import { Focus } from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Focus } from "@gjermundgaraba-designs/pixel-paper";
 import { Command, expectOutMessage, given, message, model, story } from "foldkit/story";
 import { describe, expect, test } from "vite-plus/test";
 
@@ -36,6 +36,7 @@ describe("setup update", () => {
       update,
       ...filledIn,
       message(Message.SubmittedSetup()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("setup") }), Message.CompletedFocus()),
       Command.resolve(
         SetupOwner,
         Message.RejectedSetupInput({
@@ -61,11 +62,13 @@ describe("setup update", () => {
       ...filledIn,
       message(Message.SubmittedSetup()),
       Command.expectExact(
+        Focus.Focus({ id: Card.submitId("setup") }),
         SetupOwner({ email: "owner@fixture.invalid", password: "correct horse battery" }),
       ),
       model((next) => {
         expect(next.isCreating).toBe(true);
       }),
+      Command.resolve(Focus.Focus, Message.CompletedFocus()),
       Command.resolve(SetupOwner, Message.SucceededSetupOwner({ outcome: "Created" })),
       expectOutMessage(OutMessage.CreatedOwner()),
     );
@@ -76,6 +79,7 @@ describe("setup update", () => {
       update,
       ...filledIn,
       message(Message.SubmittedSetup()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("setup") }), Message.CompletedFocus()),
       Command.resolve(SetupOwner, Message.SucceededSetupOwner({ outcome: "AlreadyOwned" })),
       expectOutMessage(OutMessage.FoundOwner()),
     );
@@ -86,6 +90,7 @@ describe("setup update", () => {
       update,
       ...filledIn,
       message(Message.SubmittedSetup()),
+      Command.resolve(Focus.Focus({ id: Card.submitId("setup") }), Message.CompletedFocus()),
       Command.resolve(SetupOwner, Message.FailedSetupOwner({ reason: "Fixture request failed" })),
       model((next) => {
         expect(next.isCreating).toBe(false);

@@ -140,6 +140,7 @@ export const keysPanels = (
             EmptyState.view(
               {
                 title: "No API keys",
+                headingLevel: 3,
                 body: ["Create a key for a CLI or automation that needs direct access."],
               },
               h,

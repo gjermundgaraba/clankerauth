@@ -135,6 +135,7 @@ export const resourcesPanels = (
             EmptyState.view(
               {
                 title: "Add your first Resource",
+                headingLevel: 3,
                 body: [
                   "Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.",
                 ],

@@ -1,8 +1,7 @@
 import type { ClientCredentials } from "@gjermundgaraba/clankerauth-admin-api";
-import { DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Duration, Effect, Option } from "effect";
 import { Command } from "foldkit";
 import { load } from "foldkit/navigation";
-import { Announcer } from "@gjermundgaraba-designs/pixel-paper";
 
 import { issuer, signOut, toOwnerSentence } from "../../api.ts";
 import { loginRouter } from "../../route.ts";
@@ -86,6 +85,8 @@ const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, st
 
 // COMMAND
 
+const SAVE_TIMEOUT = Duration.seconds(20);
+
 export const SaveChange = Command.define("SaveChange", {
   args: { change: Change },
   messages: [Message.SucceededSaveChange, Message.FailedSaveChange],
@@ -95,13 +96,17 @@ export const SaveChange = Command.define("SaveChange", {
         onFailure: (reason) => Message.FailedSaveChange({ reason }),
         onSuccess: (maybeCredential) => Message.SucceededSaveChange({ change, maybeCredential }),
       }),
+      Effect.timeoutOrElse({
+        duration: SAVE_TIMEOUT,
+        orElse: () =>
+          Effect.succeed(
+            Message.FailedSaveChange({
+              reason:
+                "The issuer did not answer in time. Check whether the change was made before trying again.",
+            }),
+          ),
+      }),
     ),
-});
-
-export const Announce = Command.define("Announce", {
-  args: { text: Schema.String },
-  messages: [Message.CompletedAnnounce],
-  execute: ({ text }) => Announcer.announce(text).pipe(Effect.as(Message.CompletedAnnounce())),
 });
 
 export const SignOut = Command.define("SignOut", {

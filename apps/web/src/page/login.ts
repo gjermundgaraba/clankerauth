@@ -8,18 +8,11 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 import { defineView } from "foldkit/submodel";
 import type * as Update from "foldkit/update";
-import {
-  Button,
-  Field,
-  Fields,
-  Focus,
-  Notice,
-  PasswordField,
-} from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Field, Focus, Notice, PasswordField } from "@gjermundgaraba-designs/pixel-paper";
 
 import { signIn } from "../api.ts";
 import { clientsRouter } from "../route.ts";
-import { wallCardView } from "./wall.ts";
+import { wallFormView } from "./wall.ts";
 
 // MODEL
 
@@ -121,6 +114,8 @@ export const continuationOf = (model: Model) =>
 
 // UPDATE
 
+const FORM_ID = "login";
+
 const FIELD_IDS: Readonly<Record<LoginField, string>> = {
   Email: "login-email",
   Password: "login-password",
@@ -146,7 +141,10 @@ const submitted = (model: Model): UpdateReturn =>
         isPasswordShown: () => false,
         maybeProblem: () => Option.none(),
       }),
-      commands: [SignIn({ email: model.email.trim(), password: model.password })],
+      commands: [
+        Focus.Focus({ id: Card.submitId(FORM_ID) }),
+        SignIn({ email: model.email.trim(), password: model.password }),
+      ],
     }),
     onSome: (field) => ({
       model: modifyFields(model, { maybeProblem: () => Option.some(Problem.Missing({ field })) }),
@@ -207,24 +205,15 @@ const missingSentenceOf = (model: Model, field: LoginField): string | undefined 
     : undefined;
 
 export const view = defineView<Model, Message>((model, h): Html =>
-  wallCardView(
+  wallFormView(
     "Sign in to clankerauth",
     {
+      id: FORM_ID,
       title: "Sign in",
       meta: "owner",
+      submit: "sign in",
+      isBusy: model.isSigningIn,
       onSubmit: Message.SubmittedSignIn(),
-      actions: [
-        Button.view(
-          {
-            label: "sign in",
-            type: "submit",
-            variant: "Primary",
-            isDefault: true,
-            isBusy: model.isSigningIn,
-          },
-          h,
-        ),
-      ],
       body: [
         h.p(
           [h.Class("note-line")],
@@ -233,42 +222,31 @@ export const view = defineView<Model, Message>((model, h): Html =>
           ],
         ),
         ...refusalView(model, h),
-        Fields.view(
+        Field.view(
           {
-            isBusy: model.isSigningIn,
-            body: [
-              Field.view(
-                {
-                  id: FIELD_IDS.Email,
-                  label: "Email",
-                  type: "email",
-                  value: model.email,
-                  onInput: (value) => Message.UpdatedEmail({ value }),
-                  isBoxed: true,
-                  isRequired: true,
-                  error: missingSentenceOf(model, "Email"),
-                  inputAttributes: [
-                    h.Autocomplete("username"),
-                    h.Placeholder("owner@example.internal"),
-                  ],
-                },
-                h,
-              ),
-              PasswordField.view(
-                {
-                  id: FIELD_IDS.Password,
-                  label: "Password",
-                  value: model.password,
-                  onInput: (value) => Message.UpdatedPassword({ value }),
-                  isShown: model.isPasswordShown,
-                  onToggleShown: Message.ToggledPasswordShown(),
-                  isRequired: true,
-                  error: missingSentenceOf(model, "Password"),
-                  autocomplete: "current-password",
-                },
-                h,
-              ),
-            ],
+            id: FIELD_IDS.Email,
+            label: "Email",
+            type: "email",
+            value: model.email,
+            onInput: (value) => Message.UpdatedEmail({ value }),
+            isBoxed: true,
+            isRequired: true,
+            error: missingSentenceOf(model, "Email"),
+            inputAttributes: [h.Autocomplete("username"), h.Placeholder("owner@example.internal")],
+          },
+          h,
+        ),
+        PasswordField.view(
+          {
+            id: FIELD_IDS.Password,
+            label: "Password",
+            value: model.password,
+            onInput: (value) => Message.UpdatedPassword({ value }),
+            isShown: model.isPasswordShown,
+            onToggleShown: Message.ToggledPasswordShown(),
+            isRequired: true,
+            error: missingSentenceOf(model, "Password"),
+            autocomplete: "current-password",
           },
           h,
         ),

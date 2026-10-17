@@ -15,12 +15,13 @@ import {
 } from "foldkit/scene";
 import { modifyFields } from "foldkit/struct";
 import { Dialog as UiDialog } from "@foldkit/ui";
-import { Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
+import { Announcer, Card, Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
 import { describe, test } from "vite-plus/test";
 
 import { AppRoute } from "../../route.ts";
 import { Change } from "./change.ts";
-import { Announce, SaveChange, SignOut } from "./command.ts";
+import { SaveChange, SignOut } from "./command.ts";
+import { EDITOR_FORM_ID } from "./constant.ts";
 import { Message, update, view } from "./index.ts";
 import {
   SECOND_READ,
@@ -45,17 +46,13 @@ const deleteKey = Change.DeleteKey({ keyId: "fixture-key", name: "Automation" })
 
 const showDialog = [
   Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
-  Mount.resolveAll(
-    [UiDialog.AcquireResources, UiDialog.Message.SucceededAcquireResources()],
-    [Dialog.BindActionKeys, Dialog.Message.PressedActionKey({ direction: "Next" })],
-  ),
+  Mount.resolveAll(...Dialog.sceneMounts),
 ];
 
 const closeDialog = Command.resolve(UiDialog.CloseDialog, UiDialog.Message.CompletedCloseDialog());
 
-const measureTopBar = Mount.resolve(
-  { name: TopBar.MeasureHeight.name },
-  Message.GotTopBarMessage({ message: TopBar.Message.CompletedMeasureHeight() }),
+const measureTopBar = Mount.resolveAll(
+  ...TopBar.sceneMounts((message) => Message.GotTopBarMessage({ message })),
 );
 
 describe("dashboard view", () => {
@@ -101,14 +98,14 @@ describe("dashboard view", () => {
       closeDialog,
       Command.resolveAll(
         [listingQuery.Fetch, readOf(SECOND_READ, listing)],
-        [Announce, Message.CompletedAnnounce()],
+        [Announcer.Announce, Message.CompletedAnnounce()],
       ),
       Mount.expectEnded(UiDialog.AcquireResources, Dialog.BindActionKeys),
       expect(role("alertdialog", { name: "Delete API key" })).toBeAbsent(),
     );
   });
 
-  test("a resource is added through the editor", () => {
+  test("a resource the issuer refuses stays in the editor as typed, with the reason", () => {
     scene(
       { update, view: resourcesView },
       given(listed),
@@ -122,6 +119,7 @@ describe("dashboard view", () => {
         type(label("Scopes"), "read write"),
         click(role("button", { name: "add resource" })),
       ),
+      Command.resolve(Focus.Focus({ id: Card.submitId(EDITOR_FORM_ID) }), Message.CompletedFocus()),
       Command.resolve(
         SaveChange({
           change: Change.PutResource({

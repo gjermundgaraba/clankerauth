@@ -2,6 +2,7 @@ import { Option } from "effect";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
 import type { Url } from "foldkit/url";
+import { SkipLink } from "@gjermundgaraba-designs/pixel-paper";
 import { describe, expect, test } from "vite-plus/test";
 
 import { FIRST_READ, failedReadOf } from "./page/dashboard/dashboard.fixture.ts";
@@ -9,7 +10,6 @@ import { listingQuery } from "./page/dashboard/listing.ts";
 import { urlAt } from "./fixture.ts";
 import {
   CheckAccess,
-  FocusFragment,
   LoadUrl,
   NavigateInternal,
   ReloadPage,
@@ -181,8 +181,8 @@ describe("application update", () => {
         expect(next.url.pathname).toBe("/keys");
       }),
       Command.resolve(
-        FocusFragment({ maybeFragment: Option.none() }),
-        Message.CompletedFocusFragment(),
+        SkipLink.ScrollToFragment({ maybeFragment: Option.none() }),
+        Message.CompletedScrollToFragment(),
       ),
     );
   });
@@ -198,8 +198,8 @@ describe("application update", () => {
         }),
       ),
       Command.resolve(
-        FocusFragment({ maybeFragment: Option.some("main") }),
-        Message.CompletedFocusFragment(),
+        SkipLink.ScrollToFragment({ maybeFragment: Option.some("main") }),
+        Message.CompletedScrollToFragment(),
       ),
       model((next) => {
         expect(Page.guards.Login(next.page)).toBe(true);
@@ -218,8 +218,8 @@ describe("application update", () => {
         }),
       ),
       Command.resolve(
-        FocusFragment({ maybeFragment: Option.some("main") }),
-        Message.CompletedFocusFragment(),
+        SkipLink.ScrollToFragment({ maybeFragment: Option.some("main") }),
+        Message.CompletedScrollToFragment(),
       ),
       model((next) => {
         expect(Page.guards.Failed(next.page)).toBe(true);

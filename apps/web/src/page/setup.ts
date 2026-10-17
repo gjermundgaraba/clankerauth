@@ -8,17 +8,10 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 import { defineView } from "foldkit/submodel";
 import type * as Update from "foldkit/update";
-import {
-  Button,
-  Field,
-  Fields,
-  Focus,
-  Notice,
-  PasswordField,
-} from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Field, Focus, Notice, PasswordField } from "@gjermundgaraba-designs/pixel-paper";
 
 import { issuer, toOwnerSentence } from "../api.ts";
-import { wallCardView } from "./wall.ts";
+import { wallFormView } from "./wall.ts";
 
 // MODEL
 
@@ -127,6 +120,8 @@ export const SetupOwner = Command.define("SetupOwner", {
 
 // UPDATE
 
+const FORM_ID = "setup";
+
 const FIELD_IDS: Readonly<Record<SetupField, string>> = {
   Email: "setup-email",
   Password: "setup-password",
@@ -150,7 +145,10 @@ const submitted = (model: Model): Update.Return<Model, Message> =>
           isConfirmationShown: () => false,
           maybeProblem: () => Option.none(),
         }),
-        commands: [SetupOwner({ email: model.email.trim(), password: model.password })],
+        commands: [
+          Focus.Focus({ id: Card.submitId(FORM_ID) }),
+          SetupOwner({ email: model.email.trim(), password: model.password }),
+        ],
       }
     : invalid(model, "Confirmation", "Passwords do not match.");
 
@@ -219,24 +217,15 @@ const invalidSentenceOf = (model: Model, field: SetupField): string | undefined 
   );
 
 export const view = defineView<Model, Message>((model, h): Html =>
-  wallCardView(
+  wallFormView(
     "Set up clankerauth",
     {
+      id: FORM_ID,
       title: "Setup",
       meta: "first run",
+      submit: "create account",
+      isBusy: model.isCreating,
       onSubmit: Message.SubmittedSetup(),
-      actions: [
-        Button.view(
-          {
-            label: "create account",
-            type: "submit",
-            variant: "Primary",
-            isDefault: true,
-            isBusy: model.isCreating,
-          },
-          h,
-        ),
-      ],
       body: [
         h.p(
           [h.Class("note-line")],
@@ -245,58 +234,47 @@ export const view = defineView<Model, Message>((model, h): Html =>
           ],
         ),
         ...refusalView(model, h),
-        Fields.view(
+        Field.view(
           {
-            isBusy: model.isCreating,
-            body: [
-              Field.view(
-                {
-                  id: FIELD_IDS.Email,
-                  label: "Email",
-                  type: "email",
-                  value: model.email,
-                  onInput: (value) => Message.UpdatedEmail({ value }),
-                  isBoxed: true,
-                  isRequired: true,
-                  error: invalidSentenceOf(model, "Email"),
-                  inputAttributes: [
-                    h.Autocomplete("username"),
-                    h.Placeholder("owner@example.internal"),
-                  ],
-                },
-                h,
-              ),
-              PasswordField.view(
-                {
-                  id: FIELD_IDS.Password,
-                  label: "Password",
-                  value: model.password,
-                  onInput: (value) => Message.UpdatedPassword({ value }),
-                  isShown: model.isPasswordShown,
-                  onToggleShown: Message.ToggledPasswordShown(),
-                  isRequired: true,
-                  error: invalidSentenceOf(model, "Password"),
-                  help: `${passwordRule}. Save your password somewhere safe.`,
-                  autocomplete: "new-password",
-                },
-                h,
-              ),
-              PasswordField.view(
-                {
-                  id: FIELD_IDS.Confirmation,
-                  label: "Confirm password",
-                  value: model.confirmation,
-                  onInput: (value) => Message.UpdatedConfirmation({ value }),
-                  isShown: model.isConfirmationShown,
-                  onToggleShown: Message.ToggledConfirmationShown(),
-                  toggleLabel: "Show confirmation",
-                  isRequired: true,
-                  error: invalidSentenceOf(model, "Confirmation"),
-                  autocomplete: "new-password",
-                },
-                h,
-              ),
-            ],
+            id: FIELD_IDS.Email,
+            label: "Email",
+            type: "email",
+            value: model.email,
+            onInput: (value) => Message.UpdatedEmail({ value }),
+            isBoxed: true,
+            isRequired: true,
+            error: invalidSentenceOf(model, "Email"),
+            inputAttributes: [h.Autocomplete("username"), h.Placeholder("owner@example.internal")],
+          },
+          h,
+        ),
+        PasswordField.view(
+          {
+            id: FIELD_IDS.Password,
+            label: "Password",
+            value: model.password,
+            onInput: (value) => Message.UpdatedPassword({ value }),
+            isShown: model.isPasswordShown,
+            onToggleShown: Message.ToggledPasswordShown(),
+            isRequired: true,
+            error: invalidSentenceOf(model, "Password"),
+            help: `${passwordRule}. Save your password somewhere safe.`,
+            autocomplete: "new-password",
+          },
+          h,
+        ),
+        PasswordField.view(
+          {
+            id: FIELD_IDS.Confirmation,
+            label: "Confirm password",
+            value: model.confirmation,
+            onInput: (value) => Message.UpdatedConfirmation({ value }),
+            isShown: model.isConfirmationShown,
+            onToggleShown: Message.ToggledConfirmationShown(),
+            toggleLabel: "Show confirmation",
+            isRequired: true,
+            error: invalidSentenceOf(model, "Confirmation"),
+            autocomplete: "new-password",
           },
           h,
         ),
