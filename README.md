@@ -220,7 +220,7 @@ there instead of keeping an API key. A program written with Effect takes it from
 the SDK's `/credentials` instead, and calls administration in process with
 [`@gjermundgaraba/clankerauth-admin-api`](packages/admin-api/README.md).
 
-See the breaking [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.24.1](docs/releases/0.24.1.md), [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code, and [AGENTS.md](AGENTS.md) how the code is laid out.
 

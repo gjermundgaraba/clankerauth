@@ -68,7 +68,7 @@
   },
   "peerDependencies": {
     "@gjermundgaraba/effect-actions": "^0.18.0",
-    "effect": "^4.0.4"
+    "effect": "~4.0.4"
   },
   "peerDependenciesMeta": {
     "@gjermundgaraba/effect-actions": {

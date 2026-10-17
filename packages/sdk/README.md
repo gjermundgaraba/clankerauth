@@ -8,7 +8,7 @@ Effect-native [clankerauth](https://github.com/gjermundgaraba/clankerauth) verif
 vp add @gjermundgaraba/clankerauth-sdk
 ```
 
-Effect is a peer: the application installs Effect 4, and the SDK shares that copy.
+Effect is a peer: the application installs Effect 4.0, from 4.0.4, and the SDK shares that copy.
 
 ```sh
 vp add effect
