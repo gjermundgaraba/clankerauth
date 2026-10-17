@@ -1,7 +1,7 @@
 FROM node:26.8.2-bookworm-slim AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN npm install -g "$(node -p "require('./package.json').packageManager")"
+RUN npm install -g "pnpm@$(node -p "require('./package.json').devEngines.packageManager.version")"
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/admin-api/package.json ./packages/admin-api/package.json

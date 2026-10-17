@@ -59,8 +59,6 @@ peerDependencyRules:
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
-  - "@gjermundgaraba/effect-actions"
-  - "@gjermundgaraba-designs/pixel-paper"
   - "@voidzero-dev/*"
   - oxlint
   - "@oxlint/*"
@@ -70,3 +68,7 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  - "@gjermundgaraba/*"
+  - "@gjermundgaraba-designs/*"
+  - effect
+  - "@effect/*"
