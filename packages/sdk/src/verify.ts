@@ -174,12 +174,12 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   /** The keys read within their lifetime, a failed read's failure within its cooldown, or a read now. */
   const keys = Effect.gen(function* () {
     const settled = options.store.jwks.get(options.issuer);
-    const now = yield* Clock.currentTimeMillis;
+    const startedAt = yield* Clock.currentTimeMillis;
 
     if (settled !== undefined) {
       const answers = "keys" in settled ? documentLifetime : cooldown;
 
-      if (now - settled.readAt < Duration.toMillis(answers))
+      if (startedAt - settled.readAt < Duration.toMillis(answers))
         return "keys" in settled
           ? settled.keys
           : yield* new ProviderUnavailable({ operation: settled.failure });
@@ -188,19 +188,18 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const read = yield* Effect.result(document());
     const readAt = yield* Clock.currentTimeMillis;
 
-    // why: a failure never replaces an outcome that ended after it began; a success always writes.
-    if (
-      Result.isSuccess(read) ||
-      (options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) < now
-    )
-      options.store.jwks.set(
-        options.issuer,
-        Result.isSuccess(read)
-          ? { readAt, keys: read.success }
-          : { readAt, failure: read.failure.operation },
-      );
+    if (Result.isSuccess(read)) {
+      options.store.jwks.set(options.issuer, { readAt, keys: read.success });
 
-    return Result.isSuccess(read) ? read.success : yield* read.failure;
+      return read.success;
+    }
+
+    // why: a failure never replaces an outcome that ended after it began.
+    if ((options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) >= startedAt)
+      return yield* read.failure;
+    options.store.jwks.set(options.issuer, { readAt, failure: read.failure.operation });
+
+    return yield* read.failure;
   });
 
   const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string) {
