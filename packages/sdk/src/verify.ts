@@ -131,7 +131,7 @@ const cooldown = Duration.seconds(5);
  * How long a key list read may take. Under `Resource`'s five-second deadline, so a stalled
  * issuer fails the read, not the request, and a held list still decides.
  */
-const listReadTimeout = "3 seconds";
+const listReadTimeout = Duration.seconds(3);
 
 /**
  * A verifier over `options.store`; transport is selected by the application, not the SDK.
