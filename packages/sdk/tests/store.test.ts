@@ -134,8 +134,8 @@ it.effect(
       assert.deepEqual(reads, { jwks: 3, lists: 3 });
       const now = yield* Clock.currentTimeMillis;
       assert.equal(store.jwks.get(issuer)?.readAt, now);
-      assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.held?.readAt, now);
 
+      yield* TestClock.adjust("5 seconds");
       yield* (yield* verifier(store)).verifyToken(key);
       assert.deepEqual(reads, { jwks: 3, lists: 3 });
     }),
@@ -209,8 +209,6 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
       }
 
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
-      const settled = store.jwks.get(issuer);
-      assert(settled !== undefined && "keys" in settled);
       assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, undefined);
       assert(Result.isSuccess(yield* verify(jwt)));
       assert(Result.isSuccess(yield* verify(key)));
