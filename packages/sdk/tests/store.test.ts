@@ -16,6 +16,21 @@ const key = `clankerauth_${"k".repeat(64)}`;
 
 const unknown = `clankerauth_${"u".repeat(64)}`;
 
+const failing = [
+  "Warn",
+  "clankerauth key list reads are failing; a held list decides until it expires",
+  { operation: "key-list.fetch" },
+];
+
+const recovered = ["Info", "clankerauth key list reads have recovered"];
+
+const capture = (logs: Array<readonly unknown[]>) =>
+  Logger.layer([
+    Logger.make(({ logLevel, message }) => {
+      logs.push([logLevel, ...[message].flat()]);
+    }),
+  ]);
+
 /**
  * How the stub issuer answers a read: failing, if it is unavailable when the read arrives, and
  * after `hold` completes, if one is set then.
@@ -36,10 +51,7 @@ const fixture = Effect.gen(function* () {
 
   const reads = { jwks: 0, lists: 0 };
 
-  const issuerState: Upstream = {
-    unavailable: false,
-    hold: undefined,
-  };
+  const upstream: Upstream = { unavailable: false, hold: undefined };
 
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -47,7 +59,7 @@ const fixture = Effect.gen(function* () {
 
       if (jwks) reads.jwks++;
       else reads.lists++;
-      const { unavailable, hold } = issuerState;
+      const { unavailable, hold } = upstream;
 
       if (hold !== undefined) yield* Deferred.await(hold);
 
@@ -89,7 +101,7 @@ const fixture = Effect.gen(function* () {
       Effect.provideService(HttpClient.HttpClient, client),
     );
 
-  return { reads, issuer: issuerState, token, verifier };
+  return { reads, upstream, token, verifier };
 });
 
 it.effect(
@@ -131,7 +143,7 @@ it.effect(
 
 it.effect("concurrent misses each read, and every one of them verifies", () =>
   Effect.gen(function* () {
-    const { reads, issuer: upstream, token, verifier } = yield* fixture;
+    const { reads, upstream, token, verifier } = yield* fixture;
     const store = Verifier.store();
     const jwt = yield* token;
 
@@ -169,12 +181,8 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
   (order) => {
     const logs: Array<readonly unknown[]> = [];
 
-    const capture = Logger.make(({ logLevel, message }) => {
-      logs.push([logLevel, ...[message].flat()]);
-    });
-
     return Effect.gen(function* () {
-      const { reads, issuer: upstream, token, verifier } = yield* fixture;
+      const { reads, upstream, token, verifier } = yield* fixture;
       const store = Verifier.store();
       const jwt = yield* token;
       const slowFails = order === "slow read fails";
@@ -207,16 +215,8 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
       assert(Result.isSuccess(yield* verify(jwt)));
       assert(Result.isSuccess(yield* verify(key)));
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
-
-      const failing = [
-        "Warn",
-        "clankerauth key list reads are failing; a held list decides until it expires",
-        { operation: "key-list.fetch" },
-      ];
-
-      const recovered = ["Info", "clankerauth key list reads have recovered"];
       assert.deepEqual(logs, slowFails ? [] : [failing, recovered]);
-    }).pipe(Effect.provide(Logger.layer([capture])));
+    }).pipe(Effect.provide(capture(logs)));
   },
 );
 
@@ -225,12 +225,8 @@ it.effect(
   () => {
     const logs: Array<readonly unknown[]> = [];
 
-    const capture = Logger.make(({ logLevel, message }) => {
-      logs.push([logLevel, ...[message].flat()]);
-    });
-
     return Effect.gen(function* () {
-      const { reads, issuer: upstream, token, verifier } = yield* fixture;
+      const { reads, upstream, token, verifier } = yield* fixture;
       const store = Verifier.store();
 
       const verify = (credential: string) =>
@@ -274,15 +270,7 @@ it.effect(
       yield* TestClock.adjust("1 minute");
       yield* verify(key);
       assert.equal(reads.lists, 6);
-
-      const failing = [
-        "Warn",
-        "clankerauth key list reads are failing; a held list decides until it expires",
-        { operation: "key-list.fetch" },
-      ];
-
-      const recovered = ["Info", "clankerauth key list reads have recovered"];
       assert.deepEqual(logs, [failing, recovered, failing, recovered]);
-    }).pipe(Effect.provide(Logger.layer([capture])));
+    }).pipe(Effect.provide(capture(logs)));
   },
 );
