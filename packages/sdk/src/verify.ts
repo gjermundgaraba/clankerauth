@@ -188,8 +188,11 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const read = yield* Effect.result(document());
     const readAt = yield* Clock.currentTimeMillis;
 
-    // why: a concurrent read that ended after this one began is newer, and its outcome stands.
-    if ((options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) < now)
+    // why: a failure never replaces an outcome that ended after it began; a success always writes.
+    if (
+      Result.isSuccess(read) ||
+      (options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) < now
+    )
       options.store.jwks.set(
         options.issuer,
         Result.isSuccess(read)
@@ -295,8 +298,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
   /**
    * Read the key list, unless a read ended within the cooldown: then that read's outcome
-   * stands, as a read that ended after this one began does. A failure is logged once until a
-   * read succeeds again.
+   * stands. A list that verified is always written back; a failure is not, over a read that
+   * ended after it began. A failure is logged once until a read succeeds again.
    */
   const readList = Effect.gen(function* () {
     const settled = options.store.keyLists.get(listed);
@@ -320,9 +323,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const before = options.store.keyLists.get(listed);
     const failing = before?.failure !== undefined;
 
-    if ((before?.readAt ?? -Infinity) >= startedAt)
-      return Result.isSuccess(read) ? undefined : yield* read.failure;
-
     if (Result.isSuccess(read)) {
       options.store.keyLists.set(listed, { readAt, failure: undefined, held: read.success });
 
@@ -331,6 +331,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       return undefined;
     }
 
+    if ((before?.readAt ?? -Infinity) >= startedAt) return yield* read.failure;
     const { operation } = read.failure;
     options.store.keyLists.set(listed, { readAt, failure: operation, held: before?.held });
 

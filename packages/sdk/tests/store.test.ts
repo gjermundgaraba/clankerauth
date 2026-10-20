@@ -164,49 +164,61 @@ it.effect("concurrent misses each read, and every one of them verifies", () =>
   }),
 );
 
-it.effect("a read that fails after a concurrent one succeeded leaves the success standing", () => {
-  const logs: Array<readonly unknown[]> = [];
+it.effect.each(["slow read fails", "fast read fails"] as const)(
+  "when concurrent reads race, a success stands in the store: %s",
+  (order) => {
+    const logs: Array<readonly unknown[]> = [];
 
-  const capture = Logger.make(({ logLevel, message }) => {
-    logs.push([logLevel, ...[message].flat()]);
-  });
+    const capture = Logger.make(({ logLevel, message }) => {
+      logs.push([logLevel, ...[message].flat()]);
+    });
 
-  return Effect.gen(function* () {
-    const { reads, issuer: upstream, token, verifier } = yield* fixture;
-    const store = Verifier.store();
-    const jwt = yield* token;
+    return Effect.gen(function* () {
+      const { reads, issuer: upstream, token, verifier } = yield* fixture;
+      const store = Verifier.store();
+      const jwt = yield* token;
+      const slowFails = order === "slow read fails";
 
-    const verify = (credential: string) =>
-      Effect.flatMap(verifier(store), (each) => each.verifyToken(credential));
+      const verify = (credential: string) =>
+        Effect.result(Effect.flatMap(verifier(store), (each) => each.verifyToken(credential)));
 
-    for (const credential of [jwt, key]) {
-      const hold = yield* Deferred.make<void>();
-      upstream.unavailable = true;
-      upstream.hold = hold;
-      const slow = yield* Effect.result(verify(credential)).pipe(Effect.forkChild);
-      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      for (const credential of [jwt, key]) {
+        const hold = yield* Deferred.make<void>();
+        upstream.unavailable = slowFails;
+        upstream.hold = hold;
+        const slow = yield* verify(credential).pipe(Effect.forkChild);
+        yield* TestClock.withLive(Effect.sleep("100 millis"));
 
-      upstream.unavailable = false;
-      upstream.hold = undefined;
-      yield* verify(credential);
-      yield* Deferred.succeed(hold, undefined);
-      const late = yield* Fiber.join(slow);
+        upstream.unavailable = !slowFails;
+        upstream.hold = undefined;
+        const fast = yield* verify(credential);
+        yield* Deferred.succeed(hold, undefined);
+        const late = yield* Fiber.join(slow);
+        assert.equal(Result.isSuccess(fast), slowFails);
 
-      // why: the list the concurrent read wrote decides for the key; JWKS has no held fallback.
-      if (credential === key) assert(Result.isSuccess(late));
-      else assert(Result.isFailure(late) && late.failure instanceof ProviderUnavailable);
-    }
+        // why: a slow failure on the key is decided by the list the fast read wrote; JWKS has no held fallback.
+        assert.equal(Result.isSuccess(late), !slowFails || credential === key);
+      }
 
-    assert.deepEqual(reads, { jwks: 2, lists: 2 });
-    const settled = store.jwks.get(issuer);
-    assert(settled !== undefined && "keys" in settled);
-    assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, undefined);
-    yield* verify(jwt);
-    yield* verify(key);
-    assert.deepEqual(reads, { jwks: 2, lists: 2 });
-    assert.deepEqual(logs, []);
-  }).pipe(Effect.provide(Logger.layer([capture])));
-});
+      assert.deepEqual(reads, { jwks: 2, lists: 2 });
+      const settled = store.jwks.get(issuer);
+      assert(settled !== undefined && "keys" in settled);
+      assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, undefined);
+      assert(Result.isSuccess(yield* verify(jwt)));
+      assert(Result.isSuccess(yield* verify(key)));
+      assert.deepEqual(reads, { jwks: 2, lists: 2 });
+
+      const failing = [
+        "Warn",
+        "clankerauth key list reads are failing; a held list decides until it expires",
+        { operation: "key-list.fetch" },
+      ];
+
+      const recovered = ["Info", "clankerauth key list reads have recovered"];
+      assert.deepEqual(logs, slowFails ? [] : [failing, recovered]);
+    }).pipe(Effect.provide(Logger.layer([capture])));
+  },
+);
 
 it.effect(
   "an outage is ProviderUnavailable without a held list; with one, it decides until expiry and warns once",
