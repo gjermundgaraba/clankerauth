@@ -5,8 +5,29 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ProviderUnavailable } from "../src/errors.ts";
+import { Verifier } from "../src/index.ts";
 import { execute } from "../src/transport.ts";
 import { withHttp } from "./support.ts";
+
+const listening = (handler: Parameters<typeof createServer>[1]) =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.sync(() => createServer(handler)),
+      (server) =>
+        Effect.promise(() => {
+          server.closeAllConnections();
+
+          return new Promise<void>((resolve) => server.close(() => resolve()));
+        }),
+    );
+
+    server.listen(0, "127.0.0.1");
+    yield* Effect.promise(() => once(server, "listening"));
+    const address = server.address();
+    assert(address !== null && address instanceof Object && "port" in address);
+
+    return `http://127.0.0.1:${address.port}`;
+  });
 
 it.live(
   "SDK transport preserves Fetch defaults and request headers while rejecting redirects",
@@ -14,32 +35,17 @@ it.live(
     Effect.gen(function* () {
       let redirected = 0;
 
-      const server = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          createServer((request, response) => {
-            if (request.url === "/redirect") {
-              response.writeHead(302, { location: "/target" }).end();
+      const url = yield* listening((request, response) => {
+        if (request.url === "/redirect") {
+          response.writeHead(302, { location: "/target" }).end();
 
-              return;
-            }
+          return;
+        }
 
-            if (request.url === "/target") redirected++;
-            response.end("ok");
-          }),
-        ),
-        (server) =>
-          Effect.promise(() => {
-            server.closeAllConnections();
+        if (request.url === "/target") redirected++;
+        response.end("ok");
+      });
 
-            return new Promise<void>((resolve) => server.close(() => resolve()));
-          }),
-      );
-
-      server.listen(0, "127.0.0.1");
-      yield* Effect.promise(() => once(server, "listening"));
-      const address = server.address();
-      assert(address !== null && address instanceof Object && "port" in address);
-      const url = `http://127.0.0.1:${address.port}`;
       const observed: RequestInit[] = [];
 
       yield* withHttp(
@@ -55,11 +61,12 @@ it.live(
 
           assert.equal(yield* response.text, "ok");
 
-          assert(
-            (yield* Effect.flip(
-              execute(client, HttpClientRequest.get(`${url}/redirect`)),
-            )) instanceof ProviderUnavailable,
+          const redirect = yield* Effect.flip(
+            execute(client, HttpClientRequest.get(`${url}/redirect`)),
           );
+
+          assert(redirect instanceof ProviderUnavailable);
+          assert.equal(redirect.operation, "http.redirect");
         }).pipe(Effect.scoped),
       ).pipe(
         Effect.provideService(FetchHttpClient.RequestInit, {
@@ -79,7 +86,7 @@ it.live(
       for (const init of observed) {
         assert.equal(new Headers(init.headers).get("x-default"), "configured");
         assert.equal(init.cache, "no-store");
-        assert.equal(init.redirect, "error");
+        assert.equal(init.redirect, "manual");
         assert(init.signal instanceof AbortSignal);
       }
 
@@ -87,4 +94,43 @@ it.live(
         assert.equal(new Headers(init.headers).get("x-app"), "request");
       assert.equal(redirected, 0);
     }),
+);
+
+it.live("a verifier refuses to read either document through a redirect, and follows none", () =>
+  Effect.gen(function* () {
+    let followed = 0;
+
+    const url = yield* listening((request, response) => {
+      if (request.url?.startsWith("/moved")) {
+        followed++;
+        response.end("{}");
+
+        return;
+      }
+
+      const status = request.url === "/api/keyList" ? 308 : 307;
+      response.writeHead(status, { location: `/moved${request.url}` }).end();
+    });
+
+    const verifier = yield* withHttp(
+      Verifier.make({
+        issuer: `${url}/api/auth`,
+        resource: "https://notes.example/",
+        store: Verifier.store(),
+      }),
+    );
+
+    const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "k", typ: "at+jwt" }));
+
+    for (const token of [
+      `${header.toString("base64url")}.e30.AA`,
+      `clankerauth_${"k".repeat(64)}`,
+    ]) {
+      const refused = yield* Effect.flip(verifier.verifyToken(token));
+      assert(refused instanceof ProviderUnavailable);
+      assert.equal(refused.operation, "http.redirect");
+    }
+
+    assert.equal(followed, 0);
+  }),
 );

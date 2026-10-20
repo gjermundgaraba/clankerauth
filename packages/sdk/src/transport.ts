@@ -2,6 +2,10 @@ import { Context, Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { ProviderUnavailable } from "./errors.ts";
 
+/**
+ * Send `request` without following a redirect: a redirect fails the read. `manual`, since
+ * Cloudflare Workers rejects `redirect: "error"` before sending.
+ */
 export const execute = (
   client: HttpClient.HttpClient,
   request: HttpClientRequest.HttpClientRequest,
@@ -12,8 +16,16 @@ export const execute = (
       .pipe(
         Effect.provideService(FetchHttpClient.RequestInit, {
           ...Context.getOrUndefined(context, FetchHttpClient.RequestInit),
-          redirect: "error",
+          redirect: "manual",
         }),
         Effect.mapError((cause) => new ProviderUnavailable({ operation: "http.request", cause })),
+        Effect.filterOrFail(
+          (response) => response.status < 300 || response.status >= 400,
+          (response) =>
+            new ProviderUnavailable({
+              operation: "http.redirect",
+              cause: { status: response.status },
+            }),
+        ),
       ),
   );
