@@ -97,7 +97,7 @@ import { HttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import type { AuthenticationError, ConfigurationError } from "@gjermundgaraba/clankerauth-sdk/errors";
 const verification: Effect.Effect<Verifier.Principal, AuthenticationError | ConfigurationError, HttpClient.HttpClient> =
-  Verifier.make({ issuer: "https://clankerauth.example/api/auth", resource: "https://notes.example/" })
+  Verifier.make({ issuer: "https://clankerauth.example/api/auth", resource: "https://notes.example/", store: Verifier.store() })
     .pipe(Effect.flatMap(verifier => verifier.verifyToken("token")));
 void verification;
 `,
@@ -131,6 +131,7 @@ void verification;
   const verifier = await make({
     issuer: "https://clankerauth.example/api/auth",
     resource: "https://notes.example/",
+    store: api.Verifier.store(),
   });
 
   const missing = await Effect.runPromise(Effect.flip(verifier.verifyToken("")));
@@ -177,8 +178,12 @@ void verification;
 
   try {
     const key = issuer.apiKey();
-    const listed = () => make({ issuer: issuer.issuer, resource: notes });
-    const installedVerifier = await listed();
+    const store = api.Verifier.store();
+
+    const listed = (held = api.Verifier.store()) =>
+      make({ issuer: issuer.issuer, resource: notes, store: held });
+
+    const installedVerifier = await listed(store);
 
     assert.deepEqual(await Effect.runPromise(installedVerifier.verifyToken(key)), {
       subject: "owner",
@@ -188,6 +193,8 @@ void verification;
     });
     await Effect.runPromise(installedVerifier.verifyToken(await issuer.sign()));
     issuer.revoke(key);
+    await Effect.runPromise((await listed(store)).verifyToken(key));
+    assert.equal(issuer.keyLists(), 1);
     const revoked = await Effect.runPromise(Effect.flip((await listed()).verifyToken(key)));
     assert(revoked instanceof errors.Unauthorized);
     assert.equal(issuer.keyLists(), 2);
@@ -214,7 +221,7 @@ import type { Layer } from "effect";
 import { HttpRouter } from "effect/http";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import type { Verifier } from "@gjermundgaraba/clankerauth-sdk";
+import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import { CurrentPrincipal, Principal, Whoami, returnToParameter, signOutPath, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
 import type { Caller } from "@gjermundgaraba/clankerauth-sdk/session";
@@ -232,7 +239,7 @@ void Resource.make(Authentication.make("notes.Undeclared", CurrentPrincipal), {
 void Resource.make(Notes.authentication, { scopes: ["notes:read"], required: "notes:write" });
 const layer = Notes.layer({
   issuer: "https://clankerauth.example/api/auth",
-  publicUrl: new URL("https://notes.example"),
+  publicUrl: new URL("https://notes.example"), store: Verifier.store(),
 });
 const subject = Effect.map(CurrentPrincipal, principal => principal.subject);
 const page: (principal: Principal) => string = principal => signOutUrl(principal.issuer, "/");
@@ -350,6 +357,7 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
         Notes.layer({
           issuer: "https://clankerauth.example/api/auth",
           publicUrl: new URL("https://notes.example"),
+          store: api.Verifier.store(),
         }),
       ),
       Effect.provide(FetchHttpClient.layer),

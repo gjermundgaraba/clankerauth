@@ -15,15 +15,21 @@ const resource = `${publicUrl}/api`;
 
 type Issuer = Effect.Success<ReturnType<typeof startIssuer>>;
 
-const verifierFor = (issuer: Issuer, target = resource) =>
+const verifierFor = (issuer: Issuer, target = resource, store = Verifier.store()) =>
   withHttp(
-    Verifier.make({ issuer: issuer.issuer, resource: target, requiredScopes: ["notes:read"] }),
+    Verifier.make({
+      issuer: issuer.issuer,
+      resource: target,
+      store,
+      requiredScopes: ["notes:read"],
+    }),
   );
 
 const withIssuer = Effect.gen(function* () {
   const issuer = yield* startIssuer(resource);
+  const store = Verifier.store();
 
-  return { verifier: yield* verifierFor(issuer), issuer };
+  return { verifier: yield* verifierFor(issuer, resource, store), issuer, store };
 });
 
 const sign = (issuer: Issuer, ...args: Parameters<Issuer["sign"]>) =>
@@ -31,7 +37,7 @@ const sign = (issuer: Issuer, ...args: Parameters<Issuer["sign"]>) =>
 
 it.live("API keys verify offline against one key list, with their actor, scopes and expiry", () =>
   Effect.gen(function* () {
-    const { verifier, issuer } = yield* withIssuer;
+    const { verifier, issuer, store } = yield* withIssuer;
     const principal = yield* verifier.verifyToken(issuer.key);
     assert.equal(principal.subject, "owner");
     assert.deepEqual(principal.actor, { kind: "key", keyId: "key-1" });
@@ -47,6 +53,8 @@ it.live("API keys verify offline against one key list, with their actor, scopes 
 
     issuer.revoke(issuer.key);
     yield* verifier.verifyToken(issuer.key);
+    yield* (yield* verifierFor(issuer, resource, store)).verifyToken(issuer.key);
+    assert.equal(issuer.keyLists(), 1);
     assert(
       (yield* Effect.flip((yield* verifierFor(issuer)).verifyToken(issuer.key))) instanceof
         Unauthorized,
@@ -81,7 +89,11 @@ it.live("JWTs bind exact issuer, audience, claims, lifetime and required scopes"
     assert.equal(issuer.keyLists(), 0);
 
     const other = yield* withHttp(
-      Verifier.make({ issuer: issuer.issuer, resource: `${publicUrl}/mcp` }),
+      Verifier.make({
+        issuer: issuer.issuer,
+        resource: `${publicUrl}/mcp`,
+        store: Verifier.store(),
+      }),
     );
 
     assert((yield* Effect.flip(other.verifyToken(token))) instanceof Unauthorized);
@@ -143,7 +155,9 @@ it.live("malformed credentials and outages remain distinct typed outcomes", () =
 
 it.effect("invalid standalone verifier configuration fails at construction", () =>
   Effect.gen(function* () {
-    const error = yield* Effect.flip(withHttp(Verifier.make({ issuer: "not a URL", resource })));
+    const error = yield* Effect.flip(
+      withHttp(Verifier.make({ issuer: "not a URL", resource, store: Verifier.store() })),
+    );
 
     assert(error instanceof ConfigurationError);
   }),

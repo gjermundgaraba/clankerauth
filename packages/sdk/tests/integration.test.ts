@@ -15,6 +15,7 @@ import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import * as Testing from "@gjermundgaraba/effect-actions/Testing";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { ProviderUnavailable } from "../src/errors.ts";
+import { Verifier } from "../src/index.ts";
 import { CurrentPrincipal, Whoami } from "../src/session.ts";
 import { Resource } from "../src/effect-actions.ts";
 import {
@@ -79,6 +80,7 @@ it.live("one resource protects HTTP and MCP, and the application's one rule auth
             Notes.layer({
               issuer: issuer.issuer,
               publicUrl: new URL(publicUrl),
+              store: Verifier.store(),
             }),
           ),
           Layer.provide(FetchHttpClient.layer),
@@ -201,6 +203,7 @@ it.live("a surface without discovery authenticates and publishes nothing", () =>
             Notes.layer({
               issuer: issuer.issuer,
               publicUrl: new URL(publicUrl),
+              store: Verifier.store(),
 
               discovery: false,
             }),
@@ -255,7 +258,12 @@ it.live("a listener publishing discovery warns once when reached at another host
           ActionHttp.layer(Http, app).pipe(
             Layer.provide(Notes.provider),
             Layer.provide(
-              Notes.layer({ issuer: issuer.issuer, publicUrl: new URL(publicUrl), discovery }),
+              Notes.layer({
+                issuer: issuer.issuer,
+                publicUrl: new URL(publicUrl),
+                store: Verifier.store(),
+                discovery,
+              }),
             ),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(HttpServer.layerServices),
@@ -333,7 +341,11 @@ it.live.each(["admin first", "machine first"] as const)(
         scopes: ["notes:read", "notes:write", "notes:machine"],
       });
 
-      const options = { issuer: issuer.issuer, publicUrl: new URL(publicUrl) };
+      const options = {
+        issuer: issuer.issuer,
+        publicUrl: new URL(publicUrl),
+        store: Verifier.store(),
+      };
 
       const adminSurface = ActionHttp.layer(AdminHttp, [admin, Admin.session]).pipe(
         Layer.provide(Admin.provider),
@@ -409,7 +421,13 @@ it.live(
             ),
           ).pipe(
             Layer.provide(Notes.provider),
-            Layer.provide(Notes.layer({ issuer: issuer.issuer, publicUrl: new URL(publicUrl) })),
+            Layer.provide(
+              Notes.layer({
+                issuer: issuer.issuer,
+                publicUrl: new URL(publicUrl),
+                store: Verifier.store(),
+              }),
+            ),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(HttpServer.layerServices),
           ),

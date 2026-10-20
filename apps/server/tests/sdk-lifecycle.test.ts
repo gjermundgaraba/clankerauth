@@ -89,9 +89,12 @@ it.live(
       );
 
       const verifierFor = () =>
-        Verifier.make({ issuer: issuer.issuer, resource, requiredScopes: ["notes:read"] }).pipe(
-          Effect.provide(FetchHttpClient.layer),
-        );
+        Verifier.make({
+          issuer: issuer.issuer,
+          resource,
+          store: Verifier.store(),
+          requiredScopes: ["notes:read"],
+        }).pipe(Effect.provide(FetchHttpClient.layer));
 
       const verifier = yield* verifierFor();
 
@@ -112,6 +115,7 @@ it.live(
       const other = yield* Verifier.make({
         issuer: issuer.issuer,
         resource: `${app.origin}/mcp`,
+        store: Verifier.store(),
       }).pipe(Effect.provide(FetchHttpClient.layer));
 
       assert.ok((yield* Effect.flip(other.verifyToken(token))) instanceof Unauthorized);

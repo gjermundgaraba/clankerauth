@@ -70,13 +70,25 @@ import { Effect } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
-const makeVerifier = Verifier.make({
-  issuer: "https://clankerauth.internal/api/auth",
-  resource: "https://notes.internal/",
-  requiredScopes: ["notes:read"],
-}).pipe(Effect.provide(FetchHttpClient.layer));
-// Acquire once, then use verifier.verifyToken(token).
+// Once, at module scope: what every verification has read.
+const store = Verifier.store();
+
+// Per request, in the request that verifies.
+const verify = (token: string) =>
+  Verifier.make({
+    issuer: "https://clankerauth.internal/api/auth",
+    resource: "https://notes.internal/",
+    store,
+    requiredScopes: ["notes:read"],
+  }).pipe(
+    Effect.flatMap((verifier) => verifier.verifyToken(token)),
+    Effect.provide(FetchHttpClient.layer),
+  );
 ```
+
+The store holds what verifiers have read, decoded and checked: each issuer's JWKS keys, and each resource's verified key list with when it was read and when it expires. It holds values only, never an Effect, a fiber, a Promise, a `Response` or a timer, so it may live as long as the process. A verifier holds nothing but its options, the store and the HTTP client. On a hit it verifies locally; on a miss, or once what it holds has expired, it reads the issuer in the verification that missed and writes the result back. Concurrent misses each read, so a refresh can cost one or two extra issuer reads; none waits on another's read.
+
+That split is what Cloudflare Workers requires. A Worker's I/O belongs to the request that started it: a request cannot resume work another request started, and a continuation whose request has ended is dropped ([I/O on behalf of a different request](https://developers.cloudflare.com/workers/observability/errors/#cannot-perform-io-on-behalf-of-a-different-request), [cross-request promise resolution](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#handle-cross-request-promise-resolution-correctly)). Data may live in global scope; in-flight work may not. So keep the store at module scope, as data, and acquire the verifier in each request. On Node a verifier acquired once is just as correct, since it owns no running work either.
 
 ## One resource per application
 
@@ -106,11 +118,12 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, {
 export const Http = ActionHttp.make([List, Write, Whoami], { authentication: Login });
 ```
 
-The server declares the resource once, at module level, from that descriptor, every scope it has and the one every credential must carry, `required`, one of `scopes` as the types check. It provides its `layer` and its `provider` once at application construction, never per request. `Resource.make` takes only a descriptor declaring `ProviderUnavailable`: one that does not is a type error there, naming `error: ProviderUnavailable`.
+The server declares the resource once, at module level, from that descriptor, every scope it has and the one every credential must carry, `required`, one of `scopes` as the types check. It provides its `layer` and its `provider` once at application construction. `Resource.make` takes only a descriptor declaring `ProviderUnavailable`: one that does not is a type error there, naming `error: ProviderUnavailable`.
 
 ```ts
 import { Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
+import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
@@ -133,13 +146,14 @@ const routes = Layer.mergeAll(
     NotesResource.layer({
       issuer: "https://clankerauth.internal/api/auth",
       publicUrl: new URL("https://notes.internal"),
+      store: Verifier.store(),
     }),
   ),
   Layer.provide(FetchHttpClient.layer),
 );
 ```
 
-Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the release that matches your Effect. The scopes are the same in every deployment, so they are declared with the resource; `NotesResource.layer` takes what varies by deployment and builds the resource once: its verifier and refusals. `NotesResource.provider` is the descriptor's provider, effect-actions' `Authentication.layer`: it verifies every protected route and tool call before decoding, and publishes discovery itself, public and outside authentication; there is no discovery route to merge. Discovery cache policy belongs to the host. Every response to a request it authenticates carries `Cache-Control: no-store`. Middleware of your own runs as effect-actions runs it: router middleware provided after the provider, or an HTTP layer's `middleware`.
+Serve this layer with Effect's `HttpRouter` and your Node server layer. If using `@effect/platform-node`, install the release that matches your Effect. The scopes are the same in every deployment, so they are declared with the resource; `NotesResource.layer` takes what varies by deployment and builds the resource once: its verifier and refusals. Its `store` is the verifier's, as above. The resource holds no running work, so built once it still reads the issuer only in the request that verifies; an application that builds its layers per request, as a Worker may, passes a store made at module scope, so what was read outlives each request. `NotesResource.provider` is the descriptor's provider, effect-actions' `Authentication.layer`: it verifies every protected route and tool call before decoding, and publishes discovery itself, public and outside authentication; there is no discovery route to merge. Discovery cache policy belongs to the host. Every response to a request it authenticates carries `Cache-Control: no-store`. Middleware of your own runs as effect-actions runs it: router middleware provided after the provider, or an HTTP layer's `middleware`.
 
 A surface whose callers hold API keys and never run an OAuth flow, such as a second listener beside the one that publishes the resource, sets `discovery: false`: it authenticates the same way, publishes nothing, and its challenge is a plain `Bearer`. It is the same registered resource, so it takes the publishing listener's public URL, not its own address: a public machine listener beside a private admin one still passes the admin URL.
 

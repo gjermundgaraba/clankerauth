@@ -36,6 +36,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(f
   const verifier = yield* Verifier.make({
     issuer,
     resource,
+    store: Verifier.store(),
     apiKeys: false,
   }).pipe(
     Effect.provide(

@@ -69,6 +69,11 @@ export interface Options {
    * logged once as a warning, since an OAuth client discovering the resource there refuses it.
    */
   readonly publicUrl: URL;
+  /**
+   * What the resource's verifier keeps of what it reads, `Verifier.store()`: made once where
+   * the process starts, so it outlives a layer built per request.
+   */
+  readonly store: Verifier.Store;
   /** `false` refuses API keys without reading the issuer's key list; only OAuth access tokens are accepted. */
   readonly apiKeys?: boolean;
   /**
@@ -114,6 +119,7 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
   const unbounded = yield* Verifier.make({
     issuer: options.issuer,
     resource: identifier,
+    store: options.store,
     requiredScopes: [required],
     apiKeys: options.apiKeys,
   });

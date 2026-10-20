@@ -7,6 +7,7 @@ import { checkResourceAllowed } from "@modelcontextprotocol/client";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { Resource } from "../src/effect-actions.ts";
+import { Verifier } from "../src/index.ts";
 import { ProviderUnavailable } from "../src/errors.ts";
 import { CurrentPrincipal, type Caller } from "../src/session.ts";
 import {
@@ -37,7 +38,9 @@ const write = Action.make("write", {
 const guarded = { scopes: ["notes:read", "notes:write"], required: "notes:read" } as const;
 
 const resourceFor = (issuer: string) =>
-  withHttp(resourceOf({ issuer, publicUrl: new URL(publicUrl), ...guarded }));
+  withHttp(
+    resourceOf({ issuer, publicUrl: new URL(publicUrl), store: Verifier.store(), ...guarded }),
+  );
 
 const decide = (
   check: Effect.Effect<void, Action.Forbidden, CurrentPrincipal>,
@@ -247,6 +250,7 @@ it.live("a resource that accepts only access tokens refuses a key by shape alone
       resourceOf({
         issuer: issuer.issuer,
         publicUrl: new URL(publicUrl),
+        store: Verifier.store(),
         ...guarded,
         apiKeys: false,
       }),
@@ -272,6 +276,7 @@ it.live("one resource at the origin root covers every surface an MCP client asks
       resourceOf({
         issuer: issuer.issuer,
         publicUrl: new URL(`${publicUrl}/api?x=1`),
+        store: Verifier.store(),
         ...guarded,
       }),
     );

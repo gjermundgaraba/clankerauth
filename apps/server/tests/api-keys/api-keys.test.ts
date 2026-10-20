@@ -62,7 +62,11 @@ const verify = (key: string, target = resource) =>
 
     const result = yield* Effect.result(
       Effect.flatMap(
-        Verifier.make({ issuer: `${origin}/api/auth`, resource: target }),
+        Verifier.make({
+          issuer: `${origin}/api/auth`,
+          resource: target,
+          store: Verifier.store(),
+        }),
         (verifier) => verifier.verifyToken(key),
       ),
     ).pipe(
