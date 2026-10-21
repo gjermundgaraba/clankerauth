@@ -56,3 +56,7 @@ Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `
 - `tools/oxlint/clankerauth` enforces the comment rule, each folder's import allow-list and
   where Effect may be run by hand. The root `vite.config.ts` holds the lists and
   `tests/policy.test.mjs` proves them; the rules read syntax only.
+
+## Effect
+
+Before writing or reviewing Effect code, read `node_modules/effect/AGENTS.md` in the package you are changing and the examples it links under `ai-docs/`. They ship with the installed `effect`, so they match the APIs the code compiles against. For exact signatures, read that package's installed source and types in `node_modules/effect` and `node_modules/@effect/*`. Do not write Effect APIs from memory or from examples for another version.
