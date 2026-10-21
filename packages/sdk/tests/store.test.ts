@@ -278,7 +278,7 @@ it.effect(
 );
 
 it.effect(
-  "a key list read gives its JWKS fetch a deadline of its own, so the two fetches do not share three seconds",
+  "a key list read runs its list and JWKS fetches together, each on a deadline of its own, so they do not share three seconds",
   () =>
     Effect.gen(function* () {
       const { reads, upstream, verifier } = yield* fixture;
@@ -302,4 +302,26 @@ it.effect(
       assert.deepEqual((yield* Fiber.join(stalled)).actor, { kind: "key", keyId: "key" });
       assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
     }),
+);
+
+it.effect("a late list and a stalled JWKS are decided by the held list at three seconds", () =>
+  Effect.gen(function* () {
+    const { upstream, verifier } = yield* fixture;
+    const store = Verifier.store();
+    const verify = Effect.flatMap(verifier(store), (each) => each.verifyToken(key));
+    yield* verify;
+
+    yield* TestClock.adjust("1 minute");
+    upstream.latency = { lists: "2500 millis", jwks: "1 minute" };
+    const late = yield* verify.pipe(Effect.forkChild);
+    yield* TestClock.withLive(Effect.sleep("100 millis"));
+    yield* TestClock.adjust("2500 millis");
+    // why: the list is signed with real crypto, which must finish before time moves.
+    yield* TestClock.withLive(Effect.sleep("100 millis"));
+    yield* TestClock.adjust("500 millis");
+    yield* TestClock.withLive(Effect.sleep("100 millis"));
+    assert.notEqual(late.pollUnsafe(), undefined);
+    assert.deepEqual((yield* Fiber.join(late)).actor, { kind: "key", keyId: "key" });
+    assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
+  }),
 );
