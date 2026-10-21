@@ -278,7 +278,7 @@ it.effect(
 );
 
 it.effect(
-  "a key list read runs its list and JWKS fetches together, each on a deadline of its own, so they do not share three seconds",
+  "a key list read runs its list and JWKS fetches together on deadlines of their own, so a stalled JWKS is decided by the held list",
   () =>
     Effect.gen(function* () {
       const { reads, upstream, verifier } = yield* fixture;
