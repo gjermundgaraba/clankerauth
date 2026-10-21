@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
-import { Clock, Deferred, Effect, Fiber, Logger, Result } from "effect";
+import { Clock, Deferred, Duration, Effect, Fiber, Logger, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -33,11 +33,12 @@ const capture = (logs: Array<readonly unknown[]>) =>
 
 /**
  * How the stub issuer answers a read: failing, if it is unavailable when the read arrives, and
- * after `hold` completes, if one is set then.
+ * after `hold` completes, if one is set then, and its route's `latency` passes.
  */
 interface Upstream {
   unavailable: boolean;
   hold: Deferred.Deferred<void> | undefined;
+  latency: { jwks?: Duration.Input; lists?: Duration.Input };
 }
 
 const fixture = Effect.gen(function* () {
@@ -51,7 +52,7 @@ const fixture = Effect.gen(function* () {
 
   const reads = { jwks: 0, lists: 0 };
 
-  const upstream: Upstream = { unavailable: false, hold: undefined };
+  const upstream: Upstream = { unavailable: false, hold: undefined, latency: {} };
 
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -62,6 +63,9 @@ const fixture = Effect.gen(function* () {
       const { unavailable, hold } = upstream;
 
       if (hold !== undefined) yield* Deferred.await(hold);
+      const latency = upstream.latency[jwks ? "jwks" : "lists"];
+
+      if (latency !== undefined) yield* Effect.sleep(latency);
 
       if (unavailable)
         return HttpClientResponse.fromWeb(request, new Response("{}", { status: 503 }));
@@ -271,4 +275,31 @@ it.effect(
       assert.deepEqual(logs, [failing, recovered, failing, recovered]);
     }).pipe(Effect.provide(capture(logs)));
   },
+);
+
+it.effect(
+  "a key list read gives its JWKS fetch a deadline of its own, so the two fetches do not share three seconds",
+  () =>
+    Effect.gen(function* () {
+      const { reads, upstream, verifier } = yield* fixture;
+      const store = Verifier.store();
+      const verify = Effect.flatMap(verifier(store), (each) => each.verifyToken(key));
+      upstream.latency = { lists: "1 second", jwks: "2500 millis" };
+      const cold = yield* verify.pipe(Effect.forkChild);
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      yield* TestClock.adjust("1 second");
+      // why: the list is signed with real crypto, which must finish before time moves.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      yield* TestClock.adjust("2500 millis");
+      assert.deepEqual((yield* Fiber.join(cold)).actor, { kind: "key", keyId: "key" });
+      assert.deepEqual(reads, { jwks: 1, lists: 1 });
+
+      upstream.latency = { jwks: "1 minute" };
+      yield* TestClock.adjust("1 minute");
+      const stalled = yield* verify.pipe(Effect.forkChild);
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      yield* TestClock.adjust("3 seconds");
+      assert.deepEqual((yield* Fiber.join(stalled)).actor, { kind: "key", keyId: "key" });
+      assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
+    }),
 );
