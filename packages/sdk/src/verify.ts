@@ -128,9 +128,9 @@ const documentLifetime = Duration.minutes(1);
 const cooldown = Duration.seconds(5);
 
 /**
- * How long each fetch of a key list read may take, run together: the list, and the JWKS it
- * is verified with when none is held. Under `Resource`'s five-second deadline, so an issuer
- * that stops answering either fails the read, not the request, and a held list still decides.
+ * How long each fetch of a key list read may take: the list, and the JWKS it is verified with
+ * when none is held. Under `Resource`'s five-second deadline, so an issuer that stops answering
+ * fails the read, not the request, and a held list still decides.
  */
 const listReadTimeout = Duration.seconds(3);
 
