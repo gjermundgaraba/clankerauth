@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Result, Schema } from "effect";
+import { Clock, Duration, Effect, Fiber, Result, Schema } from "effect";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import type { JWK } from "jose";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -128,9 +128,9 @@ const documentLifetime = Duration.minutes(1);
 const cooldown = Duration.seconds(5);
 
 /**
- * How long each fetch of a key list read may take: the list, and the JWKS it is verified
- * with when none is held. Under `Resource`'s five-second deadline, so an issuer that stops
- * answering fails the read, not the request, and a held list still decides.
+ * How long each fetch of a key list read may take, run together: the list, and the JWKS it
+ * is verified with when none is held. Under `Resource`'s five-second deadline, so an issuer
+ * that stops answering either fails the read, not the request, and a held list still decides.
  */
 const listReadTimeout = Duration.seconds(3);
 
@@ -148,7 +148,8 @@ const deadline =
  * request costs nothing: every read it makes runs in the verification that needs it.
  * Verification runs to completion: a deadline is the request edge's policy, which
  * `Resource` applies, so an in-process caller can await a provider call it cannot cancel.
- * The one exception is a key list read, which gives up on each of its fetches after three seconds.
+ * The one exception is a key list read, which runs its fetches together and gives up on each
+ * after three seconds.
  */
 export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const client = yield* HttpClient.HttpClient;
@@ -294,17 +295,16 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       );
     });
 
+    // why: the JWKS read runs beside the list's, on its own deadline, so neither spends the other's.
+    const signing = yield* Effect.forkScoped(keys.pipe(deadline("jwks.timeout")));
     const { list } = yield* fetched.pipe(deadline("key-list.timeout"));
 
     const rejected = (cause: unknown) =>
       new ProviderUnavailable({ operation: "key-list.verify", cause });
 
-    // why: a JWKS read on its own deadline, so a cold one does not spend the list's.
-    const payload = yield* verifySigned(
-      list,
-      KeyList.type,
-      keys.pipe(deadline("jwks.timeout")),
-    ).pipe(Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))));
+    const payload = yield* verifySigned(list, KeyList.type, Fiber.join(signing)).pipe(
+      Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))),
+    );
 
     const claims = yield* Schema.decodeUnknownEffect(KeyListClaims)(payload).pipe(
       Effect.mapError(rejected),
