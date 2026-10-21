@@ -199,6 +199,20 @@ it.live(
     }).pipe(Effect.provide(apiKeysIssuer())),
 );
 
+it.live(
+  "a fresh issuer's first key list and a JWKS read beside it share one signing key, which the JWKS publishes",
+  () =>
+    Effect.gen(function* () {
+      const [jwks, listed] = yield* Effect.all([call("/api/auth/jwks"), keyList()], {
+        concurrency: "unbounded",
+      });
+
+      const { keys } = yield* json(jwks);
+      expect(keys).toHaveLength(1);
+      expect(keys[0].kid).toBe(decodeProtectedHeader((yield* json(listed)).list).kid);
+    }).pipe(Effect.provide(apiKeysIssuer())),
+);
+
 it.live("keys cannot authenticate administration, create sessions or reach plugin routes", () =>
   Effect.gen(function* () {
     const key = yield* create;

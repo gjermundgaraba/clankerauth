@@ -247,6 +247,8 @@ export class Issuer extends Context.Service<
         yield* Effect.tryPromise(() => plan.runMigrations());
         const auth = betterAuth(options);
         const context = yield* Effect.tryPromise(() => auth.$context);
+        // why: the provider mints a missing signing key on first use, and two first uses mint two.
+        yield* Effect.tryPromise(() => auth.api.getJwks());
 
         return { auth, context };
       }, Effect.uninterruptible)();
