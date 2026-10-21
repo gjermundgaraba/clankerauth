@@ -128,10 +128,19 @@ const documentLifetime = Duration.minutes(1);
 const cooldown = Duration.seconds(5);
 
 /**
- * How long a key list read may take. Under `Resource`'s five-second deadline, so a stalled
- * issuer fails the read, not the request, and a held list still decides.
+ * How long each fetch of a key list read may take: the list, and the JWKS it is verified
+ * with when none is held. Under `Resource`'s five-second deadline, so an issuer that stops
+ * answering fails the read, not the request, and a held list still decides.
  */
 const listReadTimeout = Duration.seconds(3);
+
+const deadline =
+  (operation: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.timeoutOrElse(effect, {
+      duration: listReadTimeout,
+      orElse: () => Effect.fail(new ProviderUnavailable({ operation })),
+    });
 
 /**
  * A verifier over `options.store`; transport is selected by the application, not the SDK.
@@ -139,7 +148,7 @@ const listReadTimeout = Duration.seconds(3);
  * request costs nothing: every read it makes runs in the verification that needs it.
  * Verification runs to completion: a deadline is the request edge's policy, which
  * `Resource` applies, so an in-process caller can await a provider call it cannot cancel.
- * The one exception is a key list read, which gives up after three seconds.
+ * The one exception is a key list read, which gives up on each of its fetches after three seconds.
  */
 export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const client = yield* HttpClient.HttpClient;
@@ -202,8 +211,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     return yield* read.failure;
   });
 
-  const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string) {
-    const jwks = { keys: [...(yield* keys)] };
+  const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string, held: typeof keys) {
+    const jwks = { keys: [...(yield* held)] };
 
     return yield* Effect.tryPromise({
       try: () => createLocalJWKSet(jwks)({ alg: "EdDSA", kid }),
@@ -215,9 +224,13 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
    * A document this issuer signed for this resource: EdDSA under a key it names, with the
    * expected `typ`, issuer and audience, and not expired. Which claims it must carry is
    * its schema's to say. `Unauthorized` means it is not to be trusted; what that amounts
-   * to is the caller's to say.
+   * to is the caller's to say. Its signing keys are `held`'s, the store's JWKS by default.
    */
-  const verifySigned = Effect.fn("Verifier.signed")(function* (jws: string, typ: string) {
+  const verifySigned = Effect.fn("Verifier.signed")(function* (
+    jws: string,
+    typ: string,
+    held = keys,
+  ) {
     const header = yield* Effect.try({
       try: () => decodeProtectedHeader(jws),
       catch: unauthorized,
@@ -225,7 +238,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
     // why: refused before any JWKS read, so an unauthenticated request causes no issuer traffic.
     if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
-    const key = yield* signingKey(header.kid);
+    const key = yield* signingKey(header.kid, held);
     const now = yield* Clock.currentTimeMillis;
 
     const { payload } = yield* Effect.tryPromise({
@@ -265,24 +278,33 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       HttpClientRequest.bodyJsonUnsafe({ resource: options.resource }),
     );
 
-    const response = yield* execute(client, request);
+    const fetched = Effect.gen(function* () {
+      const response = yield* execute(client, request);
 
-    if (response.status !== 200)
-      return yield* new ProviderUnavailable({
-        operation: "key-list.fetch",
-        cause: { status: response.status },
-      });
+      if (response.status !== 200)
+        return yield* new ProviderUnavailable({
+          operation: "key-list.fetch",
+          cause: { status: response.status },
+        });
 
-    const { list } = yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(response).pipe(
-      Effect.mapError((cause) => new ProviderUnavailable({ operation: "key-list.decode", cause })),
-    );
+      return yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(response).pipe(
+        Effect.mapError(
+          (cause) => new ProviderUnavailable({ operation: "key-list.decode", cause }),
+        ),
+      );
+    });
+
+    const { list } = yield* fetched.pipe(deadline("key-list.timeout"));
 
     const rejected = (cause: unknown) =>
       new ProviderUnavailable({ operation: "key-list.verify", cause });
 
-    const payload = yield* verifySigned(list, KeyList.type).pipe(
-      Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))),
-    );
+    // why: a JWKS read on its own deadline, so a cold one does not spend the list's.
+    const payload = yield* verifySigned(
+      list,
+      KeyList.type,
+      keys.pipe(deadline("jwks.timeout")),
+    ).pipe(Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))));
 
     const claims = yield* Schema.decodeUnknownEffect(KeyListClaims)(payload).pipe(
       Effect.mapError(rejected),
@@ -309,14 +331,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
         ? undefined
         : yield* new ProviderUnavailable({ operation: settled.failure });
 
-    const read = yield* Effect.result(
-      listDocument().pipe(
-        Effect.timeoutOrElse({
-          duration: listReadTimeout,
-          orElse: () => Effect.fail(new ProviderUnavailable({ operation: "key-list.timeout" })),
-        }),
-      ),
-    );
+    const read = yield* Effect.result(listDocument());
 
     const readAt = yield* Clock.currentTimeMillis;
     const before = options.store.keyLists.get(listed);
