@@ -294,34 +294,16 @@ it.effect(
       assert.deepEqual((yield* Fiber.join(cold)).actor, { kind: "key", keyId: "key" });
       assert.deepEqual(reads, { jwks: 1, lists: 1 });
 
-      upstream.latency = { jwks: "1 minute" };
+      upstream.latency = { lists: "2500 millis", jwks: "1 minute" };
       yield* TestClock.adjust("1 minute");
       const stalled = yield* verify.pipe(Effect.forkChild);
       yield* TestClock.withLive(Effect.sleep("100 millis"));
-      yield* TestClock.adjust("3 seconds");
+      yield* TestClock.adjust("2500 millis");
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      yield* TestClock.adjust("500 millis");
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      assert.notEqual(stalled.pollUnsafe(), undefined);
       assert.deepEqual((yield* Fiber.join(stalled)).actor, { kind: "key", keyId: "key" });
       assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
     }),
-);
-
-it.effect("a late list and a stalled JWKS are decided by the held list at three seconds", () =>
-  Effect.gen(function* () {
-    const { upstream, verifier } = yield* fixture;
-    const store = Verifier.store();
-    const verify = Effect.flatMap(verifier(store), (each) => each.verifyToken(key));
-    yield* verify;
-
-    yield* TestClock.adjust("1 minute");
-    upstream.latency = { lists: "2500 millis", jwks: "1 minute" };
-    const late = yield* verify.pipe(Effect.forkChild);
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    yield* TestClock.adjust("2500 millis");
-    // why: the list is signed with real crypto, which must finish before time moves.
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    yield* TestClock.adjust("500 millis");
-    yield* TestClock.withLive(Effect.sleep("100 millis"));
-    assert.notEqual(late.pollUnsafe(), undefined);
-    assert.deepEqual((yield* Fiber.join(late)).actor, { kind: "key", keyId: "key" });
-    assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
-  }),
 );
