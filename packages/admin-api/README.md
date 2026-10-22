@@ -7,7 +7,7 @@ Its version follows the issuer's: use the one matching the issuer you call.
 ## Install
 
 ```sh
-vp add @gjermundgaraba/clankerauth-admin-api effect @gjermundgaraba/effect-actions@^0.18.0
+vp add @gjermundgaraba/clankerauth-admin-api effect @gjermundgaraba/effect-actions@^0.19.0
 ```
 
 Effect 4.0, from 4.0.4, and effect-actions are peers, shared with the program.

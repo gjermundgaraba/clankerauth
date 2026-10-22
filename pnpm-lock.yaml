@@ -204,8 +204,8 @@ catalogs:
       specifier: 0.24.0
       version: 0.24.0
     '@gjermundgaraba/effect-actions':
-      specifier: 0.18.2
-      version: 0.18.2
+      specifier: 0.19.0
+      version: 0.19.0
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -293,7 +293,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.18.2(effect@4.0.5)
+        version: 0.19.0(effect@4.0.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -348,7 +348,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.18.2(effect@4.0.5)
+        version: 0.19.0(effect@4.0.5)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.12(@opentelemetry/api@1.9.1)(vitest@5.0.5)
@@ -415,7 +415,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.18.2(effect@4.0.5)
+        version: 0.19.0(effect@4.0.5)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.12(@opentelemetry/api@1.9.1)(vitest@5.0.5)
@@ -445,7 +445,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.18.2(effect@4.0.5)
+        version: 0.19.0(effect@4.0.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -500,7 +500,7 @@ importers:
         version: 4.0.5(effect@4.0.5)(vitest@5.0.5)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.18.2(effect@4.0.5)
+        version: 0.19.0(effect@4.0.5)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
@@ -727,8 +727,8 @@ packages:
       mermaid:
         optional: true
 
-  '@gjermundgaraba/effect-actions@0.18.2':
-    resolution: {integrity: sha512-zue4JDZyS9NsHTC6LDpcmwh4ethySCpYXLE4FkHAuuijYu24Eb1p2fV9BNMgzli1BEAdcPHDw+3PG5ljKzSbjQ==}
+  '@gjermundgaraba/effect-actions@0.19.0':
+    resolution: {integrity: sha512-jH6duDALzSFLq2DPEM6qHs0V5PoJupEdr0aSnTmqAQGg4yIlKtvRpVGdf/UndFf650OTLHBcV4dpvJ9Z/UyfUw==}
     engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
     peerDependencies:
       effect: ~4.0.4
@@ -2231,7 +2231,7 @@ snapshots:
       effect: 4.0.5
       foldkit: 0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5)
 
-  '@gjermundgaraba/effect-actions@0.18.2(effect@4.0.5)':
+  '@gjermundgaraba/effect-actions@0.19.0(effect@4.0.5)':
     dependencies:
       effect: 4.0.5
 
