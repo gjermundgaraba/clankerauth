@@ -201,8 +201,8 @@ catalogs:
       specifier: 0.27.1
       version: 0.27.1
     '@gjermundgaraba-designs/pixel-paper':
-      specifier: 0.23.0
-      version: 0.23.0
+      specifier: 0.24.0
+      version: 0.24.0
     '@gjermundgaraba/effect-actions':
       specifier: 0.18.2
       version: 0.18.2
@@ -406,7 +406,7 @@ importers:
         version: 0.27.1(@voidzero-dev/vite-plus-core@1.3.0(@types/node@26.6.5)(typescript@7.0.2))(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@gjermundgaraba-designs/pixel-paper':
         specifier: 'catalog:'
-        version: 0.23.0(@effect/platform-browser@4.0.5(effect@4.0.5))(@foldkit/ui@0.168.0(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5)))(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))
+        version: 0.24.0(@effect/platform-browser@4.0.5(effect@4.0.5))(@foldkit/ui@0.168.0(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5)))(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))
       '@gjermundgaraba/clankerauth-admin-api':
         specifier: workspace:*
         version: link:../../packages/admin-api
@@ -715,8 +715,8 @@ packages:
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba-designs/pixel-paper@0.23.0':
-    resolution: {integrity: sha512-H3tm9BaJn1p6Pbg8xYGJ1hp8eAGO/0NkxzA000XQCvUHun5sZvWaaZnXQ1IJobmioNYv8X9x7IMxuko/A9qIBg==}
+  '@gjermundgaraba-designs/pixel-paper@0.24.0':
+    resolution: {integrity: sha512-cQM4DRHpz+tez87d73GsOWr4vOL0S0giUcr2s2GQnrJ1xPwycz79KYshkbALdmWwmgpd8FISCIT7QQmfMn7M9g==}
     peerDependencies:
       '@effect/platform-browser': ^4.0.0
       '@foldkit/ui': ^0.168.0
@@ -2223,7 +2223,7 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba-designs/pixel-paper@0.23.0(@effect/platform-browser@4.0.5(effect@4.0.5))(@foldkit/ui@0.168.0(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5)))(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))':
+  '@gjermundgaraba-designs/pixel-paper@0.24.0(@effect/platform-browser@4.0.5(effect@4.0.5))(@foldkit/ui@0.168.0(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5)))(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))':
     dependencies:
       '@effect/platform-browser': 4.0.5(effect@4.0.5)
       '@foldkit/ui': 0.168.0(effect@4.0.5)(foldkit@0.168.0(@effect/platform-browser@4.0.5(effect@4.0.5))(effect@4.0.5))

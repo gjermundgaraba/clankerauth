@@ -34,7 +34,7 @@ catalog:
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.88.0
   "@gjermundgaraba/effect-actions": 0.18.2
-  "@gjermundgaraba-designs/pixel-paper": 0.23.0
+  "@gjermundgaraba-designs/pixel-paper": 0.24.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2
   "@types/proper-lockfile": 4.1.4
