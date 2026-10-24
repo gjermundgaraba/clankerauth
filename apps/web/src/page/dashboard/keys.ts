@@ -18,7 +18,7 @@ import { type SectionContext, footView, itemButtonView, momentOf, noteView } fro
 type KeyView = typeof ApiKey.Type;
 
 const INTRO =
-  "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours. A key granted on clankerauth administration administers this issuer, and every change to it applies at once.";
+  "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours. A grant on clankerauth administration lets a key administer this issuer; disabling, deleting or re-scoping the key ends that access at once.";
 
 export const keysHeadView = (context: SectionContext, h: HtmlBuilder<Message>): Html =>
   PageHead.view(

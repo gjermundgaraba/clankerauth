@@ -46,6 +46,6 @@ const program = Effect.gen(function* () {
 
 A refusal fails with its tagged error, such as `ResourceNotFound` from `getResource` or `deleteResource`; each action declares the ones it can produce. `getResource` reads one resource, `putResource` creates or updates one to exactly the name and scopes given, so a deployment tool states what it wants without choosing between create and update, and `deleteResource` removes one.
 
-The owner creates an administration key with `clankerauth create-api-key --name deployer --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}' --expires-at null`, or in the dashboard. The issuer checks it on every request, so disabling or deleting it ends its access at once. It acts as the owner: with `clankerauth:write` it may create and delete administration keys, itself among them.
+The owner creates an administration key with `clankerauth create-api-key --name deployer --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}' --expires-at null`, or in the dashboard. What it may do, and when a change to it applies, is in [the issuer's README](../../README.md#administer-unattended-with-an-api-key).
 
 MIT licensed.

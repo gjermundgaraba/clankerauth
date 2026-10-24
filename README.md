@@ -236,9 +236,11 @@ clankerauth create-api-key --name deployer --expires-at null \
 It is sent as `Authorization: Bearer <key>` to `/api/owner/<action>` or `/mcp`. The
 `clankerauth` command reads it from `CLANKERAUTH_TOKEN`, with the issuer's origin in
 `CLANKERAUTH_URL`, and needs no sign-in then; a program hands the same variable to `token` or
-`authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. Unlike
-other keys, the issuer checks it itself on every request instead of publishing it in a key
-list: disabling, deleting, re-scoping or expiring it applies to the next request. It acts as the
+`authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. The
+issuer reads the key's administration grant from its own database on every request, so
+disabling, deleting, re-scoping or expiring the key ends administration on the next request.
+That grant never enters a key list, so administration's stays empty; grants the same key holds on other resources
+reach their key lists as any key's do, and changes to them apply within about a minute. It acts as the
 owner, so a key with `clankerauth:write` can do everything the owner can over
 administration, including creating, re-scoping and deleting administration keys, itself among
 them; that is allowed, since `clankerauth:write` already amounts to access to every resource.
