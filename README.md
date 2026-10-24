@@ -98,7 +98,7 @@ Content-Type: application/json
 { "resource": "https://notes.internal/" }
 ```
 
-`200` returns `{ list }`: a JWT with header `typ: key-list+jwt`, signed with the same EdDSA key as access tokens and published in the same JWKS, whose `aud` is the resource and whose `keys` claim holds one entry per enabled, unexpired key granted on it. An entry is found by, and sealed under, values derived from the key's SHA-256 digest and the resource identifier, so only a holder of the key can find or read it: its key ID, owner ID, the scopes it still has on that resource, and its expiry. Anyone else still sees how many entries the resource has, when they come and go, and roughly how large each grant is. An unknown resource, and administration, which keys never reach, get a list with no entries. The request needs no credential, so a resource server is configured with nothing but the issuer URL and its own resource identifier.
+`200` returns `{ list }`: a JWT with header `typ: key-list+jwt`, signed with the same EdDSA key as access tokens and published in the same JWKS, whose `aud` is the resource and whose `keys` claim holds one entry per enabled, unexpired key granted on it. An entry is found by, and sealed under, values derived from the key's SHA-256 digest and the resource identifier, so only a holder of the key can find or read it: its key ID, owner ID, the scopes it still has on that resource, and its expiry. Anyone else still sees how many entries the resource has, when they come and go, and roughly how large each grant is. An unknown resource, and administration, whose keys the issuer checks itself, get a list with no entries. The request needs no credential, so a resource server is configured with nothing but the issuer URL and its own resource identifier.
 
 A list is valid for 24 hours from `iat`, and the SDK reads the next one after a minute. A key's expiry is checked on every request. A key disabled, deleted or re-scoped keeps the access it had until that next read, within about a minute. A key created, enabled or granted on the resource works within seconds: a key the held list does not name has the list read again first, at most once every five seconds. A resource server that cannot reach the issuer keeps deciding from the last list it read, until that list expires. That day is also the longest a revoked key stays usable during an outage. Lists are re-signed on every read, so rotating the signing key needs nothing but publishing the new key. A key is a bearer secret: any resource it is granted on can replay it to the others, so give a resource you trust less its own key. Every timestamp this issuer reads or writes is an ISO-8601 instant in UTC; a value without an offset is read as UTC, never as the host's local time. The dashboard lists the first 100 keys.
 
@@ -132,19 +132,19 @@ and are exposed at `POST /api/<action>`. No-input actions take
 `{}`; create actions return HTTP 201. OAuth protocol endpoints and the
 operational `GET /healthz` endpoint are separate.
 
-| Action                 | Access                                                                          | Transport |
-| ---------------------- | ------------------------------------------------------------------------------- | --------- |
-| `setupStatus`          | Public                                                                          | HTTP      |
-| `setupOwner`           | Public; succeeds only before an owner exists                                    | HTTP      |
-| `keyList`              | Public; entries are sealed to the keys they describe                            | HTTP      |
-| Administration actions | Owner session cookie (SameSite), at `POST /api/<action>`                        | HTTP      |
-| Administration actions | OAuth access token for `<CLANKERAUTH_BASE_URL>/`, at `POST /api/owner/<action>` | HTTP      |
-| Administration tools   | OAuth access token for `<CLANKERAUTH_BASE_URL>/`, at `/mcp`                     | MCP       |
+| Action                 | Access                                                                                     | Transport |
+| ---------------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `setupStatus`          | Public                                                                                     | HTTP      |
+| `setupOwner`           | Public; succeeds only before an owner exists                                               | HTTP      |
+| `keyList`              | Public; entries are sealed to the keys they describe                                       | HTTP      |
+| Administration actions | Owner session cookie (SameSite), at `POST /api/<action>`                                   | HTTP      |
+| Administration actions | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `POST /api/owner/<action>` | HTTP      |
+| Administration tools   | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `/mcp`                     | MCP       |
 
-A token needs `clankerauth:read` to list and `clankerauth:write` for everything else, over
-HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding,
+A token or key needs `clankerauth:read` to list and `clankerauth:write` for everything else,
+over HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding,
 `POST /api/<action>`; `/api/owner/<action>` serves the same owner operations to an access
-token, as the `clankerauth` command calls them, and nothing else. The
+token or an administration key, as the `clankerauth` command calls them, and nothing else. The
 dashboard uses the direct typed action client. Each action declares the failures it can
 produce, and each failure names its subject and carries a `message`. Input that does not
 decode, such as a setup password outside 8 to 128 characters, or that decodes but the issuer's
@@ -194,7 +194,7 @@ that want rotating refresh tokens also request `offline_access` and declare the
 `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
 access must authorize again after expiration.
 
-Every MCP and `/api/owner` request requires a bearer OAuth access token, verified with the same SDK as consumer resource servers. Owner cookies and API keys do not authenticate MCP, and API keys cannot be granted administration permissions. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
+Every MCP and `/api/owner` request requires a bearer: an OAuth access token, verified with the same SDK as consumer resource servers, or an administration key. Owner cookies do not authenticate MCP. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
 MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
 session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
@@ -216,9 +216,34 @@ login <url>` signs in as the owner through the browser, and every administration
 command over `/api/owner` printing JSON. `clankerauth login <application URL>` signs in to that
 application's resource too, with the scopes it publishes, and `clankerauth token <application
 URL>` prints a current access token for it, so a script takes its bearer token from
-there instead of keeping an API key. A program written with Effect takes it from `token` of
-the SDK's `/credentials` instead, and calls administration in process with
+there instead of keeping an API key. Unattended, it takes an administration key from
+`CLANKERAUTH_TOKEN` instead, with the issuer in `CLANKERAUTH_URL`. A program written with
+Effect takes either from `token` of the SDK's `/credentials` instead, and calls administration in process with
 [`@gjermundgaraba/clankerauth-admin-api`](packages/admin-api/README.md).
+
+### Administer unattended with an API key
+
+A program with no browser and no disk to keep a sign-in on, such as a deployer, administers
+with an **administration key**: an API key granted on the administration resource,
+`<CLANKERAUTH_BASE_URL>/`, with `clankerauth:read`, `clankerauth:write` or both. The owner
+creates it like any other key, in the dashboard or with the CLI:
+
+```sh
+clankerauth create-api-key --name deployer --expires-at null \
+  --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}'
+```
+
+It is sent as `Authorization: Bearer <key>` to `/api/owner/<action>` or `/mcp`. The
+`clankerauth` command reads it from `CLANKERAUTH_TOKEN`, with the issuer's origin in
+`CLANKERAUTH_URL`, and needs no sign-in then; a program hands the same variable to `token` or
+`authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. Unlike
+other keys, the issuer checks it itself on every request instead of publishing it in a key
+list: disabling, deleting, re-scoping or expiring it applies to the next request. It acts as the
+owner, so a key with `clankerauth:write` can do everything the owner can over
+administration, including creating, re-scoping and deleting administration keys, itself among
+them; that is allowed, since `clankerauth:write` already amounts to access to every resource.
+It cannot sign in to the dashboard or call its cookie binding, `/api/<action>`. Give it `clankerauth:read` alone
+when a program only lists, and an expiry when it should lapse on its own.
 
 See the breaking [0.27.0](docs/releases/0.27.0.md), [0.26.0](docs/releases/0.26.0.md), [0.25.0](docs/releases/0.25.0.md), [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 

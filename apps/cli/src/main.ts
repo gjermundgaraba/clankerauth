@@ -108,17 +108,23 @@ const notSignedIn = new CliError.UserError({
   userMessage: "Not signed in: run `clankerauth login <url>` first.",
 });
 
-const administrationSignIn = Effect.gen(function* () {
-  const named = yield* Config.option(Config.String("CLANKERAUTH_URL")).pipe(
-    Effect.mapError(refused),
-  );
+const issuerNamed = Config.option(Config.String("CLANKERAUTH_URL")).pipe(
+  Effect.mapError(refused),
+  Effect.flatMap((named) =>
+    Option.exists(named, (url) => !URL.canParse(url))
+      ? Effect.fail(
+          new CliError.UserError({
+            cause: "CLANKERAUTH_URL",
+            userMessage:
+              "CLANKERAUTH_URL is no URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
+          }),
+        )
+      : Effect.succeed(named),
+  ),
+);
 
-  if (Option.exists(named, (url) => !URL.canParse(url)))
-    return yield* new CliError.UserError({
-      cause: "CLANKERAUTH_URL",
-      userMessage:
-        "CLANKERAUTH_URL is no URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
-    });
+const administrationSignIn = Effect.gen(function* () {
+  const named = yield* issuerNamed;
 
   const kept = (yield* Credentials.list().pipe(Effect.mapError(refused)))
     .filter((signIn) => signIn.resource === administrationIdentifier(signIn.url))
@@ -142,6 +148,28 @@ const administrationSignIn = Effect.gen(function* () {
   return only;
 });
 
+const administrationKey = Config.Redacted("CLANKERAUTH_TOKEN");
+
+// why: a key the environment gives needs no sign-in, so the issuer is named alongside it
+const administrationTarget = Effect.gen(function* () {
+  const given = yield* Config.option(administrationKey).pipe(Effect.mapError(refused));
+
+  if (Option.isNone(given)) return yield* administrationSignIn;
+
+  const named = yield* issuerNamed;
+
+  if (Option.isNone(named))
+    return yield* new CliError.UserError({
+      cause: "CLANKERAUTH_URL",
+      userMessage:
+        "CLANKERAUTH_TOKEN is set without CLANKERAUTH_URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
+    });
+
+  const url = new URL(named.value).origin;
+
+  return { url, resource: administrationIdentifier(url) };
+});
+
 const tokenCommand = Command.make(
   "token",
   {
@@ -163,12 +191,12 @@ const tokenCommand = Command.make(
   ),
 );
 
-const administrationClient = Effect.flatMap(administrationSignIn, (signIn) =>
+const administrationClient = Effect.flatMap(administrationTarget, (target) =>
   ActionHttp.client(OwnerHttp, {
-    baseUrl: signIn.url,
+    baseUrl: target.url,
     transformClient: (client) =>
       HttpClient.catchTag(
-        Credentials.authorizing({ url: signIn.resource })(client),
+        Credentials.authorizing({ url: target.resource, token: administrationKey })(client),
         ["SignInRequired", "TokenUnavailable"],
         (error) => Effect.fail(refused(error)),
       ),

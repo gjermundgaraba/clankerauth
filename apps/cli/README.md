@@ -18,6 +18,18 @@ The sign-ins are kept in `$XDG_CONFIG_HOME/clankerauth/sign-ins.json`, `~/.confi
 
 Administration commands act at the issuer of the one administration sign-in kept. Signed in to administration at several issuers, name one with `CLANKERAUTH_URL`, its origin; a value that is no URL is refused.
 
+Unattended, such as in a container with no browser or disk to keep a sign-in on, the commands take an administration key, an API key granted on the issuer's origin root, from `CLANKERAUTH_TOKEN` instead, and then act at the issuer `CLANKERAUTH_URL` names, which they require. No sign-in is read or written. The owner creates the key once, signed in:
+
+```sh
+clankerauth create-api-key --name deployer --expires-at null \
+  --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}'
+
+CLANKERAUTH_URL=https://clankerauth.home.example CLANKERAUTH_TOKEN=clankerauth_… \
+  clankerauth list-api-keys
+```
+
+The issuer checks the key on every request, so disabling or deleting it ends its access at once. With `clankerauth:write` it may create and delete administration keys too, itself among them.
+
 ## Tokens for other commands
 
 `token <url>` prints a current access token for the resource signed in to that the URL is under, the most specific when several are, and nothing else, refreshing it first when it is about to expire; without a URL it prints administration's. Another command, or a script, gets its bearer token from there instead of keeping a key; a program written with Effect uses `token` of [`@gjermundgaraba/clankerauth-sdk/credentials`](../../packages/sdk/README.md) instead, which reads and refreshes the same sign-in:

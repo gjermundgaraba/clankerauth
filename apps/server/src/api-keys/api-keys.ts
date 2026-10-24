@@ -88,7 +88,7 @@ export class ApiKeys extends Context.Service<
     /**
      * Every enabled, unexpired key granted on the resource, with the scopes it still
      * defines, sealed and signed for offline verification. An unknown resource, and the
-     * administration resource, which keys never reach, get a list with no entries.
+     * administration resource, which checks its keys in process, get a list with no entries.
      */
     readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, InternalServerError>;
   }
@@ -107,12 +107,6 @@ export class ApiKeys extends Context.Service<
 
         for (const [identifier, scopes] of Object.entries(grants)) {
           const resource = yield* catalog.get(identifier);
-
-          if (resource?.builtIn)
-            return yield* invalidInput(
-              ["permissions", identifier],
-              "Administration requires OAuth access tokens, not API keys",
-            );
 
           if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
             return yield* invalidInput(

@@ -37,7 +37,7 @@ import { clientsHeadView, clientsPanels } from "./clients.ts";
 import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import * as Form from "./form.ts";
 import * as FormView from "./formView.ts";
-import { grantableResources, keysHeadView, keysPanels } from "./keys.ts";
+import { keysHeadView, keysPanels } from "./keys.ts";
 import type { Listing } from "./listing.ts";
 import { Message } from "./message.ts";
 import {
@@ -351,9 +351,7 @@ const editorCardView = (
           model: form,
           view: FormView.view,
           viewInputs: {
-            resources: Form.Model.guards.Key(form)
-              ? grantableResources(context)
-              : context.listing.overview.resources,
+            resources: context.listing.overview.resources,
             initialFocus: render.initialFocus,
           },
           toParentMessage: (message) => Message.GotFormMessage({ message }),

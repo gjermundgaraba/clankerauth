@@ -14,10 +14,10 @@ Effect 4.0, from 4.0.4, and effect-actions are peers, shared with the program.
 
 ## Call administration from a program
 
-`OwnerHttp` is the binding served at `/api/owner/<action>`, authenticated by an owner's access token for the administration resource, the issuer's origin root. The owner's sign-in that `clankerauth login <issuer>` keeps gives one: `authorizing` of [`@gjermundgaraba/clankerauth-sdk/credentials`](../sdk/README.md) sends it with each request, refreshed as it expires, and the methods fail with `SignInRequired` when there is none.
+`OwnerHttp` is the binding served at `/api/owner/<action>`, authenticated by an owner's access token for the administration resource, the issuer's origin root, or by an administration key: an API key granted `clankerauth:read` or `clankerauth:write` on that resource. The owner's sign-in that `clankerauth login <issuer>` keeps gives a token: `authorizing` of [`@gjermundgaraba/clankerauth-sdk/credentials`](../sdk/README.md) sends it with each request, refreshed as it expires, and the methods fail with `SignInRequired` when there is none. Given `token`, `authorizing` sends what the environment holds instead, so the program below runs unattended with an administration key in `CLANKERAUTH_TOKEN`, the variable the `clankerauth` command reads too, and with the owner's sign-in when it is unset.
 
 ```ts
-import { Effect } from "effect";
+import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
@@ -28,7 +28,10 @@ const issuer = "https://clankerauth.home.example";
 const program = Effect.gen(function* () {
   const admin = yield* ActionHttp.client(OwnerHttp, {
     baseUrl: issuer,
-    transformClient: Credentials.authorizing({ url: issuer }),
+    transformClient: Credentials.authorizing({
+      url: issuer,
+      token: Config.Redacted("CLANKERAUTH_TOKEN"),
+    }),
   });
 
   const { created } = yield* admin.putResource({
@@ -43,6 +46,6 @@ const program = Effect.gen(function* () {
 
 A refusal fails with its tagged error, such as `ResourceNotFound` from `getResource` or `deleteResource`; each action declares the ones it can produce. `getResource` reads one resource, `putResource` creates or updates one to exactly the name and scopes given, so a deployment tool states what it wants without choosing between create and update, and `deleteResource` removes one.
 
-Administration takes no API keys: the token is always an owner's.
+The owner creates an administration key with `clankerauth create-api-key --name deployer --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}' --expires-at null`, or in the dashboard. The issuer checks it on every request, so disabling or deleting it ends its access at once. It acts as the owner: with `clankerauth:write` it may create and delete administration keys, itself among them.
 
 MIT licensed.

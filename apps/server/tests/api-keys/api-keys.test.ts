@@ -3,14 +3,21 @@ import { nodeHandler } from "../../src/http/application.ts";
 import { expect } from "vite-plus/test";
 import { administrationTools, webMcpRequest, withMcpClient } from "../mcp.ts";
 import { administrationResource, mcpOAuthGrant } from "../mcp-oauth-helper.ts";
-import { Context, Effect, Layer, Result, Schema } from "effect";
+import { Config, ConfigProvider, Context, Effect, Layer, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import type * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
+import * as Testing from "@gjermundgaraba/effect-actions/Testing";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
-import { Administration, InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
+import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
+import {
+  Administration,
+  InternalServerError,
+  OwnerHttp,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { listen } from "../../src/platform/node-http.ts";
 import { signIn, testWebApplication, WebApplication } from "../test-issuer.ts";
 import { Database } from "../../src/platform/sqlite.ts";
@@ -213,18 +220,139 @@ it.live(
     }).pipe(Effect.provide(apiKeysIssuer())),
 );
 
-it.live("keys cannot authenticate administration, create sessions or reach plugin routes", () =>
+it.live(
+  "keys cannot authenticate the dashboard's binding, create sessions or reach plugin routes",
+  () =>
+    Effect.gen(function* () {
+      const key = yield* create;
+      expect(
+        (yield* call("/api/listApiKeys", {}, { cookie: "", authorization: `Bearer ${key.key}` }))
+          .status,
+      ).toBe(401);
+      expect(
+        (yield* call("/api/listApiKeys", {}, { cookie: "", "x-api-key": key.key })).status,
+      ).toBe(401);
+      expect((yield* call("/api/auth/api-key/create", { name: "Forbidden" })).status).toBe(404);
+      expect(yield* verify("clankerauth_invalid")).toBe("Unauthorized");
+    }).pipe(Effect.provide(apiKeysIssuer())),
+);
+
+const administration = `${origin}/`;
+
+const owner = (action: string, body: TestRequestBody, key: string) =>
+  send("", `/api/owner/${action}`, body, { authorization: `Bearer ${key}` });
+
+const createAdministrationKey = (scopes: ReadonlyArray<string>, by?: string) =>
   Effect.gen(function* () {
-    const key = yield* create;
-    expect(
-      (yield* call("/api/listApiKeys", {}, { cookie: "", authorization: `Bearer ${key.key}` }))
-        .status,
-    ).toBe(401);
-    expect((yield* call("/api/listApiKeys", {}, { cookie: "", "x-api-key": key.key })).status).toBe(
-      401,
-    );
-    expect((yield* call("/api/auth/api-key/create", { name: "Forbidden" })).status).toBe(404);
-    expect(yield* verify("clankerauth_invalid")).toBe("Unauthorized");
+    const body = {
+      name: "Deployer",
+      permissions: { [administration]: scopes },
+      expiresAt: null,
+    };
+
+    const response =
+      by === undefined
+        ? yield* call("/api/createApiKey", body)
+        : yield* owner("createApiKey", body, by);
+
+    expect(response.status, yield* text(response.clone())).toBe(201);
+
+    return Schema.decodeUnknownSync(CreatedApiKey)(yield* json(response));
+  });
+
+it.live(
+  "an administration key administers at /api/owner, as its scopes allow, from its next request",
+  () =>
+    Effect.gen(function* () {
+      const key = yield* createAdministrationKey(["clankerauth:read", "clankerauth:write"]);
+      expect((yield* owner("listApiKeys", {}, (yield* create).key)).status).toBe(401);
+      expect((yield* owner("listApiKeys", {}, "clankerauth_invalid")).status).toBe(401);
+
+      const listed = yield* owner("listApiKeys", {}, key.key);
+      expect(listed.status).toBe(200);
+      expect(JSON.stringify(yield* json(listed))).not.toContain(key.key);
+
+      const notes = {
+        identifier: "https://notes.internal/",
+        name: "Notes",
+        scopes: ["notes:read"],
+      };
+
+      expect((yield* owner("putResource", notes, key.key)).status).toBe(200);
+      expect(
+        yield* json(yield* owner("getResource", { identifier: notes.identifier }, key.key)),
+      ).toMatchObject(notes);
+      expect(decodeJwt((yield* json(yield* keyList(administration))).list).keys).toEqual([]);
+
+      expect(
+        (yield* call("/api/updateApiKey", {
+          keyId: key.keyId,
+          permissions: { [administration]: ["clankerauth:read"] },
+        })).status,
+      ).toBe(200);
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(200);
+      const refused = yield* owner("deleteResource", { identifier: notes.identifier }, key.key);
+      expect(refused.status).toBe(403);
+      expect((yield* json(refused))._tag).toBe("Forbidden");
+
+      expect((yield* call("/api/updateApiKey", { keyId: key.keyId, enabled: false })).status).toBe(
+        200,
+      );
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(401);
+      expect((yield* call("/api/updateApiKey", { keyId: key.keyId, enabled: true })).status).toBe(
+        200,
+      );
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(200);
+
+      yield* (yield* Database)
+        .sql`UPDATE apikey SET expiresAt = ${new Date(Date.now() - 1000).toISOString()} WHERE id = ${key.keyId}`;
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(401);
+    }).pipe(Effect.provide(apiKeysIssuer())),
+);
+
+it.live("an administration key creates and deletes administration keys, itself among them", () =>
+  Effect.gen(function* () {
+    const key = yield* createAdministrationKey(["clankerauth:read", "clankerauth:write"]);
+    const child = yield* createAdministrationKey(["clankerauth:write"], key.key);
+    expect((yield* owner("listApiKeys", {}, child.key)).status).toBe(200);
+    expect((yield* owner("deleteApiKey", { keyId: child.keyId }, key.key)).status).toBe(200);
+    expect((yield* owner("listApiKeys", {}, child.key)).status).toBe(401);
+    expect((yield* owner("deleteApiKey", { keyId: key.keyId }, key.key)).status).toBe(200);
+    expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(401);
+    expect((yield* json(yield* call("/api/listApiKeys", {}))).keys).toEqual([]);
+  }).pipe(Effect.provide(apiKeysIssuer())),
+);
+
+it.live("an administration key calls administration tools over MCP", () =>
+  Effect.gen(function* () {
+    const key = yield* createAdministrationKey(["clankerauth:read"]);
+    const handle = yield* WebApplication;
+    const tools = yield* administrationTools(handle, origin, key.key);
+    expect((yield* tools.listApiKeys()).keys).toHaveLength(1);
+  }).pipe(Effect.provide(apiKeysIssuer())),
+);
+
+it.live("a program's administration client sends the key the environment gives", () =>
+  Effect.gen(function* () {
+    const key = yield* createAdministrationKey(["clankerauth:read"]);
+
+    const client = yield* ActionHttp.client(OwnerHttp, {
+      baseUrl: origin,
+      transformClient: Credentials.authorizing({
+        url: administration,
+        token: Config.Redacted("CLANKERAUTH_TOKEN"),
+      }),
+    }).pipe(Effect.provide(Testing.layer(yield* WebApplication)));
+
+    const listed = yield* client
+      .listApiKeys()
+      .pipe(
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromEnvRecord({ CLANKERAUTH_TOKEN: key.key })),
+        ),
+      );
+
+    expect(listed.keys.map((entry) => entry.keyId)).toEqual([key.keyId]);
   }).pipe(Effect.provide(apiKeysIssuer())),
 );
 
@@ -641,15 +769,12 @@ it.live(
     }).pipe(Effect.provide(apiKeysIssuer())),
 );
 
-it.live(
-  "API keys reject administration grants on creation and update without changing stored permissions",
-  () =>
-    Effect.gen(function* () {
-      const permissions = { [`${origin}/`]: ["clankerauth:write"] };
-
+it.live("administration grants take only administration's own scopes", () =>
+  Effect.gen(function* () {
+    for (const scope of ["offline_access", "example:read"]) {
       const created = yield* call("/api/createApiKey", {
         name: "Invalid administration key",
-        permissions,
+        permissions: { [`${origin}/`]: [scope] },
         expiresAt: null,
       });
 
@@ -657,15 +782,18 @@ it.live(
       expect((yield* json(created)).issues).toEqual([
         {
           path: ["permissions", `${origin}/`],
-          message: "Administration requires OAuth access tokens, not API keys",
+          message: "Select explicitly granted, currently available Resource scopes",
         },
       ]);
-      const key = yield* create;
-      expect((yield* call("/api/updateApiKey", { keyId: key.keyId, permissions })).status).toBe(
-        400,
-      );
-      expect(yield* verify(key.key)).toMatchObject({ scopes: ["example:read"] });
-    }).pipe(Effect.provide(apiKeysIssuer())),
+    }
+
+    const key = yield* create;
+    const permissions = { [resource]: ["example:read"], [`${origin}/`]: ["clankerauth:read"] };
+    const updated = yield* call("/api/updateApiKey", { keyId: key.keyId, permissions });
+    expect(updated.status).toBe(200);
+    expect((yield* json(updated)).permissions).toEqual(permissions);
+    expect(yield* verify(key.key)).toMatchObject({ scopes: ["example:read"] });
+  }).pipe(Effect.provide(apiKeysIssuer())),
 );
 
 it.live("renaming a key preserves grants for resources that are no longer available", () =>

@@ -158,7 +158,7 @@ describe("dashboard view", () => {
     );
   });
 
-  test("the built-in administration resource is fixed and grants no API keys", () => {
+  test("the built-in administration resource is fixed, and API keys are granted on it", () => {
     scene(
       { update, view: resourcesView },
       given(cataloged),
@@ -177,7 +177,7 @@ describe("dashboard view", () => {
       inside(
         role("dialog", { name: "Create API key" }),
         expect(text("Fixture API", { exact: false })).toExist(),
-        expect(text("clankerauth administration", { exact: false })).toBeAbsent(),
+        expect(text("clankerauth administration", { exact: false })).toExist(),
       ),
     );
   });

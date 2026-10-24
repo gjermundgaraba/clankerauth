@@ -668,6 +668,44 @@ test("sign-ins at two issuers are kept side by side, and CLANKERAUTH_URL picks w
   expect(kept.status).toBe(200);
 });
 
+test("an administration key in CLANKERAUTH_TOKEN administers without a sign-in", async () => {
+  const { owner, cli } = await signedIn();
+
+  const created = await cli.run([
+    "create-api-key",
+    "--name",
+    "deployer",
+    "--permissions",
+    JSON.stringify({ [owner.administration]: ["clankerauth:read", "clankerauth:write"] }),
+    "--expires-at",
+    "null",
+  ]);
+
+  expect(created.code, created.stderr).toBe(0);
+  const key = Schema.decodeUnknownSync(Schema.fromJsonString(Created))(created.stdout);
+  const unattended = await home();
+  const env = { CLANKERAUTH_TOKEN: key.key, CLANKERAUTH_URL: owner.issuer.url };
+
+  const listed = await unattended.run(["list-api-keys"], undefined, env);
+  expect(listed.code, listed.stderr).toBe(0);
+  expect(listed.stdout).toContain(key.keyId);
+  await expect(stat(unattended.file)).rejects.toThrow();
+
+  const unnamed = await unattended.run(["list-api-keys"], undefined, {
+    CLANKERAUTH_TOKEN: key.key,
+  });
+
+  expect(unnamed.code).toBe(1);
+  expect(unnamed.stderr).toContain("CLANKERAUTH_TOKEN is set without CLANKERAUTH_URL");
+
+  const deleted = await unattended.run(["delete-api-key", "--key-id", key.keyId], undefined, env);
+  expect(deleted.code, deleted.stderr).toBe(0);
+
+  const refused = await unattended.run(["list-api-keys"], undefined, env);
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain("Unauthenticated");
+});
+
 test("a read-only sign-in lists and is refused a change", async () => {
   const { owner, cli } = await signedIn("--scope", "clankerauth:read");
   expect(signInTo(await cli.stored(), owner.administration).scope).toBe(

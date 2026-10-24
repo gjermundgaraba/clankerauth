@@ -1,4 +1,4 @@
-import type { ApiKey, ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
+import type { ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Record } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
@@ -17,13 +17,8 @@ import { type SectionContext, footView, itemButtonView, momentOf, noteView } fro
 
 type KeyView = typeof ApiKey.Type;
 
-type ResourceView = typeof ResourceSummary.Type;
-
 const INTRO =
-  "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours.";
-
-export const grantableResources = ({ listing }: SectionContext): ReadonlyArray<ResourceView> =>
-  Array.filter(listing.overview.resources, ({ builtIn }) => !builtIn);
+  "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours. A key granted on clankerauth administration administers this issuer, and every change to it applies at once.";
 
 export const keysHeadView = (context: SectionContext, h: HtmlBuilder<Message>): Html =>
   PageHead.view(
@@ -35,8 +30,7 @@ export const keysHeadView = (context: SectionContext, h: HtmlBuilder<Message>): 
           {
             label: "create key",
             glyph: "plus",
-            isDisabled:
-              context.isHeld || !Array.isReadonlyArrayNonEmpty(grantableResources(context)),
+            isDisabled: context.isHeld,
             onClick: Message.ClickedOpenForm({ form: createKey() }),
           },
           h,
@@ -102,7 +96,7 @@ const keyPanel = (context: SectionContext, key: KeyView, h: HtmlBuilder<Message>
           smallButton("rename", Message.ClickedOpenForm({ form: renameKey(key) })),
           smallButton(
             "edit grants",
-            Message.ClickedOpenForm({ form: editGrants(key, grantableResources(context)) }),
+            Message.ClickedOpenForm({ form: editGrants(key, context.listing.overview.resources) }),
           ),
           smallButton(
             enabled ? "disable" : "enable",
@@ -125,10 +119,6 @@ export const keysPanels = (
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<Html> => [
   noteView(INTRO, h),
-  ...Array.match(grantableResources(context), {
-    onEmpty: () => [noteView("Add a Resource to grant access.", h)],
-    onNonEmpty: () => [],
-  }),
   ...Array.match(context.listing.keys, {
     onEmpty: () => [
       Panel.view(

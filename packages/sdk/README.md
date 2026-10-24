@@ -36,7 +36,7 @@ The package is free of side effects, so a bundler drops what a page does not use
 
 ## Call an application from a program
 
-A program calling an application behind clankerauth, such as the application's own CLI, takes its bearer token from `token` of `/credentials`, or has `authorizing` send it with each request. The owner signs in once with `clankerauth login https://notes.internal`, which reads the resource, its issuer and its scopes from the application's `/.well-known/oauth-protected-resource`; `token` then refreshes that sign-in as it expires. A token the environment gives, an access token or an API key, is returned instead when it is set, so the same program runs unattended.
+A program calling an application behind clankerauth, such as the application's own CLI, takes its bearer token from `token` of `/credentials`, or has `authorizing` send it with each request. The owner signs in once with `clankerauth login https://notes.internal`, which reads the resource, its issuer and its scopes from the application's `/.well-known/oauth-protected-resource`; `token` then refreshes that sign-in as it expires. A token the environment gives, an access token or an API key, is returned instead when it is set, so the same program runs unattended. The program names the variable with `token`; nothing is read from the environment without it. To administer an issuer, the convention is `CLANKERAUTH_TOKEN` holding an administration key, an API key granted on the issuer's origin root, which the `clankerauth` command reads too.
 
 ```ts
 import { Config, Effect } from "effect";

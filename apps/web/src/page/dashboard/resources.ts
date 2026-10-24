@@ -18,7 +18,7 @@ import { type SectionContext, footView, itemButtonView, noteView } from "./parts
 type ResourceView = typeof ResourceSummary.Type;
 
 const BUILT_IN_NOTE =
-  "Built-in administration resource, fixed. OAuth access tokens are required. clankerauth:read allows listing; clankerauth:write also allows every change.";
+  "Built-in administration resource, fixed. OAuth access tokens and API keys granted on it administer this issuer. clankerauth:read allows listing; clankerauth:write also allows every change.";
 
 export const resourcesHeadView = (
   { listing, isHeld }: SectionContext,
