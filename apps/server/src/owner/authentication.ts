@@ -1,4 +1,4 @@
-import { Clock, Effect, Redacted, Schema } from "effect";
+import { Effect, Redacted, Schema } from "effect";
 import { HttpServerRequest } from "effect/http";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
@@ -7,14 +7,14 @@ import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import {
   administrationScopes,
   CurrentOwner,
-  KeyPermissions,
   OwnerToken,
   ServiceUnavailable,
 } from "@gjermundgaraba/clankerauth-admin-api";
 import type { OwnerSession } from "@gjermundgaraba/clankerauth-admin-api";
 import type { AdministrationResource } from "./administration-resource.ts";
+import { ApiKeys } from "../api-keys/api-keys.ts";
 import { provider, unavailability } from "../issuer/errors.ts";
-import { Database, persisted } from "../platform/sqlite.ts";
+import { Database, persisted, type SqliteRow } from "../platform/sqlite.ts";
 import { OwnerAccount } from "./owner.ts";
 import { Issuer } from "../issuer/issuer.ts";
 
@@ -47,49 +47,44 @@ export const sessionOwner = (authentication: typeof OwnerSession) =>
 
 const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String, email: Schema.String }));
 
-const decodeKeyRow = persisted(
-  Schema.Struct({
-    id: Schema.String,
-    email: Schema.String,
-    permissions: Schema.NullOr(Schema.fromJsonString(KeyPermissions)),
-  }),
-);
-
 export const bearerOwner = (resource: AdministrationResource) =>
   Authentication.layer(
     OwnerToken,
     Effect.gen(function* () {
       const { sql } = yield* Database;
       const owner = yield* OwnerAccount;
+      const keys = yield* ApiKeys;
       const identifier = resource.protectedResource.resource;
 
       const rejected = () =>
         new Action.Unauthenticated({ message: "Owner authorization required" });
 
-      // why: read on every request, so disabling, deleting or re-scoping a key applies to the next one
-      const keyOwner = Effect.fnUntraced(function* (key: string) {
-        const digest = Buffer.from(yield* Effect.promise(() => KeyList.digest(key))).toString(
-          "base64url",
-        );
-
-        const now = new Date(yield* Clock.currentTimeMillis).toISOString();
-
-        const rows = yield* sql`SELECT u.id, u.email, k.permissions FROM apikey k
-      JOIN user u ON u.id = k.referenceId
-      WHERE k.key = ${digest} AND k.enabled = 1 AND (k.expiresAt IS NULL OR k.expiresAt > ${now})`;
-
+      const caller = Effect.fnUntraced(function* (
+        rows: ReadonlyArray<SqliteRow>,
+        writable: boolean,
+      ) {
         if (!rows[0]) return yield* rejected();
 
-        const row = yield* decodeKeyRow(rows[0]);
-        const scopes = row.permissions?.[identifier] ?? [];
+        const row = yield* decodeOwnerRow(rows[0]);
+
+        return owner.caller(row.id, row.email, writable);
+      });
+
+      // why: read on every request, so disabling, deleting or re-scoping a key applies to the next one
+      const keyOwner = Effect.fnUntraced(function* (key: Redacted.Redacted<string>) {
+        const holder = yield* keys.holder(key, identifier);
 
         if (
-          !scopes.includes(administrationScopes.read) &&
-          !scopes.includes(administrationScopes.write)
+          !holder ||
+          (!holder.scopes.includes(administrationScopes.read) &&
+            !holder.scopes.includes(administrationScopes.write))
         )
           return yield* rejected();
 
-        return owner.caller(row.id, row.email, scopes.includes(administrationScopes.write));
+        return yield* caller(
+          yield* sql`SELECT id, email FROM user WHERE id = ${holder.ownerId}`,
+          holder.scopes.includes(administrationScopes.write),
+        );
       });
 
       const clientOwner = Effect.fnUntraced(function* (token: Redacted.Redacted<string>) {
@@ -108,21 +103,16 @@ export const bearerOwner = (resource: AdministrationResource) =>
             scopes: [administrationScopes.read],
           });
 
-        const rows = yield* sql`SELECT u.id, u.email FROM user u
+        return yield* caller(
+          yield* sql`SELECT u.id, u.email FROM user u
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
-      WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`;
-
-        if (!rows[0]) return yield* rejected();
-
-        const row = yield* decodeOwnerRow(rows[0]);
-
-        return owner.caller(row.id, row.email, writable);
+      WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`,
+          writable,
+        );
       });
 
       return (token: Redacted.Redacted<string>) =>
-        Redacted.value(token).startsWith(KeyList.keyPrefix)
-          ? keyOwner(Redacted.value(token))
-          : clientOwner(token);
+        Redacted.value(token).startsWith(KeyList.keyPrefix) ? keyOwner(token) : clientOwner(token);
     }),
     { protectedResource: resource.protectedResource },
   );

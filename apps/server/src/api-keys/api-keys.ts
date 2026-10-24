@@ -1,4 +1,14 @@
-import { Clock, Context, DateTime, Effect, Layer, Record, Schema, type Scope } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Record,
+  Redacted,
+  Schema,
+  type Scope,
+} from "effect";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
 import {
@@ -88,9 +98,20 @@ export class ApiKeys extends Context.Service<
     /**
      * Every enabled, unexpired key granted on the resource, with the scopes it still
      * defines, sealed and signed for offline verification. An unknown resource, and the
-     * administration resource, which checks its keys in process, get a list with no entries.
+     * administration resource, whose keys are read with `holder`, get a list with no entries.
      */
     readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, InternalServerError>;
+    /**
+     * The owner of an enabled, unexpired key and the scopes it grants on the resource, read
+     * from the database now. An unknown key, or one whose row does not decode, has none.
+     */
+    readonly holder: (
+      key: Redacted.Redacted<string>,
+      identifier: string,
+    ) => Effect.Effect<
+      { ownerId: string; scopes: ReadonlyArray<string> } | undefined,
+      InternalServerError
+    >;
   }
 >()("clankerauth/ApiKeys") {
   static readonly layer = Layer.effect(
@@ -251,6 +272,38 @@ export class ApiKeys extends Context.Service<
           );
 
           return { list: token };
+        }),
+        holder: Effect.fn("ApiKeys.holder")(function* (
+          key: Redacted.Redacted<string>,
+          identifier: string,
+        ) {
+          const digest = Buffer.from(
+            yield* Effect.promise(() => KeyList.digest(Redacted.value(key))),
+          ).toString("base64url");
+
+          const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+
+          const [row] = yield* sql`
+            SELECT id, key, referenceId, expiresAt, permissions FROM apikey
+            WHERE key = ${digest} AND enabled = 1 AND (expiresAt IS NULL OR expiresAt > ${now})
+          `;
+
+          if (!row) return undefined;
+
+          return yield* storedKey(row).pipe(
+            Effect.map((stored) => ({
+              ownerId: stored.referenceId,
+              scopes: stored.permissions?.[identifier] ?? [],
+            })),
+            Effect.catch(() =>
+              Effect.as(
+                Effect.logWarning("An API key row cannot be read; the key is refused", {
+                  keyId: row.id,
+                }),
+                undefined,
+              ),
+            ),
+          );
         }),
       };
     }),

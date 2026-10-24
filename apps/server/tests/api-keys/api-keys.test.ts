@@ -268,9 +268,11 @@ it.live(
       expect((yield* owner("listApiKeys", {}, (yield* create).key)).status).toBe(401);
       expect((yield* owner("listApiKeys", {}, "clankerauth_invalid")).status).toBe(401);
 
-      const listed = yield* owner("listApiKeys", {}, key.key);
-      expect(listed.status).toBe(200);
-      expect(JSON.stringify(yield* json(listed))).not.toContain(key.key);
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(200);
+      expect(
+        (yield* call("/api/listApiKeys", {}, { cookie: "", authorization: `Bearer ${key.key}` }))
+          .status,
+      ).toBe(401);
 
       const notes = {
         identifier: "https://notes.internal/",
@@ -659,6 +661,7 @@ it.live(
         .sql`UPDATE apikey SET permissions = ${JSON.stringify({ [resource]: [42] })} WHERE id = ${key.keyId}`;
 
       expect(yield* verify(key.key)).toBe("Unauthorized");
+      expect((yield* owner("listApiKeys", {}, key.key)).status).toBe(401);
       expect(yield* verify(intact.key)).toMatchObject({
         actor: { kind: "key", keyId: intact.keyId },
       });
