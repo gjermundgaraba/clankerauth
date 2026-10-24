@@ -110,16 +110,17 @@ const notSignedIn = new CliError.UserError({
 
 const issuerNamed = Config.option(Config.String("CLANKERAUTH_URL")).pipe(
   Effect.mapError(refused),
-  Effect.flatMap((named) =>
-    Option.exists(named, (url) => !URL.canParse(url))
+  Effect.map(Option.map((url) => URL.parse(url)?.origin ?? "null")),
+  Effect.flatMap((origin) =>
+    Option.contains(origin, "null")
       ? Effect.fail(
           new CliError.UserError({
             cause: "CLANKERAUTH_URL",
             userMessage:
-              "CLANKERAUTH_URL is no URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
+              "CLANKERAUTH_URL is no issuer URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
           }),
         )
-      : Effect.succeed(named),
+      : Effect.succeed(origin),
   ),
 );
 
@@ -131,7 +132,7 @@ const administrationSignIn = Effect.gen(function* () {
     .filter((signIn) =>
       Option.match(named, {
         onNone: () => true,
-        onSome: (url) => new URL(url).origin === signIn.url,
+        onSome: (origin) => origin === signIn.url,
       }),
     );
 
@@ -165,9 +166,7 @@ const administrationTarget = Effect.gen(function* () {
         "CLANKERAUTH_TOKEN is set without CLANKERAUTH_URL: set it to the issuer's origin, its CLANKERAUTH_BASE_URL.",
     });
 
-  const url = new URL(named.value).origin;
-
-  return { url, resource: administrationIdentifier(url) };
+  return { url: named.value, resource: administrationIdentifier(named.value) };
 });
 
 const tokenCommand = Command.make(

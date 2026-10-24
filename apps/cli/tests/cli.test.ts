@@ -654,7 +654,7 @@ test("sign-ins at two issuers are kept side by side, and CLANKERAUTH_URL picks w
 
   const misnamed = await cli.run(["list-api-keys"], undefined, { CLANKERAUTH_URL: "issuer" });
   expect(misnamed.code).toBe(1);
-  expect(misnamed.stderr).toContain("CLANKERAUTH_URL is no URL");
+  expect(misnamed.stderr).toContain("CLANKERAUTH_URL is no issuer URL");
 
   const first = signInTo(await cli.stored(), owner.administration);
 
@@ -697,6 +697,14 @@ test("an administration key in CLANKERAUTH_TOKEN administers without a sign-in",
 
   expect(unnamed.code).toBe(1);
   expect(unnamed.stderr).toContain("CLANKERAUTH_TOKEN is set without CLANKERAUTH_URL");
+
+  const opaque = await unattended.run(["list-api-keys"], undefined, {
+    CLANKERAUTH_TOKEN: key.key,
+    CLANKERAUTH_URL: "mailto:owner@example.com",
+  });
+
+  expect(opaque.code).toBe(1);
+  expect(opaque.stderr).toContain("CLANKERAUTH_URL is no issuer URL");
 
   const deleted = await unattended.run(["delete-api-key", "--key-id", key.keyId], undefined, env);
   expect(deleted.code, deleted.stderr).toBe(0);

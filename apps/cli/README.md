@@ -16,7 +16,7 @@ clankerauth logout
 
 The sign-ins are kept in `$XDG_CONFIG_HOME/clankerauth/sign-ins.json`, `~/.config/clankerauth/sign-ins.json` by default, readable by their owner alone: one per resource, each with its own issuer, so signing in at a second issuer leaves the first's alone. A file the command cannot read, such as one another version wrote, counts as signed out and the next `login` replaces it. A `login` to a resource already signed in to replaces that sign-in and revokes it. A command refreshes an access token as it is about to expire and saves the rotated refresh token, so a sign-in lasts while it is used at least every 30 days; when the issuer refuses a refresh, the error names the `login` that asks for the same scopes again. Every change to the file holds its lock, so commands and programs running at once refresh an expired sign-in once, and `logout` revokes the refresh token that is current. `logout` revokes every sign-in and deletes the file, and `logout <url>` the one whose resource that URL is under alone.
 
-Administration commands act at the issuer of the one administration sign-in kept. Signed in to administration at several issuers, name one with `CLANKERAUTH_URL`, its origin; a value that is no URL is refused.
+Administration commands act at the issuer of the one administration sign-in kept. Signed in to administration at several issuers, name one with `CLANKERAUTH_URL`, its origin; a value that names no origin, such as a `mailto:` URL, is refused.
 
 Unattended, such as in a container with no browser or disk to keep a sign-in on, the commands take an administration key, an API key granted on the issuer's origin root, from `CLANKERAUTH_TOKEN` instead, and then act at the issuer `CLANKERAUTH_URL` names, which they require. No sign-in is read or written. The owner creates the key once, signed in:
 
@@ -28,7 +28,7 @@ CLANKERAUTH_URL=https://clankerauth.home.example CLANKERAUTH_TOKEN=clankerauth_â
   clankerauth list-api-keys
 ```
 
-The issuer checks the key on every request, so disabling or deleting it ends its access at once. With `clankerauth:write` it may create and delete administration keys too, itself among them.
+What the key may do, and when a change to it applies, is in [the issuer's README](../../README.md#administer-unattended-with-an-api-key).
 
 ## Tokens for other commands
 
