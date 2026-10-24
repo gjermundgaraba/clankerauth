@@ -122,7 +122,7 @@ vp run test:lint # lint-policy regression fixtures
 - `apps/cli`: the `@gjermundgaraba/clankerauth` npm package, the `clankerauth` command. Its tests run the packed binary against a development issuer.
 - `repos/foldkit`: [Foldkit](https://foldkit.dev)'s source at 0.168.0, vendored as a git subtree for reference; nothing imports from it. Its agent skills are linked from `.agents/skills` and `.claude/skills`.
 
-The three packages are public on npm. A `v*` tag matching their shared version publishes them from `.github/workflows/npm.yml` through npm trusted publishing: each package names this repository and that workflow file as its trusted publisher, so no registry token is stored. npm can only register a trusted publisher on a package that already exists, so the first release of a new package name is published by hand with `pnpm publish` from its directory after `npm login`.
+The packages are public on npm. To release, bump the versions you want to publish, commit, then tag `v<version>` and push the tag: `.github/workflows/npm.yml` publishes every package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish` from its directory.
 
 ### effect-actions integration
 

@@ -1,44 +1,23 @@
-name: Publish npm package
-
+name: npm
+# Release: bump the version, commit, tag v<version> and push the tag. Publishes every package whose
+# version npm doesn't have yet, through npm trusted publishing. A new package's first version is
+# published by hand (`vp pm publish`), then `npm trust github <package> --repo <repo> --file npm.yml`.
 on:
   push:
     tags: ["v*"]
-
 permissions:
   contents: read
   id-token: write
-
 jobs:
   publish:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           node-version-file: .node-version
-      - name: Check that the tag matches every package version
-        run: |
-          test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/sdk/package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/admin-api/package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/dev/package.json').version")"
-          test "$GITHUB_REF_NAME" = "v$(node -p "require('./apps/cli/package.json').version")"
-      - run: npm install -g "pnpm@$(node -p "require('./package.json').devEngines.packageManager.version")"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @clankerauth/web exec playwright install --with-deps chromium
-      - run: pnpm ready
-      # pnpm resolves the workspace catalog protocol in the published manifest; npm would not.
-      # Each package lists this repository and workflow as its npm trusted publisher, so
-      # publishing authenticates with the job's OIDC token and attaches provenance.
-      # A version npm has already, published by hand or by a run that failed partway, is skipped.
-      - name: Publish each package whose version npm does not have yet
-        run: |
-          for directory in packages/sdk packages/admin-api packages/dev apps/cli; do
-            name="$(node -p "require('./$directory/package.json').name")"
-            version="$(node -p "require('./$directory/package.json').version")"
-
-            if curl --silent --fail --output /dev/null "https://registry.npmjs.org/$name/$version"; then
-              echo "$name@$version is published already"
-            else
-              (cd "$directory" && pnpm publish --no-git-checks)
-            fi
-          done
+          cache: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: vp run build
+      - run: vp pm publish -r --no-git-checks
