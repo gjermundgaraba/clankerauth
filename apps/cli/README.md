@@ -1,6 +1,6 @@
 # @gjermundgaraba/clankerauth
 
-The `clankerauth` command: sign in to a [clankerauth](https://github.com/gjermundgaraba/clankerauth) issuer as its owner, run every administration action over HTTP, and hand other commands access tokens for the issuer's resources. It needs Node 26 or newer and an issuer at 0.24.0 or later.
+The `clankerauth` command: sign in to a [clankerauth](https://github.com/gjermundgaraba/clankerauth) issuer as its owner, run every administration action over HTTP, and hand other commands access tokens for the issuer's resources. It needs Node 26 or newer and an issuer at 0.24.0 or later, or 0.28.0 for an administration key in `CLANKERAUTH_TOKEN`.
 
 ```sh
 npm install --global @gjermundgaraba/clankerauth

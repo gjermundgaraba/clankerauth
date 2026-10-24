@@ -284,7 +284,7 @@ it.live("an aborted MCP tool call settles its provider work and compensation bef
 );
 
 it.live(
-  "MCP rejects cookies, API keys, malformed, expired, wrong-audience, and insufficient-scope tokens",
+  "MCP rejects cookies, keys without administration grants, malformed, expired, wrong-audience, and insufficient-scope tokens",
   () =>
     Effect.gen(function* () {
       const { cookie } = yield* Dashboard;
