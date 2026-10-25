@@ -113,6 +113,9 @@ const foldkitOverrides = [
 ];
 
 export default defineConfig({
+  staged: {
+    "*": "vp check --fix",
+  },
   fmt: {
     ignorePatterns: [
       ".agent/**",
