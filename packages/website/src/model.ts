@@ -28,6 +28,7 @@ export const Model = Schema.Struct({
   snippetDisclosure: SnippetDisclosure.Model,
   maybeGitHubStarCount: Schema.Option(Schema.Number),
   currentYear: Schema.Number,
+  newsletterEmail: Schema.String,
   mobileMenuDialog: Dialog.Model,
   isMobileTableOfContentsOpen: Schema.Boolean,
   activeSection: Schema.Option(Schema.String),

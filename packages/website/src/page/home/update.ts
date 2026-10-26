@@ -103,4 +103,8 @@ export const update = (model: Model, message: Message) =>
       foldAsyncCounterDemo(model, message),
     GotNotePlayerDemoMessage: ({ message }) =>
       foldNotePlayerDemo(model, message),
+    UpdatedNewsletterEmail: ({ value }) => ({
+      model,
+      outMessage: OutMessage.UpdatedNewsletterEmail({ value }),
+    }),
   })

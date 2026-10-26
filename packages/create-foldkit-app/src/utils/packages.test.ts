@@ -49,6 +49,7 @@ describe('buildUnresolvedDevDeps', () => {
     )
 
     expect(result).toEqual({
+      '@effect/tsgo': { _tag: 'Release' },
       '@foldkit/devtools': { _tag: 'Release' },
       '@foldkit/vite-plugin': { _tag: 'Release' },
       '@foldkit/devtools-mcp': { _tag: 'Release' },
@@ -56,6 +57,7 @@ describe('buildUnresolvedDevDeps', () => {
       'happy-dom': { _tag: 'Release' },
       oxfmt: { _tag: 'Keep', version: '^0.65.0' },
       oxlint: { _tag: 'Release' },
+      'oxlint-tsgolint': { _tag: 'Release' },
       vitest: { _tag: 'Release' },
       typescript: { _tag: 'Keep', version: '^6.0.3' },
       vite: { _tag: 'Keep', version: '^8.0.16' },

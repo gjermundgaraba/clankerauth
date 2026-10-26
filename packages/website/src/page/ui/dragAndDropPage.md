@@ -51,6 +51,13 @@ DragAndDrop supports full keyboard navigation. Space/Enter activates drag mode, 
 
 Draggable items receive `role="option"` with `aria-roledescription="draggable"`. Drop containers receive `role="listbox"`. Screen reader announcements are emitted for drag start, movement, and drop via a live region.
 
+## Testing
+
+In [Story tests](/testing/story), use `DragAndDrop.test` to resolve keyboard drag Commands:
+
+- `DragAndDrop.test.settleFocus({ itemId })` resolves the item's focus after a drop or cancellation.
+- `DragAndDrop.test.resolveKeyboardMove({ itemId, targetContainerId, targetIndex })` supplies a target container and index for an arrow-key move, then resolves the item's focus.
+
 ## API Reference
 
 ### InitConfig {#init-config}

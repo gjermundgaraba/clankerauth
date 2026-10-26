@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/layers-and-submodels
   merge_group:
     types:
       - checks_requested

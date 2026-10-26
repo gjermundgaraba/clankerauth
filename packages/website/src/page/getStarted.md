@@ -48,6 +48,7 @@ The Counter starter begins with these files:
 - `vite.config.ts`: Vite configuration with `@foldkit/vite-plugin`
 - `tsconfig.json`: TypeScript configuration
 - `.oxlintrc.json`: Oxlint configuration
+- `.oxlintrc.effect.json`: Effect type-aware lint configuration
 - `.oxfmtrc.json`: Oxfmt configuration
 - `AGENTS.md`: your instructions for AI coding assistants working on the project
 - `FOLDKIT.md`: Foldkit's own conventions for those assistants, [replaced from the current template when you upgrade Foldkit](/ai/overview)
@@ -60,7 +61,7 @@ For the Counter starter, `src/entry.ts` imports the application definitions and 
 
 ### Project Scripts
 
-The generated project also includes `lint` and `format` scripts. Run them with your selected package manager. For example: `pnpm lint` and `pnpm format`. See [Oxlint Plugin](/tooling/oxlint-plugin) for the Foldkit-specific rules.
+The generated project also includes `lint` and `format` scripts. Run them with your selected package manager. For example: `pnpm lint` and `pnpm format`. The `lint` script checks Foldkit conventions and Effect usage. See [Oxlint Plugin](/tooling/oxlint-plugin) for the Foldkit-specific rules.
 
 ## Add Foldkit to an Existing Project {#requirements}
 

@@ -61,6 +61,14 @@ Use `resolveAllExact` when the resolver list is also a claim about which Command
 `message` throws if there are pending Commands from a previous step. Resolve all Commands before sending the next Message. `story` throws at the end if any Commands remain unresolved. Every Command your update function produces must be accounted for.
 :::
 
+### Resolve Child Commands
+
+When resolving a Command from a [child Submodel](/core/submodel), pass the child's result Message. Story applies the parent Message mapping automatically.
+
+### UI Component Test Helpers
+
+Before writing resolvers for an `@foldkit/ui` component, check its `test` namespace for helpers. For example, [`Toast.test.drainEntry`](/ui/toast#testing) handles the animation and timer Commands for a newly shown toast that auto-dismisses.
+
 ## Reusable Step Groups
 
 Use `steps` when several stories share the same setup or Message sequence. The group preserves the Model, Message, and OutMessage constraints of every step inside it, so the update passed to `story` still rejects a group built for a different program.

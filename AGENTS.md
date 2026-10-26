@@ -25,6 +25,10 @@ Read those when a rule needs context.
 - Push back on any direction that violates Elm Architecture principles: unidirectional data flow, Messages as facts, Model as single source of truth, side effects confined to Commands. Flag the issue and propose the Foldkit approach that preserves those principles.
 - Run TypeScript scripts with `node` directly, as in `node scripts/check-peer-floors.ts`. Every Node version in `engines` strips types, so the workspace has no `tsx`, `vite-node`, or other loader, and none may be added. Node resolves imports literally: write the extension the file has, and reach package code through its built entry rather than its source. A script whose module graph needs Vite's resolution, such as the website's `openapi` and `prerender`, is bundled with `vite build --ssr` first and the bundle runs under `node`. `erasableSyntaxOnly` in the base tsconfig keeps every source within what Node can strip.
 
+## Cloudflare Workers Guide
+
+The [Foldkit framework guide for Cloudflare Workers](https://developers.cloudflare.com/workers/framework-guides/web-apps/foldkit/) lives in `cloudflare/cloudflare-docs` at `src/content/docs/workers/framework-guides/web-apps/foldkit.mdx`. Review and update it when changes to `create-foldkit-app`, Node.js requirements, SPA/SSG/SSR build outputs, the Worker `fetch` entry point, or Wrangler configuration affect its instructions.
+
 ## Exemplar Files
 
 Read these before writing code. They calibrate the quality bar.
@@ -87,6 +91,7 @@ Match the implementation style to the subsystem and the behavior being modeled. 
 - Use `pipe` when the value being transformed should remain the subject of clear left-to-right data flow. A single transformation is valid when that order carries meaning, as in `pipe(dialogClose, Update.withOutMessage(outMessage))`. Call the function directly when `pipe` only rearranges an ordinary call.
 - In multi-line `pipe` chains, put the data being piped on its own line.
 - Use Effect module functions over native methods in pipes (`Array.map`, `String.includes`, `String.indexOf`, etc.). Native methods are fine when calling directly on a named variable.
+- Use Effect `DateTime` for date construction, parsing, calendar arithmetic, comparisons, and formatting, and `Duration` for fixed elapsed-time conversions. Pure functions take an explicit timestamp or `DateTime` value. Read the current time through `Clock` or `DateTime.now` in an Effect, never through `Date.now()`, zero-argument `new Date()`, or `DateTime.nowUnsafe` in pure code.
 - Use `Predicate.isString` for string guards, never `typeof value === 'string'`.
 - Import Effect modules by their PascalCase name (`Array`, `String`, `Number`, `Function`, `Option`). Qualify a same-named JavaScript or TypeScript global through `globalThis`, such as `globalThis.String`, `globalThis.Array`, or `globalThis.Record`. When an existing local or public binding must retain the module name, give the Effect import an explicit `Effect` prefix, such as `Order as EffectOrder`. Use a named `import type` when an Effect submodule contributes one type and none of its runtime API is used. Use a namespace import when accessing the module's values or multiple exports.
 - Never use sentinel values to signal absence (`-1` from `.indexOf()`, `null`, empty strings, `NaN`). Use `Option`-returning helpers like `String.indexOf`, `Array.findFirst`, `Option.fromNullishOr`.

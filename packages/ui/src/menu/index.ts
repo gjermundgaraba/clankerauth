@@ -99,6 +99,7 @@ export const Message = defineMessageUnion({
   CompletedRestoreInert: {},
   CompletedScrollIntoView: {},
   CompletedClickItem: {},
+  ClickedButton: {},
   IgnoredMouseClick: {},
   SuppressedSpaceScroll: {},
   CompletedAnchorMenu: {},
@@ -150,6 +151,8 @@ export type RequestedItemClick = typeof Message.RequestedItemClick.Type
 export type Searched = typeof Message.Searched.Type
 export type CompletedDelayClearSearch =
   typeof Message.CompletedDelayClearSearch.Type
+/** A click on the Menu trigger button. */
+export type ClickedButton = typeof Message.ClickedButton.Type
 export type IgnoredMouseClick = typeof Message.IgnoredMouseClick.Type
 export type SuppressedSpaceScroll = typeof Message.SuppressedSpaceScroll.Type
 export type PressedPointerOnButton = typeof Message.PressedPointerOnButton.Type
@@ -429,8 +432,12 @@ export const update = (model: Model, message: Message) => {
     CompletedAnchorMenu: () => ({ model }),
     CompletedPortalMenuBackdrop: () => ({ model }),
 
-    Opened: ({ maybeActiveItemIndex }) =>
-      openMenu(
+    Opened: ({ maybeActiveItemIndex }) => {
+      if (model.isOpen) {
+        return { model }
+      }
+
+      return openMenu(
         modifyFields(model, {
           maybeActiveItemIndex: () => maybeActiveItemIndex,
           activationTrigger: () =>
@@ -442,7 +449,8 @@ export const update = (model: Model, message: Message) => {
           searchVersion: () => 0,
           maybeLastPointerPosition: () => Option.none(),
         }),
-      ),
+      )
+    },
 
     Closed: () => closeMenu(model, closeWithFocusCommands),
 
@@ -617,6 +625,31 @@ export const update = (model: Model, message: Message) => {
         maybeLastButtonPointerType: () => Option.none(),
       }),
     }),
+    ClickedButton: () => {
+      if (
+        Option.exists(model.maybeLastButtonPointerType, Equal.equals('mouse'))
+      ) {
+        return {
+          model: modifyFields(model, {
+            maybeLastButtonPointerType: () => Option.none(),
+          }),
+        }
+      }
+
+      if (model.isOpen) {
+        return closeMenu(model, closeWithFocusCommands)
+      }
+
+      return openMenu(
+        modifyFields(model, {
+          maybeActiveItemIndex: () => Option.none(),
+          activationTrigger: () => 'Pointer',
+          searchQuery: () => '',
+          searchVersion: () => 0,
+          maybeLastPointerPosition: () => Option.none(),
+        }),
+      )
+    },
   })
 }
 
@@ -670,7 +703,8 @@ export const PortalMenuBackdrop = Mount.define('PortalMenuBackdrop', {
 })
 
 /** Programmatically opens the Menu, updating the Model and returning focus and
- *  modal Commands. Use this in domain-event handlers. */
+ *  modal Commands. When it is already open, returns the Model unchanged with
+ *  no Commands. Use this in domain-event handlers. */
 export const open = (model: Model): UpdateReturn =>
   update(model, Message.Opened({ maybeActiveItemIndex: Option.none() }))
 
@@ -764,7 +798,6 @@ const menuViewImpl = defineView<Model, Message, ViewInputs<string>>(
       animation: { transitionState },
       maybeActiveItemIndex,
       searchQuery,
-      maybeLastButtonPointerType,
     } = model
 
     const {
@@ -887,21 +920,6 @@ const menuViewImpl = defineView<Model, Message, ViewInputs<string>>(
         }),
       )
 
-    const handleButtonClick = (): Message => {
-      const isMouse = Option.exists(
-        maybeLastButtonPointerType,
-        type => type === 'mouse',
-      )
-
-      if (isMouse) {
-        return Message.IgnoredMouseClick()
-      } else if (isOpen) {
-        return Message.Closed()
-      } else {
-        return Message.Opened({ maybeActiveItemIndex: Option.none() })
-      }
-    }
-
     const handleSpaceKeyUp = (key: string): Option.Option<Message> =>
       OptionExt.when(key === ' ', Message.SuppressedSpaceScroll())
 
@@ -996,7 +1014,7 @@ const menuViewImpl = defineView<Model, Message, ViewInputs<string>>(
             h.OnPointerDown(handleButtonPointerDown),
             h.OnKeyDownPreventDefault(handleButtonKeyDown),
             h.OnKeyUpPreventDefault(handleSpaceKeyUp),
-            h.OnClick(handleButtonClick()),
+            h.OnClick(Message.ClickedButton()),
           ]),
       ...(isVisible
         ? [

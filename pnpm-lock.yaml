@@ -52,7 +52,7 @@ importers:
         specifier: ^0.66.0
         version: 0.66.0
       oxlint:
-        specifier: ^1.85.0
+        specifier: 1.85.0
         version: 1.85.0(oxlint-tsgolint@7.0.2003)
       oxlint-tsgolint:
         specifier: 7.0.2003

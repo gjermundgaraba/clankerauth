@@ -323,6 +323,52 @@ describe('Popover', () => {
       })
     })
 
+    describe('ClickedButton', () => {
+      it('keeps the popover open after the click that follows a mouse press', () => {
+        Story.story(
+          update,
+          givenClosed,
+          Story.message(
+            Message.PressedPointerOnButton({
+              pointerType: 'mouse',
+              button: 0,
+            }),
+          ),
+          Story.message(Message.ClickedButton()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(true)
+            expect(model.maybeLastButtonPointerType).toStrictEqual(
+              Option.none(),
+            )
+          }),
+        )
+      })
+
+      it('opens when the click did not follow a mouse press', () => {
+        Story.story(
+          update,
+          givenClosed,
+          Story.message(Message.ClickedButton()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(true)
+          }),
+        )
+      })
+
+      it('closes an open popover when the click did not follow a mouse press', () => {
+        Story.story(
+          update,
+          givenOpen,
+          Story.message(Message.ClickedButton()),
+          Story.expectOutMessage(OutMessage.Closed()),
+          Story.Command.resolve(FocusButton, Message.CompletedFocusButton()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(false)
+          }),
+        )
+      })
+    })
+
     describe('CompletedFocusPanel', () => {
       it('returns model unchanged', () => {
         Story.story(
@@ -650,6 +696,19 @@ describe('Popover', () => {
         Story.Command.expectNone(),
         Story.model(model => {
           expect(model.isOpen).toBe(false)
+        }),
+      )
+    })
+
+    it('emits no Commands on RequestedOpen when already open in modal mode', () => {
+      Story.story(
+        update,
+        givenOpenModal,
+        Story.message(Message.RequestedOpen()),
+        Story.expectNoOutMessage(),
+        Story.Command.expectNone(),
+        Story.model(model => {
+          expect(model.isOpen).toBe(true)
         }),
       )
     })
