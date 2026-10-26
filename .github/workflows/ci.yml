@@ -30,6 +30,8 @@ jobs:
       - run: vp install --frozen-lockfile
       - run: vp -C apps/web exec playwright install --with-deps chromium
       - run: vp run ready
+      - name: Check that the build left the tree clean
+        run: git diff --exit-code
       - name: Deploy the server's production dependencies and smoke-test them
         run: |
           vp exec pnpm --filter @clankerauth/server deploy --prod /tmp/clankerauth-production
