@@ -5,13 +5,13 @@ packages:
 catalogMode: prefer
 saveExact: true
 catalog:
-  "@effect/platform-browser": 4.0.5
-  "@effect/platform-node": 4.0.5
+  "@effect/platform-browser": 4.0.6
+  "@effect/platform-node": 4.0.6
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.0.5
-  "@effect/vitest": 4.0.5
+  "@effect/platform-node-shared": 4.0.6
+  "@effect/vitest": 4.0.6
   foldkit: 0.168.0
   "@foldkit/ui": 0.168.0
   "@foldkit/vite-plugin": 0.27.1
@@ -21,7 +21,7 @@ catalog:
   "@better-auth/api-key": 1.7.12
   better-auth: 1.7.12
   better-call: 1.4.4
-  effect: 4.0.5
+  effect: 4.0.6
   "@types/node": 26.6.5
   jose: 6.2.13
   typescript: 7.0.2
@@ -48,10 +48,10 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "*"
-    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.5 instance serves all.
-    effect: 4.0.5
-    "@effect/platform-browser": 4.0.5
-    "@effect/platform-node": 4.0.5
+    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.6 instance serves all.
+    effect: 4.0.6
+    "@effect/platform-browser": 4.0.6
+    "@effect/platform-node": 4.0.6
     vitest: "*"
   allowAny:
     - vite

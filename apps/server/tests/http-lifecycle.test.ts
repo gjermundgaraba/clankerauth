@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest";
 import { expect, vi } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { Context, Effect, Exit, Fiber, Scope } from "effect";
+import { Context, Effect, Exit, Fiber, Schema, Scope } from "effect";
+import { UnreadableRequest } from "@gjermundgaraba/clankerauth-admin-api";
 import { generateKeyPair, SignJWT } from "jose";
 import { webMcpRequest } from "./mcp.ts";
 import { nodeHandler } from "../src/http/application.ts";
@@ -291,7 +292,7 @@ it.live.each([
   ),
 );
 
-it.live("bodies above 64 KiB are disconnected before reaching the provider", () =>
+it.live("bodies above 64 KiB are refused as unreadable before reaching the provider", () =>
   served(
     Effect.gen(function* () {
       const { services, url } = yield* start;
@@ -300,15 +301,17 @@ it.live("bodies above 64 KiB are disconnected before reaching the provider", () 
         .spyOn(Context.get(services, Issuer).auth, "handler")
         .mockResolvedValue(new Response("provider"));
 
-      yield* Effect.flip(
-        Effect.tryPromise(() =>
-          fetch(`${url}/api/auth/oauth2/token`, {
-            method: "POST",
-            headers: { "content-type": "application/x-www-form-urlencoded" },
-            body: `grant_type=${"x".repeat(65536)}`,
-          }),
-        ),
+      const response = yield* Effect.promise(() =>
+        fetch(`${url}/api/auth/oauth2/token`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: `grant_type=${"x".repeat(65536)}`,
+        }),
       );
+
+      expect(response.status).toBe(400);
+      const body = yield* Effect.promise(() => response.json());
+      expect(Schema.decodeUnknownSync(UnreadableRequest)(body)).toBeInstanceOf(UnreadableRequest);
       expect(handler).not.toHaveBeenCalled();
     }),
   ),
