@@ -16,7 +16,7 @@ catalog:
   "@foldkit/ui": 0.169.0
   "@foldkit/vite-plugin": 0.28.0
   "@foldkit/oxlint-plugin": 0.15.3
-  happy-dom: 21.0.3
+  happy-dom: 21.0.4
   "@better-auth/oauth-provider": 1.7.12
   "@better-auth/api-key": 1.7.12
   better-auth: 1.7.12
