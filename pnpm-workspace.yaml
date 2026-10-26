@@ -12,9 +12,9 @@ catalog:
   # under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.6
   "@effect/vitest": 4.0.6
-  foldkit: 0.168.0
-  "@foldkit/ui": 0.168.0
-  "@foldkit/vite-plugin": 0.27.1
+  foldkit: 0.169.0
+  "@foldkit/ui": 0.169.0
+  "@foldkit/vite-plugin": 0.28.0
   "@foldkit/oxlint-plugin": 0.15.3
   happy-dom: 21.0.3
   "@better-auth/oauth-provider": 1.7.12
@@ -34,8 +34,8 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.12
   "@opentelemetry/api": 1.9.1
   "@oxlint/plugins": 1.89.0
-  "@gjermundgaraba/effect-actions": 0.19.0
-  "@gjermundgaraba-designs/pixel-paper": 0.24.0
+  "@gjermundgaraba/effect-actions": 0.20.0
+  "@gjermundgaraba-designs/pixel-paper": 0.26.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2
   "@types/proper-lockfile": 4.1.4
@@ -48,7 +48,7 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "*"
-    # Foldkit 0.168 pins effect 4.0.0 as an exact peer; one effect 4.0.6 instance serves all.
+    # Foldkit 0.169 pins effect 4.0.0 as an exact peer; one effect 4.0.6 instance serves all.
     effect: 4.0.6
     "@effect/platform-browser": 4.0.6
     "@effect/platform-node": 4.0.6
@@ -73,3 +73,7 @@ minimumReleaseAgeExclude:
   - "@gjermundgaraba-designs/*"
   - effect
   - "@effect/*"
+patchedDependencies:
+  # The plugin reads Crypto.randomUUIDv4 as effect 4.0.0's value; from 4.0.3 it is a method,
+  # so without this its DevTools MCP relay fails to start under the effect pinned here.
+  "@foldkit/vite-plugin@0.28.0": patches/@foldkit__vite-plugin@0.28.0.patch

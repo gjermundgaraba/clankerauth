@@ -195,17 +195,17 @@ catalogs:
       specifier: 0.15.3
       version: 0.15.3
     '@foldkit/ui':
-      specifier: 0.168.0
-      version: 0.168.0
+      specifier: 0.169.0
+      version: 0.169.0
     '@foldkit/vite-plugin':
-      specifier: 0.27.1
-      version: 0.27.1
+      specifier: 0.28.0
+      version: 0.28.0
     '@gjermundgaraba-designs/pixel-paper':
-      specifier: 0.24.0
-      version: 0.24.0
+      specifier: 0.26.0
+      version: 0.26.0
     '@gjermundgaraba/effect-actions':
-      specifier: 0.19.0
-      version: 0.19.0
+      specifier: 0.20.0
+      version: 0.20.0
     '@opentelemetry/api':
       specifier: 1.9.1
       version: 1.9.1
@@ -225,8 +225,8 @@ catalogs:
       specifier: 4.0.6
       version: 4.0.6
     foldkit:
-      specifier: 0.168.0
-      version: 0.168.0
+      specifier: 0.169.0
+      version: 0.169.0
     happy-dom:
       specifier: 21.0.3
       version: 21.0.3
@@ -259,6 +259,9 @@ overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.4.0
   kysely: 0.29.7
   vitest@*: 5.0.5
+
+patchedDependencies:
+  '@foldkit/vite-plugin@0.28.0': a60b8a7876f70ae558dcdf4a556af699871c76e6ce1d54aae75efee463dbb02c
 
 importers:
 
@@ -293,7 +296,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.19.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       effect:
         specifier: 'catalog:'
         version: 4.0.6
@@ -348,7 +351,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.19.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.12(@opentelemetry/api@1.9.1)(vitest@5.0.5)
@@ -400,13 +403,13 @@ importers:
         version: 4.0.6(effect@4.0.6)
       '@foldkit/ui':
         specifier: 'catalog:'
-        version: 0.168.0(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
+        version: 0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       '@foldkit/vite-plugin':
         specifier: 'catalog:'
-        version: 0.27.1(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2))(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))(redis@6.2.1(@opentelemetry/api@1.9.1))
+        version: 0.28.0(patch_hash=a60b8a7876f70ae558dcdf4a556af699871c76e6ce1d54aae75efee463dbb02c)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@gjermundgaraba-designs/pixel-paper':
         specifier: 'catalog:'
-        version: 0.24.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.168.0(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
+        version: 0.26.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       '@gjermundgaraba/clankerauth-admin-api':
         specifier: workspace:*
         version: link:../../packages/admin-api
@@ -415,7 +418,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.19.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.12(@opentelemetry/api@1.9.1)(vitest@5.0.5)
@@ -424,7 +427,7 @@ importers:
         version: 4.0.6
       foldkit:
         specifier: 'catalog:'
-        version: 0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
+        version: 0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
       happy-dom:
         specifier: 'catalog:'
         version: 21.0.3
@@ -445,7 +448,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.19.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       effect:
         specifier: 'catalog:'
         version: 4.0.6
@@ -500,7 +503,7 @@ importers:
         version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.19.0(effect@4.0.6)
+        version: 0.20.0(effect@4.0.6)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
@@ -694,36 +697,36 @@ packages:
     resolution: {integrity: sha512-LprfdZcR4uIqzTqHhJWT9bjJiS1km4MsN9Yyqk8JcKAEHpAxwgneG3MvA7p5aPXVDpZE/zh5FCGzhRIz1MnscQ==}
     engines: {node: '>=20.19.0 || >=22.12.0'}
 
-  '@foldkit/ui@0.168.0':
-    resolution: {integrity: sha512-PZNtVorDO6O45txndwouI8fOFHYcdZ3OP9amJKIR9gWJ13+rx+HaDRHYVnBHNp7fom/7qPEWd25wAJCpQF5i6w==}
+  '@foldkit/ui@0.169.0':
+    resolution: {integrity: sha512-+883P+QgdX0VQp2CGShNKMZ7aXQB+6uLO5GehKJVJWwn2ujzm3JPWZlD8qSCu0h62TrgAa7yD9FNGpEyL6snUA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       effect: 4.0.0
       foldkit: '>=0.167.0'
 
-  '@foldkit/vite-plugin@0.27.1':
-    resolution: {integrity: sha512-sQ8y2v7w21wTwm+NGxboGokbZULmH0kuAg2EV6JH+1rXDBATOCcXIToUmw9ZmaVR14/4SlZIygVnNCRRcDtfQQ==}
+  '@foldkit/vite-plugin@0.28.0':
+    resolution: {integrity: sha512-ZGZDZi3wvUp+gkWT8EDPwWOAhbPPTzOnvXi4WSnJWyrJbGPIdRcM4M+6RcF88ZYnI6B0vQUYCHfjU0I4+6bL9w==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
       effect: 4.0.0
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba-designs/pixel-paper@0.24.0':
-    resolution: {integrity: sha512-cQM4DRHpz+tez87d73GsOWr4vOL0S0giUcr2s2GQnrJ1xPwycz79KYshkbALdmWwmgpd8FISCIT7QQmfMn7M9g==}
+  '@gjermundgaraba-designs/pixel-paper@0.26.0':
+    resolution: {integrity: sha512-rsK130A92fe4Ajg2U18ocN+E//WRGD95nADdqT7ZuVIPsTXUSx3+1C+I5VEek4G9h8gM3ULGLZ5KKtaXAJitaA==}
     peerDependencies:
       '@effect/platform-browser': ^4.0.0
-      '@foldkit/ui': ^0.168.0
+      '@foldkit/ui': ^0.169.0
       effect: ^4.0.0
-      foldkit: ^0.168.0
+      foldkit: ^0.169.0
       mermaid: ^12
     peerDependenciesMeta:
       mermaid:
         optional: true
 
-  '@gjermundgaraba/effect-actions@0.19.0':
-    resolution: {integrity: sha512-jH6duDALzSFLq2DPEM6qHs0V5PoJupEdr0aSnTmqAQGg4yIlKtvRpVGdf/UndFf650OTLHBcV4dpvJ9Z/UyfUw==}
-    engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
+  '@gjermundgaraba/effect-actions@0.20.0':
+    resolution: {integrity: sha512-yxnswPuBnmEVw42XlPWUiBePV7lENrv/gtB33foPTv/yq9BrpB7S7ti/S7r6OJBUG//v1a1zuS1oQ2JSWGEvIA==}
+    engines: {node: '>=26'}
     peerDependencies:
       effect: ~4.0.4
 
@@ -1644,8 +1647,8 @@ packages:
   flatted@3.4.4:
     resolution: {integrity: sha512-5+ybhBZANEJxaH3X5evAFatUxLfEHSr7n6kYJ+1Qd0mUqr4eu9gIf6GDbWHf8RJijHrjjO8G+la14SlL2SeS1Q==}
 
-  foldkit@0.168.0:
-    resolution: {integrity: sha512-FyAY34MdmF1JwdKiPq12uKHBmLny3QxAJ6WdakbXCBh8KR1lQfvdKEygQ/XAlxb2ICSmpVaFga5RgDSnxZsFiw==}
+  foldkit@0.169.0:
+    resolution: {integrity: sha512-7GHWKVJshNM6DLkPfybklfGpSo3wfDHtiywCP3VUmwmVTtpezeLdhwqhd67PtpDid8Ri7aVKtAykjk6m1tK/tw==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
       '@effect/platform-browser': 4.0.0
@@ -1753,9 +1756,6 @@ packages:
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
     hasBin: true
-
-  magic-string@1.4.2:
-    resolution: {integrity: sha512-vG+rjFRj1PqdIBozIxAGMjPlOhaVe+GXpbttY/iSK7rGcJRMlwNJO7dcUwmUqkymsFLJiNGI06t4D7Fr7yRC9g==}
 
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
@@ -1929,10 +1929,6 @@ packages:
 
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
-
-  undici@8.11.2:
-    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
-    engines: {node: '>=22.19.0'}
 
   undici@8.12.3:
     resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
@@ -2158,7 +2154,7 @@ snapshots:
       '@effect/platform-node-shared': 4.0.6(effect@4.0.6)
       effect: 4.0.6
       redis: 6.2.1(@opentelemetry/api@1.9.1)
-      undici: 8.11.2
+      undici: 8.12.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -2195,19 +2191,19 @@ snapshots:
     transitivePeerDependencies:
       - effect
 
-  '@foldkit/ui@0.168.0(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
+  '@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
     dependencies:
       '@floating-ui/dom': 1.8.0
       effect: 4.0.6
-      foldkit: 0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
+      foldkit: 0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
 
-  '@foldkit/vite-plugin@0.27.1(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2))(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))(redis@6.2.1(@opentelemetry/api@1.9.1))':
+  '@foldkit/vite-plugin@0.28.0(patch_hash=a60b8a7876f70ae558dcdf4a556af699871c76e6ce1d54aae75efee463dbb02c)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))(redis@6.2.1(@opentelemetry/api@1.9.1))':
     dependencies:
       '@effect/platform-node': 4.0.0(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.1))
       '@effect/platform-node-shared': 4.0.0(effect@4.0.6)
       effect: 4.0.6
-      foldkit: 0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
-      magic-string: 1.4.2
+      foldkit: 0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
+      magic-string: 1.4.3
       vite: '@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2)'
       vitefu: 1.1.3(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2))
       ws: 8.22.0
@@ -2216,15 +2212,15 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba-designs/pixel-paper@0.24.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.168.0(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
+  '@gjermundgaraba-designs/pixel-paper@0.26.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
     dependencies:
       '@effect/platform-browser': 4.0.6(effect@4.0.6)
-      '@foldkit/ui': 0.168.0(effect@4.0.6)(foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
+      '@foldkit/ui': 0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       diff: 9.0.0
       effect: 4.0.6
-      foldkit: 0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
+      foldkit: 0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
 
-  '@gjermundgaraba/effect-actions@0.19.0(effect@4.0.6)':
+  '@gjermundgaraba/effect-actions@0.20.0(effect@4.0.6)':
     dependencies:
       effect: 4.0.6
 
@@ -2781,7 +2777,7 @@ snapshots:
 
   flatted@3.4.4: {}
 
-  foldkit@0.168.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6):
+  foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6):
     dependencies:
       '@effect/platform-browser': 4.0.6(effect@4.0.6)
       effect: 4.0.6
@@ -2863,10 +2859,6 @@ snapshots:
       lightningcss-win32-x64-msvc: 1.33.0
 
   lz-string@1.5.0: {}
-
-  magic-string@1.4.2:
-    dependencies:
-      '@jridgewell/sourcemap-codec': 1.6.0
 
   magic-string@1.4.3:
     dependencies:
@@ -3056,8 +3048,6 @@ snapshots:
       '@typescript/typescript-win32-x64': 7.0.2
 
   undici-types@8.9.0: {}
-
-  undici@8.11.2: {}
 
   undici@8.12.3: {}
 

@@ -58,7 +58,7 @@ const login = (issuer, owner = issuer.owner) =>
     body: JSON.stringify(owner),
   });
 
-await test("real HTTP issuer provisions resources and a confidential native client, drops oversized bodies, and closes idempotently", async () => {
+await test("real HTTP issuer provisions resources and a confidential native client, refuses oversized bodies, and closes idempotently", async () => {
   const issuer = await startDisposableIssuer(options);
 
   try {
@@ -124,13 +124,14 @@ await test("real HTTP issuer provisions resources and a confidential native clie
     assert.equal(state.clients[0].token_endpoint_auth_method, "client_secret_basic");
     assert.deepEqual(state.clients[0].redirect_uris, [options.client.redirect]);
     assert.ok(issuer.clientSecret);
-    await assert.rejects(
-      fetch(`${issuer.url}/api/setupOwner`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: issuer.url },
-        body: "x".repeat(65537),
-      }),
-    );
+
+    const oversized = await fetch(`${issuer.url}/api/setupOwner`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: issuer.url },
+      body: "x".repeat(65537),
+    });
+
+    assert.deepEqual([oversized.status, await oversized.text()], [413, ""]);
   } finally {
     await Promise.all([issuer.close(), issuer.close()]);
   }
