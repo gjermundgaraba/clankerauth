@@ -320,6 +320,13 @@ test("an administration command before signing in says how to sign in", async ()
   expect(result.stdout).toBe("");
 });
 
+test("--no-browser has no negated form", async () => {
+  const result = await (await home()).run(["login", "http://notes.invalid/", "--no-no-browser"]);
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("Unrecognized flag: --no-no-browser");
+});
+
 test("login signs in through the owner's approval and keeps its tokens in an owner-only file, not its output", async () => {
   const owner = await startOwner();
   const cli = await home();

@@ -1,12 +1,6 @@
 import { createServer, IncomingMessage, type RequestListener } from "node:http";
-import { ByteSize, Effect, Match, Option, type Scope, Stream, pipe } from "effect";
-import {
-  Headers,
-  HttpBody,
-  HttpIncomingMessage,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/http";
+import { ByteSize, Effect, Option, type Scope, pipe } from "effect";
+import { Headers, HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 export const peerHeader = "x-clankerauth-peer";
 
@@ -105,24 +99,8 @@ export const requestPolicy =
         Headers.remove("x-forwarded-for"),
       );
 
-      const response = yield* handler.pipe(
+      return yield* handler.pipe(
         Effect.provideService(HttpServerRequest.HttpServerRequest, incoming.modify({ headers })),
         Effect.provideService(HttpIncomingMessage.MaxBodySize, maxBodySize),
-      );
-
-      if (!(source instanceof IncomingMessage)) return response;
-
-      return Match.value(response.body).pipe(
-        Match.tag("Stream", (body) =>
-          HttpServerResponse.setBody(
-            response,
-            HttpBody.stream(
-              body.stream.pipe(Stream.tapCause(() => Effect.sync(() => source.socket.destroy()))),
-              body.contentType,
-              body.contentLength,
-            ),
-          ),
-        ),
-        Match.orElse(() => response),
       );
     }).pipe(Effect.interruptible);

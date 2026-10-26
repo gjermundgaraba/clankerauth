@@ -76,6 +76,7 @@ const loginCommand = Command.make(
     noBrowser: Flag.Boolean("no-browser").pipe(
       Flag.withDescription("Print the approval URL without opening it in the browser"),
       Flag.withDefault(false),
+      Flag.withoutNegation,
     ),
   },
   ({ url, scope, noBrowser }) =>
