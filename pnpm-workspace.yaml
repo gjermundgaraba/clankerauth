@@ -17,9 +17,9 @@ catalog:
   "@foldkit/vite-plugin": 0.28.0
   "@foldkit/oxlint-plugin": 0.15.3
   happy-dom: 21.0.4
-  "@better-auth/oauth-provider": 1.7.12
-  "@better-auth/api-key": 1.7.12
-  better-auth: 1.7.12
+  "@better-auth/oauth-provider": 1.7.13
+  "@better-auth/api-key": 1.7.13
+  better-auth: 1.7.13
   better-call: 1.4.4
   effect: 4.0.6
   "@types/node": 26.6.5
@@ -29,9 +29,9 @@ catalog:
   vite-plus: 1.4.0
   playwright: 1.64.1
   kysely: 0.29.7
-  "@better-auth/cimd": 1.7.12
-  "@better-auth/core": 1.7.12
-  "@better-auth/kysely-adapter": 1.7.12
+  "@better-auth/cimd": 1.7.13
+  "@better-auth/core": 1.7.13
+  "@better-auth/kysely-adapter": 1.7.13
   "@opentelemetry/api": 1.10.0
   "@oxlint/plugins": 1.89.0
   "@gjermundgaraba/effect-actions": 0.20.0
