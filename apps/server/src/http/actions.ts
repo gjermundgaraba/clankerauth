@@ -23,6 +23,12 @@ import { authorizeOwner, bearerOwner, sessionOwner } from "../owner/authenticati
 import { responseCookies } from "./response-cookies.ts";
 import { Issuer } from "../issuer/issuer.ts";
 
+// why: MCP tool calls run outside the uninterruptible route middleware, and an abort interrupts them
+const settles =
+  <A extends ReadonlyArray<unknown>, B, E, R>(handler: (...args: A) => Effect.Effect<B, E, R>) =>
+  (...args: A) =>
+    Effect.uninterruptible(handler(...args));
+
 export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -35,21 +41,21 @@ export function actionRoutes(mcpAllowedOrigins: readonly string[]) {
       const owner = Action.implement(
         Administration,
         {
-          listClients: clients.list,
-          createClient: clients.create,
-          updateClient: clients.update,
-          deleteClient: clients.delete,
-          revokeClient: clients.revoke,
-          blockClient: clients.block,
-          rotateClientSecret: clients.rotate,
-          setClientAccess: resources.setAccess,
-          getResource: resources.get,
-          putResource: resources.put,
-          deleteResource: resources.delete,
-          listApiKeys: keys.list,
-          createApiKey: keys.create,
-          updateApiKey: keys.update,
-          deleteApiKey: keys.delete,
+          listClients: settles(clients.list),
+          createClient: settles(clients.create),
+          updateClient: settles(clients.update),
+          deleteClient: settles(clients.delete),
+          revokeClient: settles(clients.revoke),
+          blockClient: settles(clients.block),
+          rotateClientSecret: settles(clients.rotate),
+          setClientAccess: settles(resources.setAccess),
+          getResource: settles(resources.get),
+          putResource: settles(resources.put),
+          deleteResource: settles(resources.delete),
+          listApiKeys: settles(keys.list),
+          createApiKey: settles(keys.create),
+          updateApiKey: settles(keys.update),
+          deleteApiKey: settles(keys.delete),
         },
         { authorize: authorizeOwner },
       );
