@@ -386,6 +386,13 @@ const NO_CONFIRMATION = { title: "", question: "", body: "", label: "", isDanger
 const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const confirmation = Option.getOrElse(pendingConfirmation(model), () => NO_CONFIRMATION);
 
+  const detail = Option.match(refusalAt(model, "Confirm"), {
+    onNone: () => ({}),
+    onSome: ({ title, reason }) => ({
+      toDetailView: () => [Notice.view({ tone: "Error", title, body: [reason] }, h)],
+    }),
+  });
+
   return h.submodel({
     slotId: ConfirmDialog.id(model.confirm),
     model: model.confirm,
@@ -397,12 +404,7 @@ const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
       label: confirmation.label,
       isDanger: confirmation.isDanger,
       isBusy: isSaving(model),
-      toDetailView: Option.match(refusalAt(model, "Confirm"), {
-        onNone: () => undefined,
-        onSome:
-          ({ title, reason }) =>
-          () => [Notice.view({ tone: "Error", title, body: [reason] }, h)],
-      }),
+      ...detail,
       toLiveRegionView: ConfirmDialog.isOpen(model.confirm) ? liveRegionView(h) : undefined,
     },
     toParentMessage: (message) => Message.GotConfirmMessage({ message }),

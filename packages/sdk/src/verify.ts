@@ -40,7 +40,7 @@ export interface Options {
   readonly store: Store;
   readonly requiredScopes?: readonly string[];
   /** `false` refuses API keys without reading the issuer's key list; only OAuth access tokens are accepted. */
-  readonly apiKeys?: boolean;
+  readonly apiKeys?: boolean | undefined;
 }
 
 export interface Verifier {
@@ -260,7 +260,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
     const payload = yield* verifySigned(token, "at+jwt");
 
-    if (payload.cnf !== undefined) return yield* unauthorized();
+    if (payload["cnf"] !== undefined) return yield* unauthorized();
 
     const claims = yield* Schema.decodeUnknownEffect(Claims)(payload).pipe(
       Effect.mapError(unauthorized),

@@ -3,6 +3,7 @@ packages:
   - packages/*
 
 catalogMode: prefer
+saveExact: true
 catalog:
   "@effect/platform-browser": 4.0.5
   "@effect/platform-node": 4.0.5

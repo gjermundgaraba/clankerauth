@@ -54,14 +54,14 @@ it.live("canonical request URL, trusted peer, body and multiple cookies survive 
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
         expect(req.url).toBe("/path?query=value");
-        expect(req.headers.host).toBe("issuer.example");
+        expect(req.headers["host"]).toBe("issuer.example");
         expect(req.method).toBe("POST");
         expect(yield* req.text).toBe("payload");
 
         for (const name of ["forwarded", "x-forwarded-host", "x-forwarded-proto"])
           expect(req.headers[name]).toBeUndefined();
         expect(req.headers[peerHeader]).toBe("127.0.0.1");
-        expect(req.headers.cookie).toBe("session=owner");
+        expect(req.headers["cookie"]).toBe("session=owner");
         called();
 
         return HttpServerResponse.fromWeb(
@@ -106,8 +106,8 @@ it.live("the forward-auth check alone keeps the proxy's forwarded host and schem
     const { url } = yield* serve(
       Effect.gen(function* () {
         const req = yield* HttpServerRequest.HttpServerRequest;
-        expect(req.headers.host).toBe("issuer.example");
-        expect(req.headers.forwarded).toBeUndefined();
+        expect(req.headers["host"]).toBe("issuer.example");
+        expect(req.headers["forwarded"]).toBeUndefined();
         const kept = req.url.split("?")[0] === "/forward-auth";
         expect(req.headers["x-forwarded-host"]).toBe(kept ? "notes.example" : undefined);
         expect(req.headers["x-forwarded-proto"]).toBe(kept ? "https" : undefined);

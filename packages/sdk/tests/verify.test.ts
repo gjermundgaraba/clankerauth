@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import type { JWTPayload } from "jose";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { Verifier } from "../src/index.ts";
+import type { TokenClaims } from "../src/testing.ts";
 import {
   ConfigurationError,
   InsufficientScope,
@@ -98,7 +98,7 @@ it.live("JWTs bind exact issuer, audience, claims, lifetime and required scopes"
 
     assert((yield* Effect.flip(other.verifyToken(token))) instanceof Unauthorized);
 
-    const claims: JWTPayload[] = [
+    const claims: TokenClaims[] = [
       { iss: "https://evil.example/api/auth" },
       { aud: "http://another.example/api" },
       { exp: 0 },

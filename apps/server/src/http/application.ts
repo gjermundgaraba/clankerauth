@@ -108,9 +108,7 @@ export const application = (
         }
 
         const body =
-          request.method === "GET" || request.method === "HEAD"
-            ? undefined
-            : yield* request.arrayBuffer;
+          request.method === "GET" || request.method === "HEAD" ? null : yield* request.arrayBuffer;
 
         const response = yield* provider(() =>
           auth.handler(
@@ -165,7 +163,7 @@ export const application = (
               const pathname = new URL(request.url, settings.baseURL).pathname;
               const path = pathname.replace(/^\/api\/auth/, "");
               const isMcp = pathname === "/mcp";
-              const origin = request.headers.origin;
+              const origin = request.headers["origin"];
               const mcpOriginAllowed = origin !== undefined && mcpAllowedOrigins.includes(origin);
               const publicCors = corsPaths.has(path);
               let response: HttpServerResponse.HttpServerResponse;
@@ -207,7 +205,7 @@ export const application = (
                 response = response.pipe(
                   HttpServerResponse.setHeader(
                     "vary",
-                    response.headers.vary ? `${response.headers.vary}, Origin` : "Origin",
+                    response.headers["vary"] ? `${response.headers["vary"]}, Origin` : "Origin",
                   ),
                   HttpServerResponse.removeHeader("access-control-allow-credentials"),
                 );

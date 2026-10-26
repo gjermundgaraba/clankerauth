@@ -83,7 +83,9 @@ it.live("cancellation releases a temporary provider session that lasts at most o
     const sessions = yield* sql`SELECT expiresAt FROM session`;
 
     expect(sessions).toHaveLength(before.length + 1);
-    expect(Date.parse(String(sessions.at(-1)?.expiresAt))).toBeLessThanOrEqual(Date.now() + 60_000);
+    expect(Date.parse(String(sessions.at(-1)?.["expiresAt"]))).toBeLessThanOrEqual(
+      Date.now() + 60_000,
+    );
     yield* Fiber.interrupt(request);
     expect(deleteSession).toHaveBeenCalledTimes(1);
     expect(yield* sql`SELECT id FROM session ORDER BY id`).toEqual(before);

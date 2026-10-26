@@ -12,9 +12,9 @@ interface WebMcpRequest {
   readonly headers?: Record<string, string>;
 }
 
-export const webMcpRequest = ({ method, params, url, headers }: WebMcpRequest) =>
+export const webMcpRequest = (request: WebMcpRequest) =>
   Result.getOrThrow(
-    HttpClientRequest.toWebResult(ActionMcp.request(method, params, { url, headers })),
+    HttpClientRequest.toWebResult(ActionMcp.request(request.method, request.params, request)),
   );
 
 export const administrationTools = (

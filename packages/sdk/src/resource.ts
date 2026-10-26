@@ -385,7 +385,7 @@ export const make = <
       const noteHost = Effect.gen(function* () {
         if (yield* Ref.get(warned)) return;
 
-        const reached = (yield* HttpServerRequest.HttpServerRequest).headers.host;
+        const reached = (yield* HttpServerRequest.HttpServerRequest).headers["host"];
 
         if (reached === undefined || reached === host) return;
 

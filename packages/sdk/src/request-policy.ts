@@ -78,8 +78,8 @@ export const make = (options: Options) => {
 
         const permitted = allows({
           target: request.originalUrl,
-          host: request.headers.host,
-          origin: request.headers.origin,
+          host: request.headers["host"],
+          origin: request.headers["origin"],
         });
 
         return permitted ? yield* httpEffect : forbidden;

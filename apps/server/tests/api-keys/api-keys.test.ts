@@ -47,7 +47,7 @@ const send = (
         new Request(`${origin}${path}`, {
           method: body === undefined ? "GET" : "POST",
           headers: { origin, cookie, "content-type": "application/json", ...headers },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          body: body === undefined ? null : JSON.stringify(body),
         }),
       ),
     ),
@@ -146,7 +146,7 @@ it.live("hash-only storage, explicit scopes, one-time display and next-list disa
 
     const stored = yield* (yield* Database).sql`SELECT key FROM apikey WHERE id = ${key.keyId}`;
 
-    expect(stored[0]?.key).toBe(
+    expect(stored[0]?.["key"]).toBe(
       Buffer.from(yield* Effect.promise(() => KeyList.digest(key.key))).toString("base64url"),
     );
     const list = yield* call("/api/listApiKeys", {});
@@ -284,7 +284,7 @@ it.live(
       expect(
         yield* json(yield* owner("getResource", { identifier: notes.identifier }, key.key)),
       ).toMatchObject(notes);
-      expect(decodeJwt((yield* json(yield* keyList(administration))).list).keys).toEqual([]);
+      expect(decodeJwt((yield* json(yield* keyList(administration))).list)["keys"]).toEqual([]);
 
       expect(
         (yield* call("/api/updateApiKey", {
@@ -419,10 +419,10 @@ it.live("expired keys leave the key list", () =>
   Effect.gen(function* () {
     const key = yield* create;
     expect(yield* verify(key.key)).toMatchObject({ scopes: ["example:read"] });
-    expect(decodeJwt((yield* json(yield* keyList())).list).keys).toHaveLength(1);
+    expect(decodeJwt((yield* json(yield* keyList())).list)["keys"]).toHaveLength(1);
     yield* (yield* Database)
       .sql`UPDATE apikey SET expiresAt = ${new Date(Date.now() - 1000).toISOString()} WHERE id = ${key.keyId}`;
-    expect(decodeJwt((yield* json(yield* keyList())).list).keys).toEqual([]);
+    expect(decodeJwt((yield* json(yield* keyList())).list)["keys"]).toEqual([]);
     expect(yield* verify(key.key)).toBe("Unauthorized");
   }).pipe(Effect.provide(apiKeysIssuer())),
 );

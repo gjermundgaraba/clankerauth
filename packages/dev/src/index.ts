@@ -303,7 +303,7 @@ const makeWorkspace = Effect.fnUntraced(function* (options: DisposableIssuerOpti
       });
 
       yield* decision.text;
-      const authorization = decision.headers.authorization;
+      const authorization = decision.headers["authorization"];
 
       if (decision.status !== 204 || authorization === undefined)
         return yield* Effect.fail(

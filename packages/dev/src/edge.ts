@@ -180,7 +180,7 @@ export const middleware = (options: EdgeOptions) => {
 
         const headers: Record<string, string> = {};
 
-        if (decision.location !== undefined) headers.location = decision.location;
+        if (decision.location !== undefined) headers["location"] = decision.location;
 
         if (decision.contentType !== undefined) headers["content-type"] = decision.contentType;
         response.writeHead(decision.status, headers);

@@ -246,7 +246,7 @@ export class ApiKeys extends Context.Service<
                   Effect.logWarning(
                     "An API key row cannot be listed; it is left out of key lists",
                     {
-                      keyId: row.id,
+                      keyId: row["id"],
                     },
                   ),
                   [],
@@ -298,7 +298,7 @@ export class ApiKeys extends Context.Service<
             Effect.catch(() =>
               Effect.as(
                 Effect.logWarning("An API key row cannot be read; the key is refused", {
-                  keyId: row.id,
+                  keyId: row["id"],
                 }),
                 undefined,
               ),

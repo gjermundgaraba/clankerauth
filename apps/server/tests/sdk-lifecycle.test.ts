@@ -47,7 +47,7 @@ const startServer = Effect.gen(function* () {
           method: body ? "POST" : "GET",
           redirect: "manual",
           headers: request,
-          body: body ? JSON.stringify(body) : undefined,
+          body: body ? JSON.stringify(body) : null,
         }),
       );
 

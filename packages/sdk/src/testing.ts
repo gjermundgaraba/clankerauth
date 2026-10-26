@@ -11,22 +11,25 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { Option, Schema } from "effect";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from "jose";
 import * as KeyList from "./key-list.ts";
 
-/** Claims set on a signed token. Each one overrides this issuer's default. */
+/**
+ * Claims set on a signed token. Each one overrides this issuer's default; one set to `undefined`
+ * is left out.
+ */
 export interface TokenClaims {
-  readonly iss?: string;
-  readonly sub?: string;
-  readonly aud?: string | Array<string>;
-  readonly iat?: number;
+  readonly iss?: string | undefined;
+  readonly sub?: string | undefined;
+  readonly aud?: string | Array<string> | undefined;
+  readonly iat?: number | undefined;
   /** Epoch seconds. Default: five minutes from now. */
-  readonly exp?: number;
+  readonly exp?: number | undefined;
   /** Space-separated, as the wire carries it. */
-  readonly scope?: string;
-  readonly client_id?: string;
+  readonly scope?: string | undefined;
+  readonly client_id?: string | undefined;
   /** Proof of possession, for checking that a sender-constrained token is refused. */
-  readonly cnf?: { readonly jkt: string };
+  readonly cnf?: { readonly jkt: string } | undefined;
 }
 
 export interface FakeIssuerOptions {
@@ -137,8 +140,9 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
     issuer,
     sign: (claims = {}, typ = "at+jwt") => {
       const now = Math.floor(Date.now() / 1000);
+      const payload: JWTPayload = {};
 
-      return new SignJWT({
+      for (const [name, value] of Object.entries({
         iss: issuer,
         sub: subject,
         aud: options.resource,
@@ -147,7 +151,10 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
         client_id: "fixture",
         scope: options.scopes.join(" "),
         ...claims,
-      })
+      }))
+        if (value !== undefined) payload[name] = value;
+
+      return new SignJWT(payload)
         .setProtectedHeader({ alg: "EdDSA", kid: "fixture", typ })
         .sign(pair.privateKey);
     },

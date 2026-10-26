@@ -12,7 +12,7 @@ export const clearCodes = (query: Sql, clientId: string | null, reference: strin
 // why: the provider has no bulk revocation API
 export const clearAuthorization = Effect.fn("Authorization.clear")(function* (
   query: Sql,
-  selection: { readonly clientId?: string; readonly resource?: string },
+  selection: { readonly clientId?: string | undefined; readonly resource?: string | undefined },
 ) {
   const client = selection.clientId ?? null;
   const reference = selection.resource === undefined ? null : resourceReference(selection.resource);

@@ -58,7 +58,12 @@ const text = (response: Response) => Effect.promise(() => response.clone().text(
 const request = (
   path: string,
   body?: TestRequestBody,
-  options: { anonymous?: boolean; form?: boolean; origin?: string; authorization?: string } = {},
+  options: {
+    anonymous?: boolean;
+    form?: boolean;
+    origin?: string;
+    authorization?: string | undefined;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const handle = yield* WebApplication;
@@ -79,7 +84,7 @@ const request = (
         options.form ? "application/x-www-form-urlencoded" : "application/json",
       );
 
-    let encoded: string | undefined;
+    let encoded: string | null = null;
 
     if (body !== undefined) {
       if (options.form) {
@@ -363,16 +368,18 @@ describe("first-run setup", () => {
         expect(response.status, yield* text(response)).toBe(400);
       }
 
-      for (const [contentType, body] of [
+      const malformed: ReadonlyArray<readonly [string, string]> = [
         ["application/json", "{"],
         ["text/plain", JSON.stringify({ email, password })],
         ["application/x-www-form-urlencoded", new URLSearchParams({ email, password }).toString()],
-      ]) {
+      ];
+
+      for (const [contentType, body] of malformed) {
         const response = yield* Effect.promise(() =>
           handle(
             new Request(`${baseURL}/api/setupOwner`, {
               method: "POST",
-              headers: { origin: baseURL, "content-type": contentType! },
+              headers: { origin: baseURL, "content-type": contentType },
               body,
             }),
           ),
@@ -875,7 +882,7 @@ describe("OAuth boundaries and lifecycle", () => {
           );
 
           expect(verified.payload.aud).toEqual(resourceA);
-          expect(verified.payload.scope).toContain("notes:read");
+          expect(verified.payload["scope"]).toContain("notes:read");
           expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(900);
 
           const verifiedB = yield* Effect.promise(() =>
@@ -1313,7 +1320,7 @@ describe("dashboard resources and client access", () => {
         );
 
         expect(claims.aud).toBe(resource.identifier);
-        expect(new Set(String(claims.scope).split(" "))).toEqual(new Set(resource.scopes));
+        expect(new Set(String(claims["scope"]).split(" "))).toEqual(new Set(resource.scopes));
       }).pipe(Effect.provide(signedInIssuer())),
   );
 
@@ -1461,7 +1468,7 @@ describe("dashboard resources and client access", () => {
           jwtVerify(narrowedToken.access_token, keys, { audience: resourceA }),
         );
 
-        expect(String(verified.payload.scope).split(" ")).not.toContain("notes:read");
+        expect(String(verified.payload["scope"]).split(" ")).not.toContain("notes:read");
         const narrowedCode = yield* exchange(app.client_id, pendingA, resourceA);
         expect(narrowedCode.status).toBe(200);
         expect((yield* json(narrowedCode)).scope.split(" ")).not.toContain("notes:read");
@@ -1499,7 +1506,7 @@ describe("dashboard resources and client access", () => {
       expect(consentsBefore).toContainEqual({ referenceId: `resource:${resourceA}` });
       expect((yield* access(app.client_id, [resourceB])).status).toBe(200);
       expect(yield* consents()).toEqual(
-        consentsBefore.filter((row) => row.referenceId !== `resource:${resourceA}`),
+        consentsBefore.filter((row) => row["referenceId"] !== `resource:${resourceA}`),
       );
       expect((yield* refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
 

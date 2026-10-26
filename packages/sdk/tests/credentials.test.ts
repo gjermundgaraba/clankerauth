@@ -62,7 +62,7 @@ const fakeIssuer = Effect.acquireRelease(
       if (state.refusal !== undefined) return json(state.refusal.status, state.refusal.body);
       const n = state.refreshes.length;
 
-      json(200, {
+      return json(200, {
         access_token: `access-${n}`,
         refresh_token: `refresh-${n}`,
         expires_in: 900,

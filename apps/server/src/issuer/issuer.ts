@@ -69,15 +69,20 @@ const providerOptions = (
         const state = await getOAuthProviderState();
         const query = new URLSearchParams(state?.query);
         const identifiers = query.getAll("resource");
+        const [identifier] = identifiers;
 
-        if (identifiers.length !== 1 || !(await runCallback(catalog.get(identifiers[0]))))
+        if (
+          identifier === undefined ||
+          identifiers.length !== 1 ||
+          !(await runCallback(catalog.get(identifier)))
+        )
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: exactlyOneResource,
           });
         const clientId = query.get("client_id");
 
-        if (!clientId || !(await runCallback(catalog.hasAccess(clientId, identifiers[0]))))
+        if (!clientId || !(await runCallback(catalog.hasAccess(clientId, identifier))))
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
@@ -90,7 +95,7 @@ const providerOptions = (
             error_description: "Resource scopes changed; start authorization again",
           });
 
-        return resourceReference(identifiers[0]);
+        return resourceReference(identifier);
       },
     },
     grantTypes: ["authorization_code", "refresh_token"],

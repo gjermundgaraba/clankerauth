@@ -30,7 +30,7 @@ const send = (
     new Request(`${origin}${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: { origin, cookie: session, "content-type": "application/json", ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? null : JSON.stringify(body),
       redirect: "manual",
     }),
   );
@@ -148,8 +148,8 @@ it.live(
 
       expect(protectedHeader.alg).toBe("EdDSA");
       expect(payload.sub).toBe(yield* (yield* OwnerAccount).find());
-      expect(payload.client_id).toBe(forwardClientId);
-      expect(payload.scope).toBe("notes:read notes:write");
+      expect(payload["client_id"]).toBe(forwardClientId);
+      expect(payload["scope"]).toBe("notes:read notes:write");
       expect(payload.exp! - payload.iat!).toBe(15 * 60);
       expect(
         (yield* call("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { authorization }))

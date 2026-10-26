@@ -124,7 +124,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
         if (!returnTo) return json(400, "invalid_return_url");
         const value = request.cookies[sessionCookieName];
-        const current = value ? yield* session(request.headers.cookie ?? "") : null;
+        const current = value ? yield* session(request.headers["cookie"] ?? "") : null;
 
         if (!current || !value)
           return HttpServerResponse.redirect(
@@ -150,7 +150,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
         const { headers } = yield* provider(
           () =>
             auth.api.signOut({
-              headers: new Headers({ cookie: request.headers.cookie ?? "" }),
+              headers: new Headers({ cookie: request.headers["cookie"] ?? "" }),
               returnHeaders: true,
             }),
           { refused: refusal, unavailable: unavailability },
