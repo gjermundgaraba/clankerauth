@@ -8,7 +8,7 @@ COPY apps/web/package.json ./apps/web/package.json
 COPY packages/admin-api/package.json ./packages/admin-api/package.json
 COPY packages/dev/package.json ./packages/dev/package.json
 COPY packages/sdk/package.json ./packages/sdk/package.json
-RUN --mount=type=cache,target=/pnpm/store pnpm install --frozen-lockfile
+RUN --mount=type=cache,target=/pnpm/store VP_GIT_HOOKS=0 pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 RUN --mount=type=cache,target=/pnpm/store pnpm --filter @clankerauth/server deploy --prod /out
