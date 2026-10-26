@@ -51,6 +51,7 @@ import type { VNode } from '../../snabbdom/vnode.js'
 import { tagNameFromSelector } from '../../tagName.js'
 import type { Return as UpdateReturn } from '../../update/index.js'
 import { Url, fromString } from '../../url/index.js'
+import { type ParsedFragmentModes, parseFragmentModes } from './fragment.js'
 import {
   controlledValueContent,
   escapeAttributeValue,
@@ -505,14 +506,8 @@ const assertInnerHtmlContextMatches = (
   )
 }
 
-const assertNoscriptModesAgree = (html: string): void => {
-  const scripted = parseFragment(DIV_FRAGMENT_CONTEXT, html, {
-    scriptingEnabled: true,
-  })
-  const unscripted = parseFragment(DIV_FRAGMENT_CONTEXT, html, {
-    scriptingEnabled: false,
-  })
-  if (parsedChildrenAgree(scripted, unscripted)) {
+const assertNoscriptModesAgree = (fragments: ParsedFragmentModes): void => {
+  if (parsedChildrenAgree(fragments.scripted, fragments.unscripted)) {
     return
   }
   throw new Error(
@@ -565,12 +560,13 @@ const hasDeclarativeShadowRoot = (
         hasDeclarativeShadowRoot(traversableContent(child))),
   )
 
-export const __assertNoDeclarativeShadowRoot = (html: string): void => {
-  const declaresInEitherMode = [true, false].some(scriptingEnabled =>
-    hasDeclarativeShadowRoot(
-      parseFragment(DIV_FRAGMENT_CONTEXT, html, { scriptingEnabled }),
-    ),
-  )
+export const __assertNoDeclarativeShadowRoot = (
+  fragments: ParsedFragmentModes,
+): void => {
+  const declaresInEitherMode =
+    hasDeclarativeShadowRoot(fragments.scripted) ||
+    hasDeclarativeShadowRoot(fragments.unscripted)
+
   if (!declaresInEitherMode) {
     return
   }
@@ -610,12 +606,13 @@ const hasLiveBaseElement = (
   return false
 }
 
-export const __assertNoLiveBaseElement = (html: string): void => {
-  const hasBaseInEitherMode = [true, false].some(scriptingEnabled =>
-    hasLiveBaseElement(
-      parseFragment(DIV_FRAGMENT_CONTEXT, html, { scriptingEnabled }),
-    ),
-  )
+export const __assertNoLiveBaseElement = (
+  fragments: ParsedFragmentModes,
+): void => {
+  const hasBaseInEitherMode =
+    hasLiveBaseElement(fragments.scripted) ||
+    hasLiveBaseElement(fragments.unscripted)
+
   if (!hasBaseInEitherMode) {
     return
   }
@@ -908,10 +905,9 @@ const assertNoReservedHandoffMarkers = (root: Parse5Element): void => {
 // The single element the served markup parses back to, or a refusal naming what
 // the parser did to it instead.
 const parsedRootOf = (
-  html: string,
+  fragment: DefaultTreeAdapterMap['documentFragment'],
   root: NonNullable<Document['body']>,
 ): Parse5Element => {
-  const fragment = parseFragment(DIV_FRAGMENT_CONTEXT, html, {})
   const significant = fragment.childNodes.filter(node => !isIgnorableText(node))
   const only = significant[0]
   if (
@@ -959,21 +955,21 @@ const parsedRootOf = (
 // left to notice. What stays conditional is the marker check below: only a
 // hydratable render emits a stamp for the parser to move.
 const assertParsedRootMatchesView = (
-  html: string,
+  fragment: DefaultTreeAdapterMap['documentFragment'],
   root: NonNullable<Document['body']>,
 ): void => {
-  const parsed = parsedRootOf(html, root)
+  const parsed = parsedRootOf(fragment, root)
   assertNoReservedHandoffMarkers(parsed)
   assertStructureMatches(parsed, root)
 }
 
 const assertSingleStampedRoot = (
-  html: string,
+  fragment: DefaultTreeAdapterMap['documentFragment'],
   runtimeId: string,
   buildId: string,
   root: NonNullable<Document['body']>,
 ): void => {
-  const only = parsedRootOf(html, root)
+  const only = parsedRootOf(fragment, root)
   const applicationMarkers = elementsCarrying(only, FOLDKIT_APP_ATTRIBUTE)
   const buildMarkers = elementsCarrying(only, HYDRATION_BUILD_ATTRIBUTE)
   const flagsMarkers = elementsCarrying(only, FOLDKIT_FLAGS_ATTRIBUTE)
@@ -1476,15 +1472,21 @@ export function renderToString(
         // is placed into a document the same way, so a root that does not close
         // cleanly swallows whatever the host writes after it either way.
         assertRootClosesCleanly(html)
-        assertNoscriptModesAgree(html)
-        __assertNoDeclarativeShadowRoot(html)
+        const fragments = parseFragmentModes(DIV_FRAGMENT_CONTEXT, html)
+        assertNoscriptModesAgree(fragments)
+        __assertNoDeclarativeShadowRoot(fragments)
         __assertNoDocumentStructureEscape(html)
-        __assertNoLiveBaseElement(html)
+        __assertNoLiveBaseElement(fragments)
         if (nextDocument.body !== null) {
           if (isHydratable) {
-            assertSingleStampedRoot(html, runtimeId, buildId, nextDocument.body)
+            assertSingleStampedRoot(
+              fragments.scripted,
+              runtimeId,
+              buildId,
+              nextDocument.body,
+            )
           } else {
-            assertParsedRootMatchesView(html, nextDocument.body)
+            assertParsedRootMatchesView(fragments.scripted, nextDocument.body)
           }
         }
         return html

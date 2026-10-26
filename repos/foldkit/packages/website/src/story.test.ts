@@ -73,6 +73,37 @@ const resolvePathChangeCommands = () => [
 ]
 
 describe('application', () => {
+  test('newsletter email follows navigation between Home and Newsletter', () => {
+    story(
+      update,
+      given(initAt(homeUrl)),
+      message(
+        Message.GotHomeMessage({
+          message: Home.Message.UpdatedNewsletterEmail({
+            value: 'alice@example.com',
+          }),
+        }),
+      ),
+      model(model => {
+        expect(model.newsletterEmail).toBe('alice@example.com')
+      }),
+      message(Message.ChangedUrl({ url: newsletterUrl })),
+      ...resolvePathChangeCommands(),
+      model(model => {
+        expect(model.newsletterEmail).toBe('alice@example.com')
+      }),
+      message(Message.UpdatedNewsletterEmail({ value: 'bob@example.com' })),
+      model(model => {
+        expect(model.newsletterEmail).toBe('bob@example.com')
+      }),
+      message(Message.ChangedUrl({ url: homeUrl })),
+      ...resolvePathChangeCommands(),
+      model(model => {
+        expect(model.newsletterEmail).toBe('bob@example.com')
+      }),
+    )
+  })
+
   test('entering Home initializes fresh state', () => {
     story(
       update,

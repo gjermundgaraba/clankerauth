@@ -144,6 +144,8 @@ A handler can do more than return a one-line Message. The constraint is purity, 
 
 For `OnKeyDownPreventDefault`, returning `Some` claims the key. Foldkit suppresses the browser's default action and dispatches the Message. Returning `None` leaves the key to the browser.
 
+Every `OnKeyDown` attribute leaves a keydown alone while an input method is still composing. Foldkit does not call the handler and does not suppress the browser default, so Enter can confirm a Japanese, Chinese, or Korean conversion.
+
 ### Self-Targeted Keydowns
 
 `OnKeyDownSelf` and `OnKeyDownSelfPreventDefault` handle only keydowns that target the host itself. Keydowns bubbling from descendants are ignored. Use them when a composite widget owns keyboard input for its host but embeds interactive children whose keys should remain independent. The prevent-default variant otherwise follows the same `Some` and `None` contract as `OnKeyDownPreventDefault`.

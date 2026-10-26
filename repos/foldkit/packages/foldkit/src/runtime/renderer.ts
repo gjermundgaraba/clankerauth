@@ -158,6 +158,7 @@ export const makeRenderer = <Model, Message>({
       enqueueMessageEffect,
       drainPendingMessages,
       resetDrainBudget,
+      isAnyMessageDeferred,
     } = messageQueue
     const {
       mountTracker,
@@ -361,8 +362,8 @@ export const makeRenderer = <Model, Message>({
     // h.submodel persist between renders. The render function calls
     // `beginHtmlRender` at the start of each pass; wraps for
     // unmounted Submodels (e.g. an entry removed from a list) are
-    // dropped from the registry via snabbdom destroy hooks attached
-    // by `h.submodel` to each child vnode.
+    // dropped from the registry via snabbdom `postdestroy` hooks
+    // attached by `h.submodel` to each child vnode.
     const boundaryRegistry: BoundaryRegistry = createHtmlBoundaryRegistry()
 
     // NOTE: callers set `isRenderingFrame` before calling this and clear
@@ -531,6 +532,11 @@ export const makeRenderer = <Model, Message>({
       mountRuntime,
     )
 
+    // NOTE: rendering before a deferred drain resumes would restore stale
+    // controlled input values. Disposed or crashed runtimes use the frame guards.
+    const isLiveModelBehindQueue = (): boolean =>
+      isAnyMessageDeferred() && !status.isRuntimeDisposed && !status.isCrashed
+
     // NOTE: the render, Mount drain, DevTools attribution, and
     // patch-time-buffer flush. Shared by the plain path (called directly)
     // and the View Transition path (called from the transition's update
@@ -630,6 +636,14 @@ export const makeRenderer = <Model, Message>({
             return
           }
           update.didRun = true
+
+          // NOTE: a drain may have been deferred since the preceding frame
+          // started the transition. Leave the DOM unchanged until it catches up.
+          if (isLiveModelBehindQueue()) {
+            skipPendingViewTransition()
+            scheduleRenderFrame()
+            return
+          }
           // NOTE: the view state closes the resume window after the
           // store is live but before its plain frame has restored the live
           // DOM. A transition invalidated by jumpTo stays invalid forever,
@@ -662,6 +676,11 @@ export const makeRenderer = <Model, Message>({
     // would strand any `Render.afterCommit` registered against it, and
     // the Dom helpers that gate on it would never run their DOM work.
     const renderFramePlain = (): void => {
+      // NOTE: retain the scheduled frame's pending commit while the drain waits.
+      if (isLiveModelBehindQueue()) {
+        requestAnimationFrame(renderFramePlain)
+        return
+      }
       isRenderFrameScheduled = false
       const isRestoringLiveView = isLiveViewRestorePending
       isLiveViewRestorePending = false

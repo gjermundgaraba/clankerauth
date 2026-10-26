@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { canaryVersion } from '../../../scripts/lib/package-version.mjs'
 import { EXAMPLE_FILE_EXTENSIONS, EXAMPLE_ROOT_FILES } from '../vite.config'
@@ -16,6 +16,14 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 
 const SERVER_RENDERED_EXAMPLES = ['ssr', 'ssg']
 const CANARY_COMMIT = '0123456789abcdef0123456789abcdef01234567'
+
+type PlaygroundFiles = Awaited<ReturnType<typeof loadPlaygroundFiles>>
+type WorkspacePackageVersions = Awaited<
+  ReturnType<typeof loadPlaygroundWorkspacePackageVersions>
+>
+
+let stablePlaygroundFiles: PlaygroundFiles
+let stableWorkspacePackageVersions: WorkspacePackageVersions
 
 const buildScriptOf = (slug: string): string => {
   const manifest: Readonly<{ scripts: Readonly<Record<string, string>> }> =
@@ -32,6 +40,27 @@ const buildScriptOf = (slug: string): string => {
 // made of. `vite build` reads the config rather than a script, so the config is
 // the file that has to reach both.
 describe('server-rendered example build scripts', () => {
+  beforeAll(async () => {
+    const previousCanaryCommit = process.env['VITE_FOLDKIT_CANARY_COMMIT']
+    delete process.env['VITE_FOLDKIT_CANARY_COMMIT']
+
+    try {
+      const [playgroundFiles, workspacePackageVersions] = await Promise.all([
+        loadPlaygroundFiles(),
+        loadPlaygroundWorkspacePackageVersions(),
+      ])
+
+      stablePlaygroundFiles = playgroundFiles
+      stableWorkspacePackageVersions = workspacePackageVersions
+    } finally {
+      if (previousCanaryCommit === undefined) {
+        delete process.env['VITE_FOLDKIT_CANARY_COMMIT']
+      } else {
+        process.env['VITE_FOLDKIT_CANARY_COMMIT'] = previousCanaryCommit
+      }
+    }
+  })
+
   for (const slug of SERVER_RENDERED_EXAMPLES) {
     it(`ships the config the ${slug} build command reads`, () => {
       expect(buildScriptOf(slug)).toBe('vite build')
@@ -46,9 +75,10 @@ describe('server-rendered example build scripts', () => {
     })
   }
 
-  it('retains the executable the transformed SSG build invokes', async () => {
-    const bySlug = await loadPlaygroundFiles()
-    const ssgEntry = Object.entries(bySlug).find(([slug]) => slug === 'ssg')
+  it('retains the executable the transformed SSG build invokes', () => {
+    const ssgEntry = Object.entries(stablePlaygroundFiles).find(
+      ([slug]) => slug === 'ssg',
+    )
     if (ssgEntry === undefined) {
       throw new Error('the transformed playground files omit ssg')
     }
@@ -68,13 +98,16 @@ describe('server-rendered example build scripts', () => {
     expect(manifest.devDependencies).toHaveProperty('vite')
   })
 
-  it('pins every transformed workspace dependency to its exact version', async () => {
-    const [bySlug, versions] = await Promise.all([
-      loadPlaygroundFiles(),
-      loadPlaygroundWorkspacePackageVersions(),
-    ])
+  it('disables the MCP relay in every runnable playground', () => {
+    expect(Object.keys(stablePlaygroundFiles)).not.toHaveLength(0)
 
-    for (const [slug, { files }] of Object.entries(bySlug)) {
+    for (const [slug, { files }] of Object.entries(stablePlaygroundFiles)) {
+      expect(files['vite.config.ts'], slug).toContain('devToolsMcpPort: false')
+    }
+  })
+
+  it('pins every transformed workspace dependency to its exact version', () => {
+    for (const [slug, { files }] of Object.entries(stablePlaygroundFiles)) {
       const source = files['package.json']
       if (source === undefined) {
         throw new Error(`the ${slug} playground omits package.json`)
@@ -94,7 +127,9 @@ describe('server-rendered example build scripts', () => {
       for (const [name, specifier] of Object.entries(dependencies)) {
         expect(specifier, `${slug}: ${name}`).not.toMatch(/^workspace:/)
       }
-      for (const [name, version] of Object.entries(versions)) {
+      for (const [name, version] of Object.entries(
+        stableWorkspacePackageVersions,
+      )) {
         if (dependencies[name] !== undefined) {
           expect(dependencies[name], `${slug}: ${name}`).toBe(version)
         }
@@ -102,10 +137,8 @@ describe('server-rendered example build scripts', () => {
     }
   })
 
-  it('pins WebContainer dependency overrides', async () => {
-    const bySlug = await loadPlaygroundFiles()
-
-    for (const [slug, { files }] of Object.entries(bySlug)) {
+  it('pins WebContainer dependency overrides', () => {
+    for (const [slug, { files }] of Object.entries(stablePlaygroundFiles)) {
       const source = files['package.json']
       if (source === undefined) {
         throw new Error(`the ${slug} playground omits package.json`)
@@ -119,9 +152,6 @@ describe('server-rendered example build scripts', () => {
 
   it('pins canary playground dependencies to the commit-addressed snapshot', async () => {
     const previousCanaryCommit = process.env['VITE_FOLDKIT_CANARY_COMMIT']
-    delete process.env['VITE_FOLDKIT_CANARY_COMMIT']
-
-    const stableVersions = await loadPlaygroundWorkspacePackageVersions()
     process.env['VITE_FOLDKIT_CANARY_COMMIT'] = CANARY_COMMIT
 
     try {
@@ -150,7 +180,9 @@ describe('server-rendered example build scripts', () => {
           expect(specifier, `${slug}: ${name}`).not.toMatch(/^workspace:/)
         }
 
-        for (const [name, stableVersion] of Object.entries(stableVersions)) {
+        for (const [name, stableVersion] of Object.entries(
+          stableWorkspacePackageVersions,
+        )) {
           if (dependencies[name] !== undefined) {
             expect(dependencies[name], `${slug}: ${name}`).toBe(
               canaryVersion(stableVersion, CANARY_COMMIT),

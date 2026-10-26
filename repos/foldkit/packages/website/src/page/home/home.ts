@@ -175,6 +175,7 @@ type ViewInputs = Readonly<{
   maybeGitHubStarCount: Option.Option<number>
   resolvedTheme: ResolvedTheme
   isBrowserEnvironmentLoaded: boolean
+  newsletterEmail: string
 }>
 
 // VIEW
@@ -251,7 +252,11 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
       viewInputs.renderCopyButton,
       viewInputs.renderSnippet,
       demoTabsView,
-      Shared.emailSignupContent,
+      Shared.emailSignupContent(
+        viewInputs.newsletterEmail,
+        value => Message.UpdatedNewsletterEmail({ value }),
+        h,
+      ),
       playgroundMenu,
       viewInputs.maybeGitHubStarCount,
       viewInputs.resolvedTheme,

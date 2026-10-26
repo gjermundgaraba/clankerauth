@@ -842,6 +842,52 @@ describe('Listbox', () => {
         )
       })
 
+      it('keeps the listbox open after ClickedButton follows a mouse press', () => {
+        Story.story(
+          update,
+          givenClosed,
+          Story.message(
+            Message.PressedPointerOnButton({
+              pointerType: 'mouse',
+              button: 0,
+            }),
+          ),
+          Story.Command.resolve(FocusItems, Message.CompletedFocusItems()),
+          Story.message(Message.ClickedButton()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(true)
+            expect(model.maybeLastButtonPointerType).toStrictEqual(
+              Option.none(),
+            )
+          }),
+        )
+      })
+
+      it('opens on ClickedButton when the click did not follow a mouse press', () => {
+        Story.story(
+          update,
+          givenClosed,
+          Story.message(Message.ClickedButton()),
+          Story.Command.resolve(FocusItems, Message.CompletedFocusItems()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(true)
+            expect(model.activationTrigger).toBe('Pointer')
+          }),
+        )
+      })
+
+      it('closes an open listbox on ClickedButton when the click did not follow a mouse press', () => {
+        Story.story(
+          update,
+          givenOpen,
+          Story.message(Message.ClickedButton()),
+          Story.Command.resolve(FocusButton, Message.CompletedFocusButton()),
+          Story.model(model => {
+            expect(model.isOpen).toBe(false)
+          }),
+        )
+      })
+
       it('returns model unchanged for SuppressedSpaceScroll', () => {
         Story.story(
           update,
@@ -1255,6 +1301,29 @@ describe('Listbox', () => {
         Story.Command.expectNone(),
         Story.model(model => {
           expect(model.isOpen).toBe(false)
+        }),
+      )
+    })
+
+    it('emits no Commands on Opened when already open in modal mode', () => {
+      const openModal = modifyFields(init({ id: 'test', isModal: true }), {
+        isOpen: () => true,
+        maybeActiveItemIndex: () => Option.some(1),
+        searchQuery: () => 'ap',
+        searchVersion: () => 2,
+      })
+
+      Story.story(
+        update,
+        Story.given(openModal),
+        Story.message(Message.Opened({ maybeActiveItemIndex: Option.none() })),
+        Story.expectNoOutMessage(),
+        Story.Command.expectNone(),
+        Story.model(model => {
+          expect(model.isOpen).toBe(true)
+          expect(model.maybeActiveItemIndex).toStrictEqual(Option.some(1))
+          expect(model.searchQuery).toBe('ap')
+          expect(model.searchVersion).toBe(2)
         }),
       )
     })

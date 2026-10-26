@@ -25,6 +25,7 @@ import {
   reflectedAttributeName,
 } from '../domReflection.js'
 import type { File } from '../file/index.js'
+import { isImeCompositionKeydown } from '../imeComposition.js'
 import type { MountAction } from '../mount/index.js'
 import {
   MountRuntime,
@@ -161,6 +162,16 @@ const keyboardModifiers = (event: KeyboardEvent): KeyboardModifiers => ({
   altKey: event.altKey,
   metaKey: event.metaKey,
 })
+
+const skipImeCompositionKeydown =
+  (handle: (event: KeyboardEvent) => void) =>
+  (event: KeyboardEvent): void => {
+    if (isImeCompositionKeydown(event)) {
+      return
+    }
+
+    handle(event)
+  }
 
 const inputEventValue = (target: EventTarget | null): string => {
   if (
@@ -1742,30 +1753,31 @@ const attributeHandlers: AttributeHandlers = {
     }),
   OnKeyDown: ({ f: toMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
-      keydown: (event: KeyboardEvent) =>
-        ctx.dispatch(toMessage(event.key, keyboardModifiers(event))),
+      keydown: skipImeCompositionKeydown(event => {
+        ctx.dispatch(toMessage(event.key, keyboardModifiers(event)))
+      }),
     }),
   OnKeyDownPreventDefault: ({ f: toMaybeMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
-      keydown: (event: KeyboardEvent) => {
+      keydown: skipImeCompositionKeydown(event => {
         const maybeMessage = toMaybeMessage(event.key, keyboardModifiers(event))
         if (Option.isSome(maybeMessage)) {
           event.preventDefault()
           ctx.dispatch(maybeMessage.value)
         }
-      },
+      }),
     }),
   OnKeyDownSelf: ({ f: toMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
-      keydown: (event: KeyboardEvent) => {
+      keydown: skipImeCompositionKeydown(event => {
         if (isEventTargetCurrentTarget(event)) {
           ctx.dispatch(toMessage(event.key, keyboardModifiers(event)))
         }
-      },
+      }),
     }),
   OnKeyDownSelfPreventDefault: ({ f: toMaybeMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
-      keydown: (event: KeyboardEvent) => {
+      keydown: skipImeCompositionKeydown(event => {
         if (!isEventTargetCurrentTarget(event)) {
           return
         }
@@ -1775,11 +1787,11 @@ const attributeHandlers: AttributeHandlers = {
           event.preventDefault()
           ctx.dispatch(maybeMessage.value)
         }
-      },
+      }),
     }),
   OnKeyDownFocus: ({ f: toMaybeFocusAndMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
-      keydown: (event: KeyboardEvent) => {
+      keydown: skipImeCompositionKeydown(event => {
         const maybeResult = toMaybeFocusAndMessage(
           event.key,
           keyboardModifiers(event),
@@ -1793,7 +1805,7 @@ const attributeHandlers: AttributeHandlers = {
           }
           ctx.dispatch(message)
         }
-      },
+      }),
     }),
   OnKeyUp: ({ f: toMessage }, ctx: BuildContext) =>
     updateDataOn(ctx, {
@@ -2596,10 +2608,9 @@ const attributeHandlers: AttributeHandlers = {
   },
   OnUnmount: ({ message }, ctx: BuildContext) => {
     // NOTE: resolve the boundary wrapping chain eagerly, while the boundary
-    // is still live this render. The destroy hook fires during the patch
-    // that removes the element, after the Submodel's own destroy hook has
-    // deregistered the wrap, so a fire-time lookup would throw; the
-    // precomputed thunk sidesteps that teardown race.
+    // is still live this render. The dispatch runs during teardown, or later
+    // after a failed replay patch, so the precomputed thunk does not depend
+    // on what the registry holds at that time.
     const dispatchUnmount = ctx.resolveUnmount(message)
     attachOnUnmount(ctx.data, dispatchUnmount)
   },
@@ -5471,10 +5482,9 @@ const htmlAttributes = <Message>(): HtmlAttributes<Message> => ({
    * the close Command that would release the scroll lock and focus trap never
    * runs. An `OnUnmount` Message lets `update` release those resources.
    *
-   * Works across Submodel boundaries. The destroy hook fires during the patch
-   * that removes the element, after the Submodel's own teardown has
-   * deregistered its boundary wrap, so the wrapping chain is resolved eagerly
-   * at render time into a dispatch that still reaches the parent.
+   * Works across Submodel boundaries. The wrapping chain is resolved eagerly
+   * at render time into a dispatch that still reaches the parent, even when
+   * it runs after the Submodel's teardown has deregistered its boundary wrap.
    *
    * Replay-safe. The runtime suppresses the dispatch during a DevTools
    * time-travel render, so scrubbing through history never re-runs the

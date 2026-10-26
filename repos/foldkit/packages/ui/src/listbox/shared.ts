@@ -126,6 +126,7 @@ export const Message = defineMessageUnion({
   CompletedFocusItems: {},
   CompletedScrollIntoView: {},
   CompletedClickItem: {},
+  ClickedButton: {},
   IgnoredMouseClick: {},
   SuppressedSpaceScroll: {},
   SuppressedItemCommit: {},
@@ -149,6 +150,8 @@ export type RequestedItemClick = typeof Message.RequestedItemClick.Type
 export type Searched = typeof Message.Searched.Type
 export type CompletedDelayClearSearch =
   typeof Message.CompletedDelayClearSearch.Type
+/** A click on the Listbox trigger button. */
+export type ClickedButton = typeof Message.ClickedButton.Type
 export type IgnoredMouseClick = typeof Message.IgnoredMouseClick.Type
 export type SuppressedSpaceScroll = typeof Message.SuppressedSpaceScroll.Type
 export type SuppressedItemCommit = typeof Message.SuppressedItemCommit.Type
@@ -455,8 +458,12 @@ export const makeUpdate = <Model extends BaseModel>(
       SuppressedItemCommit: () => ({ model }),
       CompletedAnchorListbox: () => ({ model }),
       CompletedPortalListboxBackdrop: () => ({ model }),
-      Opened: ({ maybeActiveItemIndex }) =>
-        openListbox(
+      Opened: ({ maybeActiveItemIndex }) => {
+        if (model.isOpen) {
+          return { model }
+        }
+
+        return openListbox(
           modifyBaseFields(model, {
             maybeActiveItemIndex: () => maybeActiveItemIndex,
             activationTrigger: () =>
@@ -469,7 +476,8 @@ export const makeUpdate = <Model extends BaseModel>(
             maybeLastPointerPosition: () => Option.none(),
           }),
           openCommands,
-        ),
+        )
+      },
 
       Closed: () => closeListbox(model, closeWithFocusCommands),
 
@@ -607,6 +615,32 @@ export const makeUpdate = <Model extends BaseModel>(
           maybeLastButtonPointerType: () => Option.none(),
         }),
       }),
+      ClickedButton: () => {
+        if (
+          Option.exists(model.maybeLastButtonPointerType, Equal.equals('mouse'))
+        ) {
+          return {
+            model: modifyBaseFields(model, {
+              maybeLastButtonPointerType: () => Option.none(),
+            }),
+          }
+        }
+
+        if (model.isOpen) {
+          return closeListbox(model, closeWithFocusCommands)
+        }
+
+        return openListbox(
+          modifyBaseFields(model, {
+            maybeActiveItemIndex: () => Option.none(),
+            activationTrigger: () => 'Pointer',
+            searchQuery: () => '',
+            searchVersion: () => 0,
+            maybeLastPointerPosition: () => Option.none(),
+          }),
+          openCommands,
+        )
+      },
     })
   }
 
@@ -778,7 +812,6 @@ export const makeView = <Model extends BaseModel>(behavior: ViewBehavior) => {
         animation: { transitionState },
         maybeActiveItemIndex,
         searchQuery,
-        maybeLastButtonPointerType,
       } = model
 
       const {
@@ -930,21 +963,6 @@ export const makeView = <Model extends BaseModel>(behavior: ViewBehavior) => {
       ): Option.Option<Message> =>
         Option.some(Message.PressedPointerOnButton({ pointerType, button }))
 
-      const handleButtonClick = (): Message => {
-        const isMouse = Option.exists(
-          maybeLastButtonPointerType,
-          type => type === 'mouse',
-        )
-
-        if (isMouse) {
-          return Message.IgnoredMouseClick()
-        } else if (isOpen) {
-          return Message.Closed()
-        } else {
-          return Message.Opened({ maybeActiveItemIndex: Option.none() })
-        }
-      }
-
       const handleSpaceKeyUp = (key: string): Option.Option<Message> =>
         OptionExt.when(key === ' ', Message.SuppressedSpaceScroll())
 
@@ -1039,7 +1057,7 @@ export const makeView = <Model extends BaseModel>(behavior: ViewBehavior) => {
               h.OnPointerDown(handleButtonPointerDown),
               h.OnKeyDownPreventDefault(handleButtonKeyDown),
               h.OnKeyUpPreventDefault(handleSpaceKeyUp),
-              h.OnClick(handleButtonClick()),
+              h.OnClick(Message.ClickedButton()),
             ]),
         ...(isVisible
           ? [

@@ -125,7 +125,7 @@ export const view = (
             ],
             [content],
           ),
-          h.div([PagefindIgnore], [Docs.footerView(model.currentYear, h)]),
+          h.div([PagefindIgnore], [Docs.footerView(model, h)]),
         ],
       ),
     ],
