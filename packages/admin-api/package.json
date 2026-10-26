@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerauth-admin-api",
-  "version": "0.28.1",
+  "version": "0.29.0",
   "description": "The clankerauth administration contract: its effect-actions actions, schemas, errors and HTTP bindings, for administering an issuer from a program.",
   "license": "MIT",
   "repository": {
