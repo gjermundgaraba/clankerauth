@@ -1,3 +1,10 @@
+import {
+  Card,
+  Field,
+  Focus,
+  Notice,
+  PasswordField,
+} from "@gjermundgaraba-designs/pixel-paper";
 import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
 import { Boolean, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
@@ -8,7 +15,6 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 import { defineView } from "foldkit/submodel";
 import type * as Update from "foldkit/update";
-import { Card, Field, Focus, Notice, PasswordField } from "@gjermundgaraba-designs/pixel-paper";
 
 import { signIn } from "../api.ts";
 import { clientsRouter } from "../route.ts";
@@ -73,7 +79,9 @@ export const init = (search: string, fallback: string): Model => {
     maybeProblem: Option.none(),
     continuation: query.has("sig")
       ? Continuation.ContinueAuthorization()
-      : Continuation.RedirectTo({ destination: query.get(returnToParameter) ?? fallback }),
+      : Continuation.RedirectTo({
+          destination: query.get(returnToParameter) ?? fallback,
+        }),
   };
 };
 
@@ -87,7 +95,7 @@ export const SignIn = Command.define("SignIn", {
       Effect.match({
         onFailure: (reason) => Message.FailedSignIn({ reason }),
         onSuccess: () => Message.SucceededSignIn(),
-      }),
+      })
     ),
 });
 
@@ -101,15 +109,16 @@ export const ContinueAfterSignIn = Command.define("ContinueAfterSignIn", {
         URL.canParse(destination, location.origin) &&
           new URL(destination, location.origin).origin === location.origin
           ? destination
-          : clientsRouter(),
-      ),
+          : clientsRouter()
+      )
     ).pipe(Effect.as(Message.CompletedContinueAfterSignIn())),
 });
 
 export const continuationOf = (model: Model) =>
   Continuation.match(model.continuation, {
     ContinueAuthorization: () => Option.none(),
-    RedirectTo: ({ destination }) => Option.some(ContinueAfterSignIn({ destination })),
+    RedirectTo: ({ destination }) =>
+      Option.some(ContinueAfterSignIn({ destination })),
   });
 
 // UPDATE
@@ -147,15 +156,21 @@ const submitted = (model: Model): UpdateReturn =>
       ],
     }),
     onSome: (field) => ({
-      model: modifyFields(model, { maybeProblem: () => Option.some(Problem.Missing({ field })) }),
+      model: modifyFields(model, {
+        maybeProblem: () => Option.some(Problem.Missing({ field })),
+      }),
       commands: [Focus.Focus({ id: FIELD_IDS[field] })],
     }),
   });
 
 export const update = (model: Model, message: Message) =>
   Message.match<UpdateReturn>(message, {
-    UpdatedEmail: ({ value }) => ({ model: modifyFields(model, { email: () => value }) }),
-    UpdatedPassword: ({ value }) => ({ model: modifyFields(model, { password: () => value }) }),
+    UpdatedEmail: ({ value }) => ({
+      model: modifyFields(model, { email: () => value }),
+    }),
+    UpdatedPassword: ({ value }) => ({
+      model: modifyFields(model, { password: () => value }),
+    }),
     ToggledPasswordShown: () => ({
       model: modifyFields(model, { isPasswordShown: Boolean.not }),
     }),
@@ -182,7 +197,7 @@ const MISSING_SENTENCES: Readonly<Record<LoginField, string>> = {
   Password: "Enter your password.",
 };
 
-const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+const refusalView = (model: Model, h: HtmlBuilder<Message>): readonly Html[] =>
   Option.match(model.maybeProblem, {
     onNone: () => [],
     onSome: (problem) =>
@@ -190,16 +205,26 @@ const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html>
         problem,
         {
           Refused: ({ reason }) => [
-            Notice.view({ tone: "Error", title: "Not signed in", body: [reason] }, h),
+            Notice.view(
+              { tone: "Error", title: "Not signed in", body: [reason] },
+              h
+            ),
           ],
         },
-        () => [],
+        () => []
       ),
   });
 
-const missingSentenceOf = (model: Model, field: LoginField): string | undefined =>
+const missingSentenceOf = (
+  model: Model,
+  field: LoginField
+): string | undefined =>
   Option.exists(model.maybeProblem, (problem) =>
-    Problem.matchOrElse(problem, { Missing: (missing) => missing.field === field }, () => false),
+    Problem.matchOrElse(
+      problem,
+      { Missing: (missing) => missing.field === field },
+      () => false
+    )
   )
     ? MISSING_SENTENCES[field]
     : undefined;
@@ -219,7 +244,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
           [h.Class("note-line")],
           [
             "Use your local account to continue. Password sign-in only: there is no external identity provider.",
-          ],
+          ]
         ),
         ...refusalView(model, h),
         Field.view(
@@ -232,9 +257,12 @@ export const view = defineView<Model, Message>((model, h): Html =>
             isBoxed: true,
             isRequired: true,
             error: missingSentenceOf(model, "Email"),
-            inputAttributes: [h.Autocomplete("username"), h.Placeholder("owner@example.internal")],
+            inputAttributes: [
+              h.Autocomplete("username"),
+              h.Placeholder("owner@example.internal"),
+            ],
           },
-          h,
+          h
         ),
         PasswordField.view(
           {
@@ -248,10 +276,10 @@ export const view = defineView<Model, Message>((model, h): Html =>
             error: missingSentenceOf(model, "Password"),
             autocomplete: "current-password",
           },
-          h,
+          h
         ),
       ],
     },
-    h,
-  ),
+    h
+  )
 );

@@ -17,11 +17,11 @@ Effect 4.0, from 4.0.4, and effect-actions are peers, shared with the program.
 `OwnerHttp` is the binding served at `/api/owner/<action>`, authenticated by an owner's access token for the administration resource, the issuer's origin root, or by an administration key: an API key granted `clankerauth:read` or `clankerauth:write` on that resource. The owner's sign-in that `clankerauth login <issuer>` keeps gives a token: `authorizing` of [`@gjermundgaraba/clankerauth-sdk/credentials`](../sdk/README.md) sends it with each request, refreshed as it expires, and the methods fail with `SignInRequired` when there is none. Given `token`, `authorizing` sends what the environment holds instead, so the program below runs unattended with an administration key in `CLANKERAUTH_TOKEN`, the variable the `clankerauth` command reads too, and with the owner's sign-in when it is unset.
 
 ```ts
+import { OwnerHttp } from "@gjermundgaraba/clankerauth-admin-api";
+import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/http";
-import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
-import { OwnerHttp } from "@gjermundgaraba/clankerauth-admin-api";
 
 const issuer = "https://clankerauth.home.example";
 

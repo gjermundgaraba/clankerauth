@@ -13,7 +13,10 @@ export const SECOND_READ = 2;
 export const THIRD_READ = 3;
 
 export const readOf = (generation: number, data: Listing) =>
-  listingQuery.Message.CompletedFetch({ generation, result: Result.succeed(data) });
+  listingQuery.Message.CompletedFetch({
+    generation,
+    result: Result.succeed(data),
+  });
 
 export const failedReadOf = (generation: number) =>
   listingQuery.Message.CompletedFetch({
@@ -21,13 +24,17 @@ export const failedReadOf = (generation: number) =>
     result: Result.fail("Fixture request failed"),
   });
 
-const settled = (model: Model, message: typeof listingQuery.Message.Type): Model =>
-  update(model, Message.GotListingMessage({ message })).model;
+const settled = (
+  model: Model,
+  message: typeof listingQuery.Message.Type
+): Model => update(model, Message.GotListingMessage({ message })).model;
 
 export const rereading = (model: Model): Model =>
-  modifyFields(model, { listing: (query) => listingQuery.revalidate(query).model });
+  modifyFields(model, {
+    listing: (query) => listingQuery.revalidate(query).model,
+  });
 
-export const listing = Schema.decodeUnknownSync(Listing)({
+export const listing = Schema.decodeSync(Listing)({
   overview: {
     email: "owner@fixture.invalid",
     issuer: "https://issuer.fixture.invalid",
@@ -57,11 +64,14 @@ export const listing = Schema.decodeUnknownSync(Listing)({
 
 export const listed = settled(init().model, readOf(FIRST_READ, listing));
 
-export const staleListed = settled(rereading(listed), failedReadOf(SECOND_READ));
+export const staleListed = settled(
+  rereading(listed),
+  failedReadOf(SECOND_READ)
+);
 
 export const unlisted = settled(init().model, failedReadOf(FIRST_READ));
 
-export const catalog = Schema.decodeUnknownSync(Listing)({
+export const catalog = Schema.decodeSync(Listing)({
   overview: {
     email: "owner@fixture.invalid",
     issuer: "https://issuer.fixture.invalid",

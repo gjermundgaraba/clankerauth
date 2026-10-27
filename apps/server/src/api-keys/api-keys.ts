@@ -1,4 +1,19 @@
 import {
+  CurrentOwner,
+  KeyPermissions,
+  ApiKeyNotFound,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import type {
+  ApiKeyId,
+  ApiKeyInput,
+  ApiKeyUpdate,
+  ApiKey,
+  InternalServerError,
+  ProviderRefused,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
+import {
   Clock,
   Context,
   DateTime,
@@ -7,25 +22,13 @@ import {
   Record,
   Redacted,
   Schema,
-  type Scope,
 } from "effect";
-import type * as Action from "@gjermundgaraba/effect-actions/Action";
-import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
-import {
-  CurrentOwner,
-  KeyPermissions,
-  type ApiKeyId,
-  type ApiKeyInput,
-  type ApiKeyUpdate,
-  type ApiKey,
-  ApiKeyNotFound,
-  type InternalServerError,
-  type ProviderRefused,
-} from "@gjermundgaraba/clankerauth-admin-api";
-import { Database } from "../platform/sqlite.ts";
-import { Issuer } from "../issuer/issuer.ts";
-import { ResourceCatalog } from "../resources/catalog.ts";
+import type { Scope } from "effect";
+
 import { invalidInput, provider, refusal } from "../issuer/errors.ts";
+import { Issuer } from "../issuer/issuer.ts";
+import { Database } from "../platform/sqlite.ts";
+import { ResourceCatalog } from "../resources/catalog.ts";
 
 const permissions = Schema.decodeUnknownEffect(KeyPermissions);
 
@@ -36,7 +39,7 @@ const storedKey = Schema.decodeUnknownEffect(
     referenceId: Schema.String,
     expiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
     permissions: Schema.NullOr(Schema.fromJsonString(KeyPermissions)),
-  }),
+  })
 );
 
 const summary = Effect.fnUntraced(function* (key: {
@@ -58,11 +61,11 @@ const summary = Effect.fnUntraced(function* (key: {
             "An API key's stored permissions do not decode; it is listed with none",
             {
               keyId: key.id,
-            },
+            }
           ),
-          {},
-        ),
-      ),
+          {}
+        )
+      )
     ),
     expiresAt: key.expiresAt ? DateTime.fromDateUnsafe(key.expiresAt) : null,
     createdAt: DateTime.fromDateUnsafe(key.createdAt),
@@ -76,20 +79,20 @@ type Summary = typeof ApiKey.Type;
 export class ApiKeys extends Context.Service<
   ApiKeys,
   {
-    readonly list: () => Effect.Effect<
-      { keys: ReadonlyArray<Summary> },
+    readonly list: Effect.Effect<
+      { keys: readonly Summary[] },
       InternalServerError,
       CurrentOwner | Scope.Scope
     >;
     /** Creates a key; its secret is returned once. */
     readonly create: (
-      input: typeof ApiKeyInput.Type,
+      input: typeof ApiKeyInput.Type
     ) => Effect.Effect<Summary & { key: string }, Refusal, CurrentOwner>;
     readonly update: (
-      input: typeof ApiKeyUpdate.Type,
+      input: typeof ApiKeyUpdate.Type
     ) => Effect.Effect<Summary, Refusal | ApiKeyNotFound, CurrentOwner>;
     readonly delete: (
-      input: typeof ApiKeyId.Type,
+      input: typeof ApiKeyId.Type
     ) => Effect.Effect<
       { deleted: boolean },
       InternalServerError | ApiKeyNotFound,
@@ -100,16 +103,18 @@ export class ApiKeys extends Context.Service<
      * defines, sealed and signed for offline verification. An unknown resource, and the
      * administration resource, whose keys are read with `holder`, get a list with no entries.
      */
-    readonly keyList: (identifier: string) => Effect.Effect<{ list: string }, InternalServerError>;
+    readonly keyList: (
+      identifier: string
+    ) => Effect.Effect<{ list: string }, InternalServerError>;
     /**
      * The owner of an enabled, unexpired key and the scopes it grants on the resource, read
      * from the database now. An unknown key, or one whose row does not decode, has none.
      */
     readonly holder: (
-      key: Redacted.Redacted<string>,
-      identifier: string,
+      key: Redacted.Redacted,
+      identifier: string
     ) => Effect.Effect<
-      { ownerId: string; scopes: ReadonlyArray<string> } | undefined,
+      { ownerId: string; scopes: readonly string[] } | undefined,
       InternalServerError
     >;
   }
@@ -122,95 +127,126 @@ export class ApiKeys extends Context.Service<
       const catalog = yield* ResourceCatalog;
 
       const validate = Effect.fn("ApiKeys.validate")(function* (
-        grants: typeof KeyPermissions.Type | undefined,
+        grants: typeof KeyPermissions.Type | undefined
       ) {
-        if (grants === undefined) return;
+        if (grants === undefined) {
+          return;
+        }
 
         for (const [identifier, scopes] of Object.entries(grants)) {
           const resource = yield* catalog.get(identifier);
 
-          if (!resource || scopes.some((scope) => !resource.scopes.includes(scope)))
+          if (
+            !resource ||
+            scopes.some((scope) => !resource.scopes.includes(scope))
+          ) {
             return yield* invalidInput(
               ["permissions", identifier],
-              "Select explicitly granted, currently available Resource scopes",
+              "Select explicitly granted, currently available Resource scopes"
             );
+          }
         }
       });
 
       return {
-        list: Effect.fn("ApiKeys.list")(function* () {
+        list: Effect.gen(function* () {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          const result = yield* provider(() =>
-            auth.api.listApiKeys({
-              headers,
-              query: { sortBy: "createdAt", sortDirection: "asc" },
-            }),
+          const result = yield* provider(
+            async () =>
+              await auth.api.listApiKeys({
+                headers,
+                query: { sortBy: "createdAt", sortDirection: "asc" },
+              })
           );
 
           return { keys: yield* Effect.forEach(result.apiKeys, summary) };
-        }),
-        create: Effect.fn("ApiKeys.create")(function* (input: typeof ApiKeyInput.Type) {
+        }).pipe(Effect.withSpan("ApiKeys.list")),
+        create: Effect.fn("ApiKeys.create")(function* (
+          input: typeof ApiKeyInput.Type
+        ) {
           const owner = yield* CurrentOwner;
           yield* validate(input.permissions);
 
           const expiresIn =
             input.expiresAt === null
               ? null
-              : (DateTime.toEpochMillis(input.expiresAt) - (yield* Clock.currentTimeMillis)) / 1000;
+              : (DateTime.toEpochMillis(input.expiresAt) -
+                  (yield* Clock.currentTimeMillis)) /
+                1000;
 
-          if (expiresIn !== null && expiresIn < 1)
-            return yield* invalidInput(["expiresAt"], "Expiry must be in the future");
+          if (expiresIn !== null && expiresIn < 1) {
+            return yield* invalidInput(
+              ["expiresAt"],
+              "Expiry must be in the future"
+            );
+          }
 
           const key = yield* provider(
-            () =>
-              auth.api.createApiKey({
+            async () =>
+              await auth.api.createApiKey({
                 body: {
                   userId: owner.userId,
                   name: input.name.trim(),
-                  permissions: Record.map(input.permissions, (scopes) => [...scopes]),
+                  permissions: Record.map(input.permissions, (scopes) => [
+                    ...scopes,
+                  ]),
                   expiresIn,
                 },
               }),
-            { refused: refusal },
+            { refused: refusal }
           );
 
           return { ...(yield* summary(key)), key: key.key };
         }),
-        update: Effect.fn("ApiKeys.update")(function* (input: typeof ApiKeyUpdate.Type) {
+        update: Effect.fn("ApiKeys.update")(function* (
+          input: typeof ApiKeyUpdate.Type
+        ) {
           const owner = yield* CurrentOwner;
           yield* validate(input.permissions);
 
           return yield* summary(
             yield* provider(
-              () =>
-                auth.api.updateApiKey({
+              async () =>
+                await auth.api.updateApiKey({
                   body: {
                     userId: owner.userId,
                     keyId: input.keyId,
                     name: input.name?.trim(),
                     enabled: input.enabled,
                     permissions:
-                      input.permissions && Record.map(input.permissions, (scopes) => [...scopes]),
+                      input.permissions &&
+                      Record.map(input.permissions, (scopes) => [...scopes]),
                   },
                 }),
-              { refused: refusal, missing: () => ApiKeyNotFound.of(input.keyId) },
-            ),
+              {
+                refused: refusal,
+                missing: () => ApiKeyNotFound.of(input.keyId),
+              }
+            )
           );
         }),
-        delete: Effect.fn("ApiKeys.delete")(function* ({ keyId }: typeof ApiKeyId.Type) {
+        delete: Effect.fn("ApiKeys.delete")(function* ({
+          keyId,
+        }: typeof ApiKeyId.Type) {
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
-          yield* provider(() => auth.api.deleteApiKey({ headers, body: { keyId } }), {
-            missing: () => ApiKeyNotFound.of(keyId),
-          });
+          yield* provider(
+            async () =>
+              await auth.api.deleteApiKey({ headers, body: { keyId } }),
+            {
+              missing: () => ApiKeyNotFound.of(keyId),
+            }
+          );
 
           return { deleted: true };
         }),
         keyList: Effect.fn("ApiKeys.keyList")(function* (identifier: string) {
           const now = yield* Clock.currentTimeMillis;
-          const available = (yield* catalog.application(identifier))?.scopes ?? [];
+
+          const available =
+            (yield* catalog.application(identifier))?.scopes ?? [];
 
           const rows = available.length
             ? yield* sql`
@@ -224,19 +260,29 @@ export class ApiKeys extends Context.Service<
             Effect.gen(function* () {
               const key = yield* storedKey(row);
 
-              const scopes = (key.permissions?.[identifier] ?? []).filter((scope) =>
-                available.includes(scope),
+              const scopes = (key.permissions?.[identifier] ?? []).filter(
+                (scope) => available.includes(scope)
               );
 
-              if (!scopes.length) return [];
+              if (!scopes.length) {
+                return [];
+              }
 
-              const entry = yield* Effect.tryPromise(() =>
-                KeyList.seal(new Uint8Array(Buffer.from(key.key, "base64url")), identifier, {
-                  keyId: key.id,
-                  ownerId: key.referenceId,
-                  scopes,
-                  expiresAt: key.expiresAt === null ? null : DateTime.toEpochMillis(key.expiresAt),
-                }),
+              const entry = yield* Effect.tryPromise(
+                async () =>
+                  await KeyList.seal(
+                    new Uint8Array(Buffer.from(key.key, "base64url")),
+                    identifier,
+                    {
+                      keyId: key.id,
+                      ownerId: key.referenceId,
+                      scopes,
+                      expiresAt:
+                        key.expiresAt === null
+                          ? null
+                          : DateTime.toEpochMillis(key.expiresAt),
+                    }
+                  )
               );
 
               return [entry];
@@ -247,38 +293,41 @@ export class ApiKeys extends Context.Service<
                     "An API key row cannot be listed; it is left out of key lists",
                     {
                       keyId: row["id"],
-                    },
+                    }
                   ),
-                  [],
-                ),
-              ),
-            ),
+                  []
+                )
+              )
+            )
           );
 
           const iat = Math.floor(now / 1000);
 
-          const { token } = yield* provider(() =>
-            auth.api.signDocument({
-              body: {
-                typ: KeyList.type,
-                payload: {
-                  aud: identifier,
-                  iat,
-                  exp: iat + KeyList.lifetime,
-                  keys: entries.flat(),
+          const { token } = yield* provider(
+            async () =>
+              await auth.api.signDocument({
+                body: {
+                  typ: KeyList.type,
+                  payload: {
+                    aud: identifier,
+                    iat,
+                    exp: iat + KeyList.lifetime,
+                    keys: entries.flat(),
+                  },
                 },
-              },
-            }),
+              })
           );
 
           return { list: token };
         }),
         holder: Effect.fn("ApiKeys.holder")(function* (
-          key: Redacted.Redacted<string>,
-          identifier: string,
+          key: Redacted.Redacted,
+          identifier: string
         ) {
           const digest = Buffer.from(
-            yield* Effect.promise(() => KeyList.digest(Redacted.value(key))),
+            yield* Effect.promise(
+              async () => await KeyList.digest(Redacted.value(key))
+            )
           ).toString("base64url");
 
           const now = new Date(yield* Clock.currentTimeMillis).toISOString();
@@ -288,7 +337,9 @@ export class ApiKeys extends Context.Service<
             WHERE key = ${digest} AND enabled = 1 AND (expiresAt IS NULL OR expiresAt > ${now})
           `;
 
-          if (!row) return undefined;
+          if (!row) {
+            return;
+          }
 
           return yield* storedKey(row).pipe(
             Effect.map((stored) => ({
@@ -297,15 +348,18 @@ export class ApiKeys extends Context.Service<
             })),
             Effect.catch(() =>
               Effect.as(
-                Effect.logWarning("An API key row cannot be read; the key is refused", {
-                  keyId: row["id"],
-                }),
-                undefined,
-              ),
-            ),
+                Effect.logWarning(
+                  "An API key row cannot be read; the key is refused",
+                  {
+                    keyId: row["id"],
+                  }
+                ),
+                undefined
+              )
+            )
           );
         }),
       };
-    }),
+    })
   );
 }

@@ -1,9 +1,11 @@
 import {
   ClientAuthMethod,
   KeyPermissions,
-  type Client,
-  type ApiKey,
-  type ResourceSummary,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import type {
+  Client,
+  ApiKey,
+  ResourceSummary,
 } from "@gjermundgaraba/clankerauth-admin-api";
 import { Array, Option, Record, Result, Schema, String, pipe } from "effect";
 import { defineMessageUnion } from "foldkit/message";
@@ -77,7 +79,11 @@ export const Message = defineMessageUnion({
   UpdatedResourceIdentifier: { value: Schema.String },
   UpdatedResourceScopes: { value: Schema.String },
   UpdatedKeyName: { value: Schema.String },
-  ToggledKeyGrant: { resource: Schema.String, scope: Schema.String, isChecked: Schema.Boolean },
+  ToggledKeyGrant: {
+    resource: Schema.String,
+    scope: Schema.String,
+    isChecked: Schema.Boolean,
+  },
   UpdatedKeyExpiry: { value: Schema.String },
   UpdatedClientName: { value: Schema.String },
   UpdatedClientRedirectUris: { value: Schema.String },
@@ -91,49 +97,68 @@ export type Message = typeof Message.Type;
 // OPEN
 
 export const addResource = (): Model =>
-  Model.Resource({ mode: ResourceMode.Add(), draft: { name: "", identifier: "", scopes: "" } });
+  Model.Resource({
+    mode: ResourceMode.Add(),
+    draft: { name: "", identifier: "", scopes: "" },
+  });
 
-export const editResource = ({ name, identifier, scopes }: ResourceView): Model =>
+export const editResource = ({
+  name,
+  identifier,
+  scopes,
+}: ResourceView): Model =>
   Model.Resource({
     mode: ResourceMode.Edit(),
     draft: { name, identifier, scopes: Array.join(scopes, " ") },
   });
 
 export const createKey = (): Model =>
-  Model.Key({ mode: KeyMode.Create(), draft: { name: "", grants: {}, expiry: "" } });
+  Model.Key({
+    mode: KeyMode.Create(),
+    draft: { name: "", grants: {}, expiry: "" },
+  });
 
 export const renameKey = ({ keyId, name, permissions }: KeyView): Model =>
-  Model.Key({ mode: KeyMode.Rename({ keyId }), draft: { name, grants: permissions, expiry: "" } });
+  Model.Key({
+    mode: KeyMode.Rename({ keyId }),
+    draft: { name, grants: permissions, expiry: "" },
+  });
 
 const grantEntry = (
   resource: string,
-  scopes: ReadonlyArray<string>,
-): ReadonlyArray<readonly [string, ReadonlyArray<string>]> =>
+  scopes: readonly string[]
+): ReadonlyArray<readonly [string, readonly string[]]> =>
   Array.isReadonlyArrayNonEmpty(scopes) ? [[resource, scopes]] : [];
 
-const grantsInForce = (permissions: Grants, resources: ReadonlyArray<ResourceView>): Grants =>
+const grantsInForce = (
+  permissions: Grants,
+  resources: readonly ResourceView[]
+): Grants =>
   Record.fromEntries(
     Array.flatMap(resources, ({ identifier, scopes }) =>
       grantEntry(
         identifier,
         Array.intersection(
           Option.getOrElse(Record.get(permissions, identifier), () => []),
-          scopes,
-        ),
-      ),
-    ),
+          scopes
+        )
+      )
+    )
   );
 
 export const editGrants = (
   { keyId, name, permissions }: KeyView,
-  resources: ReadonlyArray<ResourceView>,
+  resources: readonly ResourceView[]
 ): Model =>
   Model.Key({
     mode: KeyMode.Grants({ keyId }),
     draft: { name, expiry: "", grants: grantsInForce(permissions, resources) },
   });
 
-const clientDraftOf = (client: ClientView, resources: ReadonlyArray<string>): ClientDraft => ({
+const clientDraftOf = (
+  client: ClientView,
+  resources: readonly string[]
+): ClientDraft => ({
   name: client.client_name ?? "",
   redirectUris: Array.join(client.redirect_uris, "\n"),
   resources,
@@ -144,7 +169,13 @@ const clientDraftOf = (client: ClientView, resources: ReadonlyArray<string>): Cl
 export const registerClient = (): Model =>
   Model.Client({
     mode: ClientMode.Register(),
-    draft: { name: "", redirectUris: "", resources: [], isNative: false, authMethod: "none" },
+    draft: {
+      name: "",
+      redirectUris: "",
+      resources: [],
+      isNative: false,
+      authMethod: "none",
+    },
   });
 
 export const editClient = (client: ClientView): Model =>
@@ -153,7 +184,10 @@ export const editClient = (client: ClientView): Model =>
     draft: clientDraftOf(client, []),
   });
 
-export const editAccess = (client: ClientView, allowed: ReadonlyArray<string>): Model =>
+export const editAccess = (
+  client: ClientView,
+  allowed: readonly string[]
+): Model =>
   Model.Client({
     mode: ClientMode.Access({ clientId: client.client_id, allowed }),
     draft: clientDraftOf(client, allowed),
@@ -161,26 +195,39 @@ export const editAccess = (client: ClientView, allowed: ReadonlyArray<string>): 
 
 // UPDATE
 
-const editResourceDraft = (form: Model, edit: (draft: ResourceDraft) => ResourceDraft): Model =>
+const editResourceDraft = (
+  form: Model,
+  edit: (draft: ResourceDraft) => ResourceDraft
+): Model =>
   Model.matchOrElse(
     form,
     { Resource: (resourceForm) => modifyFields(resourceForm, { draft: edit }) },
-    () => form,
+    () => form
   );
 
-const editKeyDraft = (form: Model, edit: (draft: KeyDraft) => KeyDraft): Model =>
-  Model.matchOrElse(form, { Key: (keyForm) => modifyFields(keyForm, { draft: edit }) }, () => form);
+const editKeyDraft = (
+  form: Model,
+  edit: (draft: KeyDraft) => KeyDraft
+): Model =>
+  Model.matchOrElse(
+    form,
+    { Key: (keyForm) => modifyFields(keyForm, { draft: edit }) },
+    () => form
+  );
 
-const editClientDraft = (form: Model, edit: (draft: ClientDraft) => ClientDraft): Model =>
+const editClientDraft = (
+  form: Model,
+  edit: (draft: ClientDraft) => ClientDraft
+): Model =>
   Model.matchOrElse(
     form,
     { Client: (clientForm) => modifyFields(clientForm, { draft: edit }) },
-    () => form,
+    () => form
   );
 
 const toggleValue =
   (value: string, isChecked: boolean) =>
-  (values: ReadonlyArray<string>): ReadonlyArray<string> => {
+  (values: readonly string[]): readonly string[] => {
     const others = Array.filter(values, (other) => other !== value);
 
     return isChecked ? Array.append(others, value) : others;
@@ -191,8 +238,8 @@ const toggleGrant =
   (grants: Grants): Grants => {
     const scopes = pipe(
       Record.get(grants, resource),
-      Option.getOrElse((): ReadonlyArray<string> => []),
-      toggleValue(scope, isChecked),
+      Option.getOrElse((): readonly string[] => []),
+      toggleValue(scope, isChecked)
     );
 
     return Array.isReadonlyArrayNonEmpty(scopes)
@@ -203,46 +250,67 @@ const toggleGrant =
 export const update = (form: Model, message: Message): Model =>
   Message.match<Model>(message, {
     UpdatedResourceName: ({ value }) =>
-      editResourceDraft(form, (draft) => modifyFields(draft, { name: () => value })),
+      editResourceDraft(form, (draft) =>
+        modifyFields(draft, { name: () => value })
+      ),
     UpdatedResourceIdentifier: ({ value }) =>
-      editResourceDraft(form, (draft) => modifyFields(draft, { identifier: () => value })),
+      editResourceDraft(form, (draft) =>
+        modifyFields(draft, { identifier: () => value })
+      ),
     UpdatedResourceScopes: ({ value }) =>
-      editResourceDraft(form, (draft) => modifyFields(draft, { scopes: () => value })),
+      editResourceDraft(form, (draft) =>
+        modifyFields(draft, { scopes: () => value })
+      ),
     UpdatedKeyName: ({ value }) =>
       editKeyDraft(form, (draft) => modifyFields(draft, { name: () => value })),
     ToggledKeyGrant: ({ resource, scope, isChecked }) =>
       editKeyDraft(form, (draft) =>
-        modifyFields(draft, { grants: toggleGrant(resource, scope, isChecked) }),
+        modifyFields(draft, { grants: toggleGrant(resource, scope, isChecked) })
       ),
     UpdatedKeyExpiry: ({ value }) =>
-      editKeyDraft(form, (draft) => modifyFields(draft, { expiry: () => value })),
+      editKeyDraft(form, (draft) =>
+        modifyFields(draft, { expiry: () => value })
+      ),
     UpdatedClientName: ({ value }) =>
-      editClientDraft(form, (draft) => modifyFields(draft, { name: () => value })),
+      editClientDraft(form, (draft) =>
+        modifyFields(draft, { name: () => value })
+      ),
     UpdatedClientRedirectUris: ({ value }) =>
-      editClientDraft(form, (draft) => modifyFields(draft, { redirectUris: () => value })),
+      editClientDraft(form, (draft) =>
+        modifyFields(draft, { redirectUris: () => value })
+      ),
     ToggledClientResource: ({ resource, isChecked }) =>
       editClientDraft(form, (draft) =>
-        modifyFields(draft, { resources: toggleValue(resource, isChecked) }),
+        modifyFields(draft, { resources: toggleValue(resource, isChecked) })
       ),
     ToggledClientNative: ({ isChecked }) =>
-      editClientDraft(form, (draft) => modifyFields(draft, { isNative: () => isChecked })),
+      editClientDraft(form, (draft) =>
+        modifyFields(draft, { isNative: () => isChecked })
+      ),
     SelectedClientAuthMethod: ({ method }) =>
-      editClientDraft(form, (draft) => modifyFields(draft, { authMethod: () => method })),
+      editClientDraft(form, (draft) =>
+        modifyFields(draft, { authMethod: () => method })
+      ),
   });
 
 // SUBMIT
 
 const NO_REDIRECT = "Add at least one redirect URI.";
 
-const INVALID_EXPIRY = "Enter the expiry as a date and time, or leave it blank.";
+const INVALID_EXPIRY =
+  "Enter the expiry as a date and time, or leave it blank.";
 
-const redirectUrisOf = (draft: ClientDraft): Result.Result<ReadonlyArray<string>, string> =>
+const redirectUrisOf = (
+  draft: ClientDraft
+): Result.Result<readonly string[], string> =>
   Array.match(splitWords(draft.redirectUris), {
     onEmpty: () => Result.fail(NO_REDIRECT),
     onNonEmpty: Result.succeed,
   });
 
-const expiryOf = (expiry: string): Result.Result<Option.Option<string>, string> =>
+const expiryOf = (
+  expiry: string
+): Result.Result<Option.Option<string>, string> =>
   pipe(
     Option.liftPredicate(expiry, String.isNonEmpty),
     Option.match({
@@ -251,17 +319,19 @@ const expiryOf = (expiry: string): Result.Result<Option.Option<string>, string> 
         Number.isNaN(Date.parse(moment))
           ? Result.fail(INVALID_EXPIRY)
           : Result.succeed(Option.some(moment)),
-    }),
+    })
   );
 
-const applicationTypeOf = (draft: ClientDraft) => (draft.isNative ? "native" : "web");
+const applicationTypeOf = (draft: ClientDraft) =>
+  draft.isNative ? "native" : "web";
 
-const DUPLICATE_RESOURCE = "A Resource with this identifier exists already: edit it instead.";
+const DUPLICATE_RESOURCE =
+  "A Resource with this identifier exists already: edit it instead.";
 
 const resourceChangeOf = (
   mode: typeof ResourceMode.Type,
   draft: ResourceDraft,
-  existing: ReadonlyArray<string>,
+  existing: readonly string[]
 ): Result.Result<Change, string> => {
   const fields = {
     identifier: draft.identifier.trim(),
@@ -278,20 +348,28 @@ const resourceChangeOf = (
   });
 };
 
-const keyChangeOf = (mode: typeof KeyMode.Type, draft: KeyDraft): Result.Result<Change, string> =>
+const keyChangeOf = (
+  mode: typeof KeyMode.Type,
+  draft: KeyDraft
+): Result.Result<Change, string> =>
   KeyMode.match(mode, {
     Create: () =>
       Result.map(expiryOf(draft.expiry), (maybeExpiry) =>
-        Change.CreateKey({ name: draft.name.trim(), permissions: draft.grants, maybeExpiry }),
+        Change.CreateKey({
+          name: draft.name.trim(),
+          permissions: draft.grants,
+          maybeExpiry,
+        })
       ),
-    Rename: ({ keyId }) => Result.succeed(Change.RenameKey({ keyId, name: draft.name.trim() })),
+    Rename: ({ keyId }) =>
+      Result.succeed(Change.RenameKey({ keyId, name: draft.name.trim() })),
     Grants: ({ keyId }) =>
       Result.succeed(Change.SetKeyGrants({ keyId, permissions: draft.grants })),
   });
 
 const clientChangeOf = (
   mode: typeof ClientMode.Type,
-  draft: ClientDraft,
+  draft: ClientDraft
 ): Result.Result<Change, string> =>
   ClientMode.match(mode, {
     Register: () =>
@@ -302,7 +380,7 @@ const clientChangeOf = (
           resources: draft.resources,
           applicationType: applicationTypeOf(draft),
           authMethod: draft.authMethod,
-        }),
+        })
       ),
     Edit: ({ clientId }) =>
       Result.map(redirectUrisOf(draft), (redirectUris) =>
@@ -311,7 +389,7 @@ const clientChangeOf = (
           name: draft.name.trim(),
           redirectUris,
           applicationType: applicationTypeOf(draft),
-        }),
+        })
       ),
     Access: ({ clientId, allowed }) =>
       Result.succeed(
@@ -319,13 +397,13 @@ const clientChangeOf = (
           clientId,
           resources: draft.resources,
           removed: Array.difference(allowed, draft.resources),
-        }),
+        })
       ),
   });
 
 export const changeOf = (
   form: Model,
-  resources: ReadonlyArray<string>,
+  resources: readonly string[]
 ): Result.Result<Change, string> =>
   Model.match(form, {
     Resource: ({ mode, draft }) => resourceChangeOf(mode, draft, resources),

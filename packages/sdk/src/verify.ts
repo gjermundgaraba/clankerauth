@@ -1,7 +1,8 @@
 import { Clock, Duration, Effect, Fiber, Result, Schema } from "effect";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import type { JWK } from "jose";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
 import {
   ConfigurationError,
   InsufficientScope,
@@ -44,7 +45,9 @@ export interface Options {
 }
 
 export interface Verifier {
-  readonly verifyToken: (token: string) => Effect.Effect<Principal, AuthenticationError>;
+  readonly verifyToken: (
+    token: string
+  ) => Effect.Effect<Principal, AuthenticationError>;
 }
 
 const Jwks = Schema.Struct({
@@ -57,7 +60,7 @@ const Jwks = Schema.Struct({
       alg: Schema.optionalKey(Schema.String),
       use: Schema.optionalKey(Schema.String),
       key_ops: Schema.optionalKey(Schema.Array(Schema.String)),
-    }),
+    })
   ),
 });
 
@@ -72,7 +75,9 @@ const Claims = Schema.Struct({
 /** The list document as the issuer's `keyList` action answers it. */
 const KeyListResponse = Schema.Struct({ list: Schema.String });
 
-const KeyListClaims = KeyList.Claims.pipe(Schema.fieldsAssign({ exp: Schema.Finite }));
+const KeyListClaims = KeyList.Claims.pipe(
+  Schema.fieldsAssign({ exp: Schema.Finite })
+);
 
 /** One verified key list: the entries it holds and how long they may decide. */
 export interface Keys {
@@ -117,6 +122,9 @@ export interface Store {
 export const store = (): Store => ({ jwks: new Map(), keyLists: new Map() });
 
 const unauthorized = (cause?: unknown) => new Unauthorized({ cause });
+
+const listRejected = (cause: unknown) =>
+  new ProviderUnavailable({ operation: "key-list.verify", cause });
 
 /** How long a JWKS document answers verification before it is read again. */
 const documentLifetime = Duration.minutes(1);
@@ -164,20 +172,26 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   });
 
   const document = Effect.fn("Verifier.jwks")(function* () {
-    const response = yield* execute(client, HttpClientRequest.get(endpoints.jwks));
+    const response = yield* execute(
+      client,
+      HttpClientRequest.get(endpoints.jwks)
+    );
 
-    if (response.status !== 200)
+    if (response.status !== 200) {
       return yield* new ProviderUnavailable({
         operation: "jwks.fetch",
         cause: { status: response.status },
       });
+    }
 
     const jwks = yield* HttpClientResponse.schemaBodyJson(Jwks)(response).pipe(
-      Effect.mapError((cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })),
+      Effect.mapError(
+        (cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })
+      )
     );
 
     return jwks.keys.map(({ key_ops, ...key }): JWK =>
-      key_ops ? { ...key, key_ops: [...key_ops] } : key,
+      key_ops ? { ...key, key_ops: [...key_ops] } : key
     );
   }, Effect.scoped);
 
@@ -189,10 +203,11 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     if (settled !== undefined) {
       const answers = "keys" in settled ? documentLifetime : cooldown;
 
-      if (startedAt - settled.readAt < Duration.toMillis(answers))
+      if (startedAt - settled.readAt < Duration.toMillis(answers)) {
         return "keys" in settled
           ? settled.keys
           : yield* new ProviderUnavailable({ operation: settled.failure });
+      }
     }
 
     const read = yield* Effect.result(document());
@@ -205,18 +220,28 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     }
 
     // why: a failure never replaces an outcome that ended after it began.
-    if ((options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) >= startedAt)
+    if (
+      (options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) >= startedAt
+    ) {
       return yield* read.failure;
-    options.store.jwks.set(options.issuer, { readAt, failure: read.failure.operation });
+    }
+
+    options.store.jwks.set(options.issuer, {
+      readAt,
+      failure: read.failure.operation,
+    });
 
     return yield* read.failure;
   });
 
-  const signingKey = Effect.fn("Verifier.signingKey")(function* (kid: string, held: typeof keys) {
+  const signingKey = Effect.fn("Verifier.signingKey")(function* (
+    kid: string,
+    held: typeof keys
+  ) {
     const jwks = { keys: [...(yield* held)] };
 
     return yield* Effect.tryPromise({
-      try: () => createLocalJWKSet(jwks)({ alg: "EdDSA", kid }),
+      try: async () => await createLocalJWKSet(jwks)({ alg: "EdDSA", kid }),
       catch: unauthorized,
     });
   });
@@ -230,7 +255,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const verifySigned = Effect.fn("Verifier.signed")(function* (
     jws: string,
     typ: string,
-    held = keys,
+    held: typeof keys = keys
   ) {
     const header = yield* Effect.try({
       try: () => decodeProtectedHeader(jws),
@@ -238,13 +263,16 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     });
 
     // why: refused before any JWKS read, so an unauthenticated request causes no issuer traffic.
-    if (header.alg !== "EdDSA" || header.kid === undefined) return yield* unauthorized();
+    if (header.alg !== "EdDSA" || header.kid === undefined) {
+      return yield* unauthorized();
+    }
+
     const key = yield* signingKey(header.kid, held);
     const now = yield* Clock.currentTimeMillis;
 
     const { payload } = yield* Effect.tryPromise({
-      try: () =>
-        jwtVerify(jws, key, {
+      try: async () =>
+        await jwtVerify(jws, key, {
           issuer: options.issuer,
           audience: options.resource,
           algorithms: ["EdDSA"],
@@ -260,10 +288,12 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const verifyJwt = Effect.fn("Verifier.jwt")(function* (token: string) {
     const payload = yield* verifySigned(token, "at+jwt");
 
-    if (payload["cnf"] !== undefined) return yield* unauthorized();
+    if (payload["cnf"] !== undefined) {
+      return yield* unauthorized();
+    }
 
     const claims = yield* Schema.decodeUnknownEffect(Claims)(payload).pipe(
-      Effect.mapError(unauthorized),
+      Effect.mapError(unauthorized)
     );
 
     return {
@@ -276,39 +306,49 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
   const listDocument = Effect.fn("Verifier.keyList")(function* () {
     const request = HttpClientRequest.post(endpoints.keyList).pipe(
-      HttpClientRequest.bodyJsonUnsafe({ resource: options.resource }),
+      HttpClientRequest.bodyJsonUnsafe({ resource: options.resource })
     );
 
     const fetched = Effect.gen(function* () {
       const response = yield* execute(client, request);
 
-      if (response.status !== 200)
+      if (response.status !== 200) {
         return yield* new ProviderUnavailable({
           operation: "key-list.fetch",
           cause: { status: response.status },
         });
+      }
 
-      return yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(response).pipe(
+      return yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(
+        response
+      ).pipe(
         Effect.mapError(
-          (cause) => new ProviderUnavailable({ operation: "key-list.decode", cause }),
-        ),
+          (cause) =>
+            new ProviderUnavailable({ operation: "key-list.decode", cause })
+        )
       );
     });
 
     // why: the JWKS read runs beside the list's, on its own deadline, so neither spends the other's.
-    const signing = yield* Effect.forkScoped(keys.pipe(deadline("jwks.timeout")));
+    const signing = yield* Effect.forkScoped(
+      keys.pipe(deadline("jwks.timeout"))
+    );
+
     const { list } = yield* fetched.pipe(deadline("key-list.timeout"));
 
-    const rejected = (cause: unknown) =>
-      new ProviderUnavailable({ operation: "key-list.verify", cause });
-
-    const payload = yield* verifySigned(list, KeyList.type, Fiber.join(signing)).pipe(
-      Effect.catchTag("Unauthorized", (cause) => Effect.fail(rejected(cause))),
+    const payload = yield* verifySigned(
+      list,
+      KeyList.type,
+      Fiber.join(signing)
+    ).pipe(
+      Effect.catchTag("Unauthorized", (cause) =>
+        Effect.fail(listRejected(cause))
+      )
     );
 
-    const claims = yield* Schema.decodeUnknownEffect(KeyListClaims)(payload).pipe(
-      Effect.mapError(rejected),
-    );
+    const claims = yield* Schema.decodeUnknownEffect(KeyListClaims)(
+      payload
+    ).pipe(Effect.mapError(listRejected));
 
     return {
       readAt: yield* Clock.currentTimeMillis,
@@ -326,10 +366,14 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const settled = options.store.keyLists.get(listed);
     const startedAt = yield* Clock.currentTimeMillis;
 
-    if (settled !== undefined && startedAt - settled.readAt < Duration.toMillis(cooldown))
+    if (
+      settled !== undefined &&
+      startedAt - settled.readAt < Duration.toMillis(cooldown)
+    ) {
       return settled.failure === undefined
         ? undefined
         : yield* new ProviderUnavailable({ operation: settled.failure });
+    }
 
     const read = yield* Effect.result(listDocument());
 
@@ -338,22 +382,36 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const failing = before?.failure !== undefined;
 
     if (Result.isSuccess(read)) {
-      options.store.keyLists.set(listed, { readAt, failure: undefined, held: read.success });
+      options.store.keyLists.set(listed, {
+        readAt,
+        failure: undefined,
+        held: read.success,
+      });
 
-      if (failing) yield* Effect.logInfo("clankerauth key list reads have recovered");
+      if (failing) {
+        yield* Effect.logInfo("clankerauth key list reads have recovered");
+      }
 
-      return undefined;
+      return;
     }
 
-    if ((before?.readAt ?? -Infinity) >= startedAt) return yield* read.failure;
-    const { operation } = read.failure;
-    options.store.keyLists.set(listed, { readAt, failure: operation, held: before?.held });
+    if ((before?.readAt ?? -Infinity) >= startedAt) {
+      return yield* read.failure;
+    }
 
-    if (!failing)
+    const { operation } = read.failure;
+    options.store.keyLists.set(listed, {
+      readAt,
+      failure: operation,
+      held: before?.held,
+    });
+
+    if (!failing) {
       yield* Effect.logWarning(
         "clankerauth key list reads are failing; a held list decides until it expires",
-        { operation },
+        { operation }
       );
+    }
 
     return yield* read.failure;
   });
@@ -363,7 +421,12 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const fetched = yield* Effect.result(readList);
     const list = options.store.keyLists.get(listed)?.held;
 
-    if (list !== undefined && list.expiresAt > (yield* Clock.currentTimeMillis)) return list;
+    if (
+      list !== undefined &&
+      list.expiresAt > (yield* Clock.currentTimeMillis)
+    ) {
+      return list;
+    }
 
     return yield* Result.isFailure(fetched)
       ? fetched.failure
@@ -373,7 +436,8 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
   const verifyKey = Effect.fn("Verifier.apiKey")(function* (key: string) {
     const open = (list: Keys) =>
       Effect.tryPromise({
-        try: () => KeyList.open(key, options.resource, list.entries),
+        try: async () =>
+          await KeyList.open(key, options.resource, list.entries),
         catch: unauthorized,
       });
 
@@ -390,13 +454,19 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     const grant =
       (yield* open(list)) ??
       (yield* Effect.flatMap(latest, (next) =>
-        next === list ? Effect.succeed(undefined) : open(next),
+        next === list ? Effect.undefined : open(next)
       ));
 
-    if (grant === undefined) return yield* unauthorized();
-
-    if (grant.expiresAt !== null && grant.expiresAt <= (yield* Clock.currentTimeMillis))
+    if (grant === undefined) {
       return yield* unauthorized();
+    }
+
+    if (
+      grant.expiresAt !== null &&
+      grant.expiresAt <= (yield* Clock.currentTimeMillis)
+    ) {
+      return yield* unauthorized();
+    }
 
     return {
       subject: grant.ownerId,
@@ -406,17 +476,27 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     } satisfies Principal;
   });
 
-  const verifyToken = Effect.fn("Verifier.verifyToken")(function* (token: string) {
-    const principal = yield* token.startsWith(KeyList.keyPrefix)
-      ? options.apiKeys === false
-        ? Effect.fail(unauthorized())
-        : verifyKey(token)
-      : verifyJwt(token);
+  const verifyToken = Effect.fn("Verifier.verifyToken")(function* (
+    token: string
+  ) {
+    const isKey = token.startsWith(KeyList.keyPrefix);
 
-    const missing = options.requiredScopes?.find((scope) => !principal.scopes.includes(scope));
+    if (isKey && options.apiKeys === false) {
+      return yield* unauthorized();
+    }
 
-    if (missing !== undefined)
-      return yield* new InsufficientScope({ scope: missing, actor: principal.actor });
+    const principal = yield* isKey ? verifyKey(token) : verifyJwt(token);
+
+    const missing = options.requiredScopes?.find(
+      (scope) => !principal.scopes.includes(scope)
+    );
+
+    if (missing !== undefined) {
+      return yield* new InsufficientScope({
+        scope: missing,
+        actor: principal.actor,
+      });
+    }
 
     return principal;
   });

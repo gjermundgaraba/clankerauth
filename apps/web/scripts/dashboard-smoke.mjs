@@ -1,9 +1,41 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+
+import {
+  ApiKey,
+  ApiKeyInput,
+  ApiKeyUpdate,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Schema } from "effect";
 import { chromium } from "playwright";
 import { preview } from "vite";
+
+// why: the fixture serves the wire form back, as the issuer would
+const decodeKey = Schema.decodeUnknownSync(Schema.toEncoded(ApiKey));
+const decodeKeyInput = Schema.decodeUnknownSync(Schema.toEncoded(ApiKeyInput));
+
+const decodeKeyUpdate = Schema.decodeUnknownSync(
+  Schema.toEncoded(ApiKeyUpdate)
+);
+
+/**
+ * @param {unknown} body The response body.
+ * @param {number} [status] The response status.
+ */
+const ok = (body, status = 200) => ({ status, json: body });
+
+/** @param {import("playwright").Locator} target The control to read. */
+const isHeld = async (target) =>
+  (await target.getAttribute("aria-disabled")) === "true";
+
+/**
+ * @param {import("playwright").Locator} scope Where the checkbox is.
+ * @param {string} id The checkbox's id.
+ */
+const checkbox = (scope, id) =>
+  scope.locator(`[role="checkbox"][aria-labelledby="${id}-label"]`);
 
 // why: fail here on a missing build, not later on a page that preview cannot serve
 await readFile(new URL("../dist/index.html", import.meta.url));
@@ -29,6 +61,7 @@ try {
   });
   page.on("pageerror", (error) => errors.push(error.message));
   const calls = [];
+  /** @type {Map<string, unknown[]>} */
   const bodies = new Map();
 
   const resource = {
@@ -50,7 +83,10 @@ try {
   const created = {
     client_id: "created-client",
     client_name: "Created client",
-    redirect_uris: ["https://fixture.invalid/callback", "https://fixture.invalid/other"],
+    redirect_uris: [
+      "https://fixture.invalid/callback",
+      "https://fixture.invalid/other",
+    ],
     token_endpoint_auth_method: "client_secret_basic",
   };
 
@@ -67,7 +103,9 @@ try {
         builtIn: true,
       },
     ],
-    clientAccess: [{ client_id: automatic.client_id, resource: resource.identifier }],
+    clientAccess: [
+      { client_id: automatic.client_id, resource: resource.identifier },
+    ],
     connections: [
       {
         client_id: automatic.client_id,
@@ -79,9 +117,8 @@ try {
     ],
   };
 
-  const ok = (body, status = 200) => ({ status, json: body });
-
   let isSignedIn = true;
+  /** @type {Array<(typeof ApiKey)["Encoded"]>} */
   let machineKeys = [];
   let listResponse = async () => ok(data);
   let resourceResponse = () => ok({ resource, created: true });
@@ -92,7 +129,9 @@ try {
 
     if (
       url.origin === origin &&
-      (["/", "/resources", "/keys", "/login", "/consent"].includes(url.pathname) ||
+      (["/", "/resources", "/keys", "/login", "/consent"].includes(
+        url.pathname
+      ) ||
         url.pathname.startsWith("/assets/"))
     ) {
       await route.continue();
@@ -102,7 +141,9 @@ try {
 
     calls.push(key);
 
-    if (request.method() === "POST" && request.postData()) {
+    const postData = request.postData();
+
+    if (request.method() === "POST" && postData !== null && postData !== "") {
       bodies.set(key, [...(bodies.get(key) ?? []), request.postDataJSON()]);
     }
 
@@ -110,10 +151,12 @@ try {
 
     if (url.origin === origin) {
       switch (key) {
-        case "POST /api/setupStatus":
+        case "POST /api/setupStatus": {
           response = ok({ required: false });
           break;
-        case "GET /api/auth/get-session":
+        }
+
+        case "GET /api/auth/get-session": {
           response = ok(
             isSignedIn
               ? {
@@ -129,57 +172,91 @@ try {
                     emailVerified: true,
                   },
                 }
-              : null,
+              : null
           );
           break;
-        case "POST /api/listApiKeys":
+        }
+
+        case "POST /api/listApiKeys": {
           response = ok({ keys: machineKeys });
           break;
+        }
+
         case "POST /api/createApiKey": {
-          const key = {
+          const machineKey = {
             keyId: "fixture-key",
-            ...request.postDataJSON(),
+            ...decodeKeyInput(request.postDataJSON()),
             enabled: true,
             createdAt: "2026-09-10T12:00:00.000Z",
           };
 
-          machineKeys.push(key);
-          response = ok({ ...key, key: "clankerauth_fixture-once-only" }, 201);
+          machineKeys.push(machineKey);
+          response = ok(
+            { ...machineKey, key: "clankerauth_fixture-once-only" },
+            201
+          );
           break;
         }
 
         case "POST /api/updateApiKey": {
-          const payload = request.postDataJSON();
-          machineKeys = machineKeys.map((key) =>
-            key.keyId === payload.keyId ? { ...key, ...payload } : key,
+          const payload = decodeKeyUpdate(request.postDataJSON());
+          machineKeys = machineKeys.map((machineKey) =>
+            machineKey.keyId === payload.keyId
+              ? decodeKey({ ...machineKey, ...payload })
+              : machineKey
           );
-          response = ok(machineKeys.find((key) => key.keyId === payload.keyId));
+          response = ok(
+            machineKeys.find((machineKey) => machineKey.keyId === payload.keyId)
+          );
           break;
         }
 
-        case "POST /api/deleteApiKey":
+        case "POST /api/deleteApiKey": {
           machineKeys = [];
           response = ok({ deleted: true });
           break;
-        case "POST /api/listClients":
+        }
+
+        case "POST /api/listClients": {
           response = await listResponse();
           break;
-        case "POST /api/putResource":
+        }
+
+        case "POST /api/putResource": {
           response = resourceResponse();
           break;
-        case "POST /api/createClient":
-          response = ok({ ...created, client_secret: "fixture-first-secret" }, 201);
+        }
+
+        case "POST /api/createClient": {
+          response = ok(
+            { ...created, client_secret: "fixture-first-secret" },
+            201
+          );
           break;
-        case "GET /api/auth/oauth2/public-client":
-          response = ok({ client_id: automatic.client_id, client_name: "<em>Client name</em>" });
+        }
+
+        case "GET /api/auth/oauth2/public-client": {
+          response = ok({
+            client_id: automatic.client_id,
+            client_name: "<em>Client name</em>",
+          });
           break;
-        case "POST /api/revokeClient":
+        }
+
+        case "POST /api/revokeClient": {
           response = ok({ revoked: true });
           break;
-        case "POST /api/auth/sign-out":
+        }
+
+        case "POST /api/auth/sign-out": {
           isSignedIn = false;
           response = ok({ success: true });
           break;
+        }
+
+        default: {
+          break;
+        }
       }
     }
 
@@ -192,17 +269,24 @@ try {
 
     await route.fulfill(response);
   });
+  /** @param {string} key The request's method and path. */
   const count = (key) => calls.filter((call) => call === key).length;
+  /** @param {string} key The request's method and path. */
   const lastBody = (key) => bodies.get(key)?.at(-1);
   const credentials = page.locator("#credentials");
-  const stored = page.getByRole("button", { name: "I've stored them", exact: true });
+
+  const stored = page.getByRole("button", {
+    name: "I've stored them",
+    exact: true,
+  });
+
   const dialog = page.locator("dialog[open]");
   const headAction = page.locator(".page-head .page-acts button");
+  /** @param {string} name The button's accessible name. */
   const button = (name) => page.getByRole("button", { name, exact: true });
-  const isHeld = async (target) => (await target.getAttribute("aria-disabled")) === "true";
 
-  const waitForIdle = () =>
-    page.waitForFunction(() => {
+  const waitForIdle = async () =>
+    await page.waitForFunction(() => {
       const action = document.querySelector(".page-head .page-acts button");
 
       return action && action.getAttribute("aria-disabled") !== "true";
@@ -214,29 +298,43 @@ try {
       const open = document.querySelector("dialog[open]");
 
       return (
-        open?.contains(document.activeElement) &&
+        open?.contains(document.activeElement) === true &&
         document.querySelector(".page-head")?.closest("[inert]") !== null
       );
     });
   };
 
+  /**
+   * @param {string} label The navigation link's label.
+   * @param {string} heading The section's heading.
+   */
   const showSection = async (label, heading) => {
     const loads = count("POST /api/setupStatus");
     await page
       .getByRole("navigation", { name: "Dashboard" })
-      .getByRole("link", { name: new RegExp(`^${label}`) })
+      .getByRole("link", { name: new RegExp(`^${label}`, "u") })
       .click();
-    await page.getByRole("heading", { level: 1, name: heading, exact: true }).waitFor();
+    await page
+      .getByRole("heading", { level: 1, name: heading, exact: true })
+      .waitFor();
     assert.equal(count("POST /api/setupStatus"), loads);
   };
 
+  /** @param {string} label The form's button. */
   const openForm = async (label) => {
-    await page.locator(".page-head").getByRole("button", { name: label, exact: true }).click();
+    await page
+      .locator(".page-head")
+      .getByRole("button", { name: label, exact: true })
+      .click();
     await assertModalWithFocus();
   };
 
-  const submitForm = (label) => dialog.getByRole("button", { name: label, exact: true }).click();
+  /** @param {string} label The submit button's label. */
+  const submitForm = async (label) => {
+    await dialog.getByRole("button", { name: label, exact: true }).click();
+  };
 
+  /** @param {string} label The confirming button's label. */
   const confirmChange = async (label) => {
     await assertModalWithFocus();
     await dialog.getByRole("button", { name: label, exact: true }).click();
@@ -245,25 +343,32 @@ try {
   };
 
   // why: `dispatchEvent` skips Playwright's enabled check, so the press reaches the held control
+  /** @param {import("playwright").Locator} target The held control. */
   const pressHeld = async (target) => {
     assert.equal(await isHeld(target), true);
     await target.dispatchEvent("click");
     assert.equal(await dialog.count(), 0);
   };
 
-  const checkbox = (scope, id) => scope.locator(`[role="checkbox"][aria-labelledby="${id}-label"]`);
-  const tick = (id) => checkbox(dialog, id).click();
+  /** @param {string} id The checkbox's id. */
+  const tick = async (id) => {
+    await checkbox(dialog, id).click();
+  };
 
   await page.goto(origin);
-  await page.getByRole("heading", { level: 1, name: "Clients", exact: true }).waitFor();
+  await page
+    .getByRole("heading", { level: 1, name: "Clients", exact: true })
+    .waitFor();
   await waitForIdle();
 
   await openForm("register client");
   await button("cancel").click();
   await dialog.waitFor({ state: "detached" });
   assert.equal(
-    await page.evaluate(() => document.activeElement?.textContent?.includes("register client")),
-    true,
+    await page.evaluate(() =>
+      document.activeElement?.textContent?.includes("register client")
+    ),
+    true
   );
 
   const releaseList = Promise.withResolvers();
@@ -275,13 +380,16 @@ try {
 
   await openForm("register client");
   await dialog.locator("#form-name").fill(created.client_name);
-  await dialog.locator("#form-redirect-uris").fill(created.redirect_uris.join("\n"));
+  await dialog
+    .locator("#form-redirect-uris")
+    .fill(created.redirect_uris.join("\n"));
   await tick(`form-resource-${resource.identifier}`);
   await dialog.locator("#form-auth-method").selectOption("client_secret_basic");
 
   const listStarted = page.waitForRequest(
     (request) =>
-      request.method() === "POST" && new URL(request.url()).pathname === "/api/listClients",
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/listClients"
   );
 
   await submitForm("register client");
@@ -325,7 +433,9 @@ try {
   });
   await openForm("add resource");
   await dialog.locator("#form-name").fill("Second API");
-  await dialog.locator("#form-identifier").fill("https://fixture.invalid/second");
+  await dialog
+    .locator("#form-identifier")
+    .fill("https://fixture.invalid/second");
   await dialog.locator("#form-scopes").fill("fixture:read fixture:write");
   await submitForm("add resource");
   await dialog.getByText(unservable).waitFor();
@@ -351,7 +461,9 @@ try {
   await dialog.locator("#form-name").fill("Automation key");
   await tick(`form-grant-${resource.identifier}-fixture:read`);
   await submitForm("create key");
-  await credentials.filter({ hasText: "clankerauth_fixture-once-only" }).waitFor();
+  await credentials
+    .filter({ hasText: "clankerauth_fixture-once-only" })
+    .waitFor();
   await waitForIdle();
   assert.deepEqual(lastBody("POST /api/createApiKey"), {
     name: "Automation key",
@@ -362,12 +474,18 @@ try {
   await button("disable Automation key").click();
   await button("enable Automation key").waitFor();
   await waitForIdle();
-  assert.deepEqual(lastBody("POST /api/updateApiKey"), { keyId: "fixture-key", enabled: false });
+  assert.deepEqual(lastBody("POST /api/updateApiKey"), {
+    keyId: "fixture-key",
+    enabled: false,
+  });
 
-  machineKeys[0].permissions = {
-    ...machineKeys[0].permissions,
-    "https://removed.example/api": ["read"],
-  };
+  machineKeys = machineKeys.map((machineKey) => ({
+    ...machineKey,
+    permissions: {
+      ...machineKey.permissions,
+      "https://removed.example/api": ["read"],
+    },
+  }));
   await button("rename Automation key").click();
   await assertModalWithFocus();
   await dialog.locator("#form-name").fill("Renamed automation");
@@ -392,34 +510,47 @@ try {
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(
-      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-      true,
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth
+      ),
+      true
     );
     assert.equal(await button("Sign out").isVisible(), true);
 
-    if (process.env.DASHBOARD_SCREENSHOTS)
-      await page.screenshot({ path: `${process.env.DASHBOARD_SCREENSHOTS}/keys-${width}.png` });
+    const screenshots = process.env.DASHBOARD_SCREENSHOTS;
+
+    if (screenshots !== undefined && screenshots !== "") {
+      await page.screenshot({ path: `${screenshots}/keys-${width}.png` });
+    }
   }
 
   await button("delete Renamed automation").click();
   await confirmChange("delete");
   await page.getByText("No API keys", { exact: true }).waitFor();
-  assert.deepEqual(lastBody("POST /api/deleteApiKey"), { keyId: "fixture-key" });
+  assert.deepEqual(lastBody("POST /api/deleteApiKey"), {
+    keyId: "fixture-key",
+  });
 
   await page.reload();
-  await page.getByRole("heading", { level: 1, name: "API keys", exact: true }).waitFor();
+  await page
+    .getByRole("heading", { level: 1, name: "API keys", exact: true })
+    .waitFor();
   await page.goto(`${origin}/resources`);
-  await page.getByRole("heading", { level: 1, name: "Resources", exact: true }).waitFor();
+  await page
+    .getByRole("heading", { level: 1, name: "Resources", exact: true })
+    .waitFor();
   await waitForIdle();
 
   await button("Sign out").click();
   await page.waitForURL(`${origin}/login`);
-  await page.getByRole("heading", { name: "Sign in to clankerauth", exact: true }).waitFor();
+  await page
+    .getByRole("heading", { name: "Sign in to clankerauth", exact: true })
+    .waitFor();
   assert.equal(count("POST /api/auth/sign-out"), 1);
 
   const callback = "http://127.0.0.1:43129/callback";
   await page.goto(
-    `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "offline_access fixture:read", sig: "fixture" })}`,
+    `${origin}/consent?${new URLSearchParams({ client_id: automatic.client_id, redirect_uri: callback, resource: resource.identifier, scope: "offline_access fixture:read", sig: "fixture" })}`
   );
   await page.getByRole("heading", { name: "Allow this connection?" }).waitFor();
   const main = page.locator("main");
@@ -434,21 +565,31 @@ try {
   await protocol.send("Page.enable");
   const navigations = [];
   protocol.on("Page.frameRequestedNavigation", (event) => {
-    if (event.url === callback) navigations.push(event);
+    if (event.url === callback) {
+      navigations.push(event);
+    }
   });
   const approvals = [];
-  await page.route(`${origin}/api/auth/oauth2/consent`, (route) => {
+  await page.route(`${origin}/api/auth/oauth2/consent`, async (route) => {
     approvals.push(route.request().postDataJSON());
 
-    return route.fulfill(ok({ redirect: true, url: callback }));
+    await route.fulfill(ok({ redirect: true, url: callback }));
   });
   await checkbox(main, "consent-scope-offline_access").click();
-  await page.route(callback, (route) =>
-    route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Application callback</h1>" }),
-  );
+  await page.route(callback, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<h1>Application callback</h1>",
+    });
+  });
   await button("allow access").click();
   await page.getByRole("heading", { name: "Application callback" }).waitFor();
-  assert.equal(navigations.length, 1, "consent must navigate to the callback exactly once");
+  assert.equal(
+    navigations.length,
+    1,
+    "consent must navigate to the callback exactly once"
+  );
   assert.deepEqual(approvals, [{ accept: true, scope: "fixture:read" }]);
   await protocol.detach();
   assert.deepEqual(errors, []);
@@ -457,8 +598,6 @@ try {
   try {
     await browser?.close();
   } finally {
-    await new Promise((resolve, reject) =>
-      server.httpServer.close((error) => (error ? reject(error) : resolve())),
-    );
+    await server.close();
   }
 }

@@ -82,12 +82,22 @@ Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `
 - Server and SDK tests return Effects (`@effect/vitest`), `it.live` when wall-clock time is
   read. Effect is run by hand only in a callback foreign code calls. Suites that drive a real
   process, and the web app's Foldkit tests, are exempt.
-- No prose comments. Allowed: tool directives with a reason, one-line `// SAFETY:` and
-  `// why:`, `/** */` on types and schemas, the published packages' API docs, and Foldkit's
-  section headers.
-- `tools/oxlint/clankerauth` enforces the comment rule, each folder's import allow-list and
-  where Effect may be run by hand. The root `vite.config.ts` holds the lists and
-  `tests/policy.test.mjs` proves them; the rules read syntax only.
+- `tools/oxlint/clankerauth` enforces each folder's import allow-list and where Effect may be
+  run by hand. The root `oxlint.config.ts` holds the lists and
+  `tools/oxlint/clankerauth/tests/policy.test.ts` proves them; the rules read syntax only.
+
+## Lint and format
+
+`vp check` formats, lints and type-checks; `vp check --fix` applies the safe fixes. The lint
+config is `oxlint.config.ts`: Ultracite's core, anti-slop and Vitest presets, `@effect/tsgo`'s
+recommended Effect preset, Foldkit's recommended preset for `apps/web/src`, and the
+`clankerauth` plugin. Warnings fail the check. `vp install` patches the linter for the Effect
+rules (the `prepare` script); after installing with `--ignore-scripts`, run `vp run prepare`.
+
+Every departure from the presets is in `oxlint.config.ts`, beside its reason. The shared
+exception block at its top is the same in every repository that uses it. A new exception, or a
+change to an existing one, needs the maintainer's approval; fix the code otherwise. There are
+no inline `oxlint-disable` comments.
 
 ## Effect
 

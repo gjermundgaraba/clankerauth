@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+
 import { it } from "@effect/vitest";
-import { Clock, Deferred, Duration, Effect, Fiber, Logger, Result } from "effect";
+import type { Duration } from "effect";
+import { Clock, Deferred, Effect, Fiber, Logger, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
+
 import { ProviderUnavailable, Unauthorized } from "../src/errors.ts";
 import { Verifier } from "../src/index.ts";
 import { signList } from "./support.ts";
@@ -37,72 +40,109 @@ const capture = (logs: Array<readonly unknown[]>) =>
  */
 interface Upstream {
   unavailable: boolean;
-  hold: Deferred.Deferred<void> | undefined;
+  hold: Deferred.Deferred<undefined> | undefined;
   latency: { jwks?: Duration.Input; lists?: Duration.Input };
 }
 
 const fixture = Effect.gen(function* () {
-  const pair = yield* Effect.promise(() => generateKeyPair("EdDSA"));
+  const pair = yield* Effect.promise(
+    async () => await generateKeyPair("EdDSA")
+  );
 
   const jwk = {
-    ...(yield* Effect.promise(() => exportJWK(pair.publicKey))),
+    ...(yield* Effect.promise(async () => await exportJWK(pair.publicKey))),
     kid: "fixture",
     alg: "EdDSA",
   };
 
   const reads = { jwks: 0, lists: 0 };
 
-  const upstream: Upstream = { unavailable: false, hold: undefined, latency: {} };
+  const upstream: Upstream = {
+    unavailable: false,
+    hold: undefined,
+    latency: {},
+  };
 
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
       const jwks = request.url.endsWith("/jwks");
 
-      if (jwks) reads.jwks++;
-      else reads.lists++;
+      if (jwks) {
+        reads.jwks += 1;
+      } else {
+        reads.lists += 1;
+      }
+
       const { unavailable, hold } = upstream;
 
-      if (hold !== undefined) yield* Deferred.await(hold);
+      if (hold !== undefined) {
+        yield* Deferred.await(hold);
+      }
+
       const latency = upstream.latency[jwks ? "jwks" : "lists"];
 
-      if (latency !== undefined) yield* Effect.sleep(latency);
+      if (latency !== undefined) {
+        yield* Effect.sleep(latency);
+      }
 
-      if (unavailable)
-        return HttpClientResponse.fromWeb(request, new Response("{}", { status: 503 }));
+      if (unavailable) {
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response("{}", { status: 503 })
+        );
+      }
 
-      if (jwks) return HttpClientResponse.fromWeb(request, Response.json({ keys: [jwk] }));
+      if (jwks) {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({ keys: [jwk] })
+        );
+      }
+
       const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
 
-      const list = yield* Effect.promise(() =>
-        signList(
-          pair.privateKey,
-          issuer,
-          resource,
-          [[key, { keyId: "key", ownerId: "owner", scopes: ["read"], expiresAt: null }]],
-          seconds,
-        ),
+      const list = yield* Effect.promise(
+        async () =>
+          await signList(
+            pair.privateKey,
+            issuer,
+            resource,
+            [
+              [
+                key,
+                {
+                  keyId: "key",
+                  ownerId: "owner",
+                  scopes: ["read"],
+                  expiresAt: null,
+                },
+              ],
+            ],
+            seconds
+          )
       );
 
       return HttpClientResponse.fromWeb(request, Response.json({ list }));
-    }),
+    })
   );
 
   const token = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-    Effect.promise(() =>
-      new SignJWT({ client_id: "web", scope: "read" })
-        .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "fixture" })
-        .setIssuer(issuer)
-        .setAudience(resource)
-        .setSubject("owner")
-        .setIssuedAt(Math.floor(now / 1000))
-        .setExpirationTime(Math.floor(now / 1000) + 3600)
-        .sign(pair.privateKey),
-    ),
+    Effect.promise(
+      async () =>
+        await new SignJWT({ client_id: "web", scope: "read" })
+          .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "fixture" })
+          .setIssuer(issuer)
+          .setAudience(resource)
+          .setSubject("owner")
+          .setIssuedAt(Math.floor(now / 1000))
+          .setExpirationTime(Math.floor(now / 1000) + 3600)
+          .sign(pair.privateKey)
+    )
   );
 
   const verifier = (store: Verifier.Store) =>
     Verifier.make({ issuer, resource, store }).pipe(
-      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provideService(HttpClient.HttpClient, client)
     );
 
   return { reads, upstream, token, verifier };
@@ -121,7 +161,10 @@ it.effect(
 
       const next = yield* verifier(store);
       yield* next.verifyToken(yield* token);
-      assert.deepEqual((yield* next.verifyToken(key)).actor, { kind: "key", keyId: "key" });
+      assert.deepEqual((yield* next.verifyToken(key)).actor, {
+        kind: "key",
+        keyId: "key",
+      });
       assert.deepEqual(reads, { jwks: 1, lists: 1 });
       // why: a clone keeps only plain data, so an Effect, Promise, Response or class instance fails.
       assert.deepStrictEqual(structuredClone(store), store);
@@ -142,7 +185,7 @@ it.effect(
       yield* TestClock.adjust("5 seconds");
       yield* (yield* verifier(store)).verifyToken(key);
       assert.deepEqual(reads, { jwks: 3, lists: 3 });
-    }),
+    })
 );
 
 it.effect("concurrent misses each read, and every one of them verifies", () =>
@@ -153,12 +196,16 @@ it.effect("concurrent misses each read, and every one of them verifies", () =>
 
     const together = (credential: string) =>
       Effect.gen(function* () {
-        const hold = yield* Deferred.make<void>();
+        const hold = yield* Deferred.make<undefined>();
         upstream.hold = hold;
 
-        const fiber = yield* Effect.all(
-          [1, 2].map(() => Effect.flatMap(verifier(store), (each) => each.verifyToken(credential))),
-          { concurrency: "unbounded" },
+        const fiber = yield* Effect.forEach(
+          [1, 2],
+          () =>
+            Effect.flatMap(verifier(store), (each) =>
+              each.verifyToken(credential)
+            ),
+          { concurrency: "unbounded" }
         ).pipe(Effect.forkChild);
 
         yield* TestClock.withLive(Effect.sleep("100 millis"));
@@ -177,7 +224,7 @@ it.effect("concurrent misses each read, and every one of them verifies", () =>
     yield* (yield* verifier(store)).verifyToken(jwt);
     yield* (yield* verifier(store)).verifyToken(key);
     assert.deepEqual(reads, { jwks: 2, lists: 2 });
-  }),
+  })
 );
 
 it.effect.each(["slow read fails", "fast read fails"] as const)(
@@ -192,10 +239,14 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
       const slowFails = order === "slow read fails";
 
       const verify = (credential: string) =>
-        Effect.result(Effect.flatMap(verifier(store), (each) => each.verifyToken(credential)));
+        Effect.result(
+          Effect.flatMap(verifier(store), (each) =>
+            each.verifyToken(credential)
+          )
+        );
 
       for (const credential of [jwt, key]) {
-        const hold = yield* Deferred.make<void>();
+        const hold = yield* Deferred.make<undefined>();
         upstream.unavailable = slowFails;
         upstream.hold = hold;
         const slow = yield* verify(credential).pipe(Effect.forkChild);
@@ -213,13 +264,16 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
       }
 
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
-      assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, undefined);
-      assert(Result.isSuccess(yield* verify(jwt)));
-      assert(Result.isSuccess(yield* verify(key)));
+      assert.equal(
+        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        undefined
+      );
+      assert.ok(Result.isSuccess(yield* verify(jwt)));
+      assert.ok(Result.isSuccess(yield* verify(key)));
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
       assert.deepEqual(logs, slowFails ? [] : [failing, recovered]);
     }).pipe(Effect.provide(capture(logs)));
-  },
+  }
 );
 
 it.effect(
@@ -239,13 +293,13 @@ it.effect(
       upstream.unavailable = true;
       const jwt = yield* token;
       const cold = yield* refused(key);
-      assert(cold instanceof ProviderUnavailable);
+      assert.ok(cold instanceof ProviderUnavailable);
       assert.equal(cold.operation, "key-list.fetch");
       const unsigned = yield* refused(jwt);
-      assert(unsigned instanceof ProviderUnavailable);
+      assert.ok(unsigned instanceof ProviderUnavailable);
       assert.equal(unsigned.operation, "jwks.fetch");
       const cooling = yield* refused(key);
-      assert(cooling instanceof ProviderUnavailable);
+      assert.ok(cooling instanceof ProviderUnavailable);
       assert.equal(cooling.operation, "key-list.fetch");
       assert.deepEqual(reads, { jwks: 1, lists: 1 });
 
@@ -257,9 +311,12 @@ it.effect(
 
       upstream.unavailable = true;
       yield* TestClock.adjust("1 minute");
-      assert.deepEqual((yield* verify(key)).actor, { kind: "key", keyId: "key" });
-      assert((yield* refused(unknown)) instanceof Unauthorized);
-      assert((yield* refused(jwt)) instanceof ProviderUnavailable);
+      assert.deepEqual((yield* verify(key)).actor, {
+        kind: "key",
+        keyId: "key",
+      });
+      assert.ok((yield* refused(unknown)) instanceof Unauthorized);
+      assert.ok((yield* refused(jwt)) instanceof ProviderUnavailable);
       assert.deepEqual(reads, { jwks: 3, lists: 3 });
 
       yield* TestClock.adjust("5 seconds");
@@ -274,7 +331,7 @@ it.effect(
       assert.equal(reads.lists, 6);
       assert.deepEqual(logs, [failing, recovered, failing, recovered]);
     }).pipe(Effect.provide(capture(logs)));
-  },
+  }
 );
 
 it.effect(
@@ -283,7 +340,11 @@ it.effect(
     Effect.gen(function* () {
       const { reads, upstream, verifier } = yield* fixture;
       const store = Verifier.store();
-      const verify = Effect.flatMap(verifier(store), (each) => each.verifyToken(key));
+
+      const verify = Effect.flatMap(verifier(store), (each) =>
+        each.verifyToken(key)
+      );
+
       upstream.latency = { lists: "1 second", jwks: "2500 millis" };
       const cold = yield* verify.pipe(Effect.forkChild);
       yield* TestClock.withLive(Effect.sleep("100 millis"));
@@ -291,7 +352,10 @@ it.effect(
       // why: the list is signed with real crypto, which must finish before time moves.
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       yield* TestClock.adjust("2500 millis");
-      assert.deepEqual((yield* Fiber.join(cold)).actor, { kind: "key", keyId: "key" });
+      assert.deepEqual((yield* Fiber.join(cold)).actor, {
+        kind: "key",
+        keyId: "key",
+      });
       assert.deepEqual(reads, { jwks: 1, lists: 1 });
 
       upstream.latency = { lists: "2500 millis", jwks: "1 minute" };
@@ -303,7 +367,13 @@ it.effect(
       yield* TestClock.adjust("500 millis");
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       assert.notEqual(stalled.pollUnsafe(), undefined);
-      assert.deepEqual((yield* Fiber.join(stalled)).actor, { kind: "key", keyId: "key" });
-      assert.equal(store.keyLists.get(JSON.stringify([issuer, resource]))?.failure, "jwks.timeout");
-    }),
+      assert.deepEqual((yield* Fiber.join(stalled)).actor, {
+        kind: "key",
+        keyId: "key",
+      });
+      assert.equal(
+        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        "jwks.timeout"
+      );
+    })
 );

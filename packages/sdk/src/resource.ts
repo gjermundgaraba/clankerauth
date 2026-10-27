@@ -1,12 +1,26 @@
-import { Clock, Context, Duration, Effect, Layer, Option, Redacted, Ref, Result } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import {
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Result,
+} from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpClient } from "effect/http";
 import type { HttpApiSecurity } from "effect/http-api";
-import type { ConfigurationError } from "./errors.ts";
-import { InsufficientScope, ProviderUnavailable, Unauthorized } from "./errors.ts";
-import type { AuthenticationError } from "./errors.ts";
+
+import type { ConfigurationError, AuthenticationError } from "./errors.ts";
+import {
+  InsufficientScope,
+  ProviderUnavailable,
+  Unauthorized,
+} from "./errors.ts";
 import { keyListRefresh } from "./refresh.ts";
 import { CurrentPrincipal, Whoami } from "./session.ts";
 import type { Caller } from "./session.ts";
@@ -39,10 +53,16 @@ const lacking = (principal: Caller, scope: string | undefined) =>
  * `Unauthenticated` and `Forbidden`, which every client decodes. The issuer being
  * unreachable stays the SDK's own `ProviderUnavailable`, which the descriptor declares.
  */
-const refusalOf = (error: AuthenticationError): Action.Refusal | ProviderUnavailable => {
-  if (error instanceof Unauthorized) return new Action.Unauthenticated({ message: error.message });
+const refusalOf = (
+  error: AuthenticationError
+): Action.Refusal | ProviderUnavailable => {
+  if (error instanceof Unauthorized) {
+    return new Action.Unauthenticated({ message: error.message });
+  }
 
-  if (error instanceof InsufficientScope) return forbidden(error.scope, error.actor);
+  if (error instanceof InsufficientScope) {
+    return forbidden(error.scope, error.actor);
+  }
 
   return error;
 };
@@ -56,7 +76,7 @@ const refusalOf = (error: AuthenticationError): Action.Refusal | ProviderUnavail
  */
 export const authenticate = (
   verifier: Verifier.Verifier,
-  token: Redacted.Redacted<string>,
+  token: Redacted.Redacted
 ): Effect.Effect<Verifier.Principal, Action.Refusal | ProviderUnavailable> =>
   Effect.mapError(verifier.verifyToken(Redacted.value(token)), refusalOf);
 
@@ -95,6 +115,13 @@ export interface Refusal {
   readonly body: string;
 }
 
+const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.timeoutOrElse(effect, {
+    duration: "5 seconds",
+    orElse: () =>
+      Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
+  });
+
 /** What one Authorization header value amounts to for this resource. */
 export type Admission =
   | { readonly ok: true; readonly principal: Verifier.Principal }
@@ -103,7 +130,7 @@ export type Admission =
 const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
   authentication: Authentication.Any,
   { scopes, required }: Declaration<Scope>,
-  options: Options,
+  options: Options
 ) {
   const identifier = new URL("/", options.publicUrl).href;
 
@@ -124,12 +151,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     apiKeys: options.apiKeys,
   });
 
-  const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.timeoutOrElse(effect, {
-      duration: "5 seconds",
-      orElse: () => Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
-    });
-
   const verifier: Verifier.Verifier = {
     verifyToken: (token) => deadline(unbounded.verifyToken(token)),
   };
@@ -141,12 +162,15 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
    */
   const principalOf = Effect.fn("Resource.principal")(function* (
     authorization: string | null | undefined,
-    scope: string | undefined,
+    scope: string | undefined
   ) {
     const token = Authentication.bearerTokenOf(authorization);
 
-    if (Option.isNone(token))
-      return yield* new Action.Unauthenticated({ message: "A bearer token is required." });
+    if (Option.isNone(token)) {
+      return yield* new Action.Unauthenticated({
+        message: "A bearer token is required.",
+      });
+    }
 
     const principal = yield* authenticate(verifier, token.value);
     const refusal = lacking(principal, scope);
@@ -162,19 +186,20 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
    */
   const admit = Effect.fn("Resource.admit")(function* (
     authorization: string | null | undefined,
-    scope?: Scope,
+    scope?: Scope
   ) {
     const verified = yield* Effect.result(principalOf(authorization, scope));
 
-    if (Result.isSuccess(verified))
+    if (Result.isSuccess(verified)) {
       return { ok: true, principal: verified.success } satisfies Admission;
+    }
 
     const web = HttpServerResponse.toWeb(
       Authentication.refusalResponse(verified.failure, {
         authentication,
         protectedResource,
         authorization,
-      }),
+      })
     );
 
     return {
@@ -182,7 +207,7 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
       refusal: {
         status: web.status,
         headers: Object.fromEntries(web.headers),
-        body: yield* Effect.promise(() => web.text()),
+        body: yield* Effect.promise(async () => await web.text()),
       },
     } satisfies Admission;
   });
@@ -199,13 +224,16 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
         const now = yield* Clock.currentTimeMillis;
         const remaining = Math.max(0, (principal.expiresAt ?? Infinity) - now);
 
-        if (principal.actor.kind === "key")
-          return yield* Effect.sleep(Math.min(remaining, Duration.toMillis(keyListRefresh)));
+        if (principal.actor.kind === "key") {
+          return yield* Effect.sleep(
+            Math.min(remaining, Duration.toMillis(keyListRefresh))
+          );
+        }
 
         yield* Effect.sleep(remaining);
 
         return yield* refusalOf(new Unauthorized());
-      }),
+      })
     );
 
   return {
@@ -238,12 +266,12 @@ export interface Built<Scope extends string = string> {
    */
   readonly admit: (
     authorization: string | null | undefined,
-    scope?: Scope,
+    scope?: Scope
   ) => Effect.Effect<Admission>;
   /** Fails, with the refusal `admit` would now answer, once the credential it admitted stops being valid. */
   readonly watch: (
     authorization: string | null | undefined,
-    scope?: Scope,
+    scope?: Scope
   ) => Effect.Effect<never, Action.Refusal | ProviderUnavailable>;
 }
 
@@ -267,7 +295,13 @@ type Unavailable = readonly [typeof ProviderUnavailable];
 export type Login<
   Name extends string = string,
   E extends Action.Errors = Unavailable,
-> = Authentication.Descriptor<CurrentPrincipal, Caller, HttpApiSecurity.Http, Name, E>;
+> = Authentication.Descriptor<
+  CurrentPrincipal,
+  Caller,
+  HttpApiSecurity.Http,
+  Name,
+  E
+>;
 
 /**
  * `unknown` when every alternative of `E` declares `ProviderUnavailable`, by what its schemas
@@ -276,10 +310,16 @@ export type Login<
  * does not.
  */
 type DeclaresUnavailable<E extends Action.Errors> = [
-  E extends unknown ? (ProviderUnavailable extends E[number]["Type"] ? never : E) : never,
+  E extends unknown
+    ? ProviderUnavailable extends E[number]["Type"]
+      ? never
+      : E
+    : never,
 ] extends [never]
   ? unknown
-  : { readonly "Resource.make takes a descriptor declaring error: ProviderUnavailable": never };
+  : {
+      readonly "Resource.make takes a descriptor declaring error: ProviderUnavailable": never;
+    };
 
 /**
  * What a resource declares beside its descriptor, the same in every deployment: the
@@ -319,7 +359,7 @@ export interface Declared<
   readonly service: Context.Service<Resource<Name>, Built<Scope>>;
   /** The resource, built once per layer graph: provide it beside the surfaces it guards. */
   readonly layer: (
-    options: Options,
+    options: Options
   ) => Layer.Layer<Resource<Name>, ConfigurationError, HttpClient.HttpClient>;
   /**
    * The descriptor's provider: its verifier, reading the resource, which also publishes the
@@ -331,9 +371,13 @@ export interface Declared<
     Resource<Name> | HttpRouter.HttpRouter
   >;
   /** Refuses a caller without `scope`, for an authorizer the application writes. */
-  readonly requires: (scope: Scope) => Effect.Effect<void, Action.Forbidden, CurrentPrincipal>;
+  readonly requires: (
+    scope: Scope
+  ) => Effect.Effect<void, Action.Forbidden, CurrentPrincipal>;
   /** The host's own routes, admitted as the resource's actions are, holding `scope` if given. */
-  readonly admitted: (scope?: Scope) => Authentication.Protection<CurrentPrincipal, Name>;
+  readonly admitted: (
+    scope?: Scope
+  ) => Authentication.Protection<CurrentPrincipal, Name>;
   /** The process itself as a principal, for a trusted local surface. */
   readonly local: (subject: string) => Caller;
   /** `Whoami`, answered from the verified credential. */
@@ -362,12 +406,12 @@ export const make = <
   const Scope extends string,
 >(
   authentication: Login<Name, E> & DeclaresUnavailable<E>,
-  declaration: Declaration<Scope>,
+  declaration: Declaration<Scope>
 ): Declared<Name, E, Scope> => {
   const { scopes } = declaration;
 
   const service = Context.Service<Resource<Name>, Built<Scope>>(
-    `@clankerauth/Resource/${authentication.name}`,
+    `@clankerauth/Resource/${authentication.name}`
   );
 
   const layer = (options: Options) =>
@@ -379,26 +423,37 @@ export const make = <
     declaring,
     Effect.gen(function* () {
       const { verifier, resource, protectedResource } = yield* service;
-      const host = new URL(resource).host;
+      const { host } = new URL(resource);
       const warned = yield* Ref.make(protectedResource === undefined);
 
       const noteHost = Effect.gen(function* () {
-        if (yield* Ref.get(warned)) return;
+        if (yield* Ref.get(warned)) {
+          return;
+        }
 
-        const reached = (yield* HttpServerRequest.HttpServerRequest).headers["host"];
+        const reached = (yield* HttpServerRequest.HttpServerRequest).headers[
+          "host"
+        ];
 
-        if (reached === undefined || reached === host) return;
+        if (reached === undefined || reached === host) {
+          return;
+        }
 
         yield* Ref.set(warned, true);
         yield* Effect.logWarning(
-          `The resource ${resource} publishes discovery, but a request reached it at ${reached}: an OAuth client discovering it there refuses the mismatch. Set publicUrl to the origin this listener is reached at.`,
+          `The resource ${resource} publishes discovery, but a request reached it at ${reached}: an OAuth client discovering it there refuses the mismatch. Set publicUrl to the origin this listener is reached at.`
         );
       });
 
-      return (token: Redacted.Redacted<string>) =>
+      return (token: Redacted.Redacted) =>
         Effect.andThen(noteHost, authenticate(verifier, token));
     }),
-    { protectedResource: Effect.map(service, ({ protectedResource }) => protectedResource) },
+    {
+      protectedResource: Effect.map(
+        service,
+        ({ protectedResource }) => protectedResource
+      ),
+    }
   );
 
   /**
@@ -407,7 +462,9 @@ export const make = <
    * The `Forbidden` names the scope for an OAuth client, which steps up to it; an API key or
    * the process cannot, so theirs names none.
    */
-  const requires = (scope: Scope): Effect.Effect<void, Action.Forbidden, CurrentPrincipal> =>
+  const requires = (
+    scope: Scope
+  ): Effect.Effect<void, Action.Forbidden, CurrentPrincipal> =>
     Effect.flatMap(CurrentPrincipal, (principal) => {
       const refusal = lacking(principal, scope);
 
@@ -421,12 +478,14 @@ export const make = <
    * as it does an action's route, and answers them as one; `scope`, if given, is checked
    * inside it with `requires`. An admitted route reads its caller from `CurrentPrincipal`.
    */
-  const admitted = (scope?: Scope): Authentication.Protection<CurrentPrincipal, Name> =>
+  const admitted = (
+    scope?: Scope
+  ): Authentication.Protection<CurrentPrincipal, Name> =>
     scope === undefined
       ? Authentication.protect(authentication)
-      : HttpRouter.middleware((route) => Effect.andThen(requires(scope), route)).combine(
-          Authentication.protect(authentication),
-        );
+      : HttpRouter.middleware((route) =>
+          Effect.andThen(requires(scope), route)
+        ).combine(Authentication.protect(authentication));
 
   /**
    * The process itself as the caller of a trusted local surface, such as stdio MCP or a local
@@ -456,9 +515,9 @@ export const make = <
             subject: principal.subject,
             issuer,
             scopes: principal.scopes,
-          })),
+          }))
     ),
-    { authorize: Action.allowAll },
+    { authorize: Action.allowAll }
   );
 
   return {

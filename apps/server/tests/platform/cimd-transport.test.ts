@@ -1,103 +1,130 @@
+import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
-import { describe, expect, test, vi } from "vite-plus/test";
-import { CimdTransport, createAbortAwareTransport } from "../../src/platform/cimd-transport.ts";
+import { describe, expect, vi } from "vite-plus/test";
+
+import {
+  CimdTransport,
+  createAbortAwareTransport,
+} from "../../src/platform/cimd-transport.ts";
 
 const rejection = (url: string) =>
   Effect.gen(function* () {
     const { fetch } = yield* CimdTransport;
 
     return yield* Effect.flip(
-      Effect.tryPromise({ try: async () => fetch(url), catch: (cause) => cause }),
+      Effect.tryPromise({
+        try: async () => await fetch(url),
+        catch: (cause) =>
+          cause instanceof Error ? cause.message : String(cause),
+      })
     );
   }).pipe(Effect.provide(CimdTransport.layer));
 
 const url = "https://client.example/metadata.json";
 
 describe("abort-aware CIMD transport", () => {
-  test("aborts stalled DNS while keeping its capacity occupied until settlement", async () => {
+  it("aborts stalled DNS while keeping its capacity occupied until settlement", async () => {
     const stalled = Promise.withResolvers<Response>();
-    const transport = vi.fn(() => stalled.promise);
+
+    const transport = vi.fn<ClientMetadataResourceFetch>(
+      async () => await stalled.promise
+    );
+
     const fetch = createAbortAwareTransport(transport, 1);
     const controller = new AbortController();
     const result = fetch(url, { signal: controller.signal });
     await Promise.resolve();
-    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledOnce();
     const failure = new Error("metadata timeout");
-    const rejection = expect(result).rejects.toBe(failure);
     controller.abort(failure);
-    await rejection;
+    await expect(result).rejects.toBe(failure);
     await expect(fetch(url)).rejects.toThrow("capacity reached");
-    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledOnce();
 
-    const cancel = vi.fn();
+    const cancel = vi.fn<() => void>();
     const body = new ReadableStream({ cancel });
     stalled.resolve(new Response(body));
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
-    transport.mockImplementation(() => Promise.resolve(new Response("recovered")));
-    expect(await (await fetch(url)).text()).toBe("recovered");
+    await vi.waitFor(() => {
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+    transport.mockResolvedValue(new Response("recovered"));
+    const recovered = await fetch(url);
+    await expect(recovered.text()).resolves.toBe("recovered");
   });
 
-  test("consumes late transport failure and releases capacity", async () => {
+  it("consumes late transport failure and releases capacity", async () => {
     const stalled = Promise.withResolvers<Response>();
-    const transport = vi.fn(() => stalled.promise);
+
+    const transport = vi.fn<ClientMetadataResourceFetch>(
+      async () => await stalled.promise
+    );
+
     const fetch = createAbortAwareTransport(transport, 1);
     const controller = new AbortController();
     const result = fetch(url, { signal: controller.signal });
     await Promise.resolve();
-    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+
     controller.abort();
-    await rejected;
+    await expect(result).rejects.toMatchObject({
+      name: "AbortError",
+    });
     stalled.reject(new Error("DNS eventually failed"));
     await stalled.promise.catch(() => {});
     // why: the wrapper releases capacity in a continuation one microtask after settlement
     await Promise.resolve();
-    transport.mockImplementation(() => Promise.resolve(new Response("recovered")));
-    expect(await (await fetch(url)).text()).toBe("recovered");
+    transport.mockResolvedValue(new Response("recovered"));
+    const recovered = await fetch(url);
+    await expect(recovered.text()).resolves.toBe("recovered");
   });
 
-  test("already-aborted requests never invoke transport or consume capacity", async () => {
-    const transport = vi.fn(() => new Response("ok"));
+  it("already-aborted requests never invoke transport or consume capacity", async () => {
+    const transport = vi.fn<ClientMetadataResourceFetch>(
+      () => new Response("ok")
+    );
+
     const fetch = createAbortAwareTransport(transport, 1);
     const controller = new AbortController();
     controller.abort();
-    await expect(fetch(new Request(url, { signal: controller.signal }))).rejects.toMatchObject({
+    await expect(
+      fetch(new Request(url, { signal: controller.signal }))
+    ).rejects.toMatchObject({
       name: "AbortError",
     });
     expect(transport).not.toHaveBeenCalled();
-    expect(await (await fetch(url)).text()).toBe("ok");
+    const passed = await fetch(url);
+    await expect(passed.text()).resolves.toBe("ok");
   });
 
-  test("passes through requests and responses and handles synchronous failures", async () => {
+  it("passes through requests and responses and handles synchronous failures", async () => {
     const response = new Response("metadata");
-    const transport = vi.fn(() => response);
+    const transport = vi.fn<ClientMetadataResourceFetch>(() => response);
     const fetch = createAbortAwareTransport(transport, 1);
     const init = { headers: { Accept: "application/json" } };
-    expect(await fetch(url, init)).toBe(response);
+    await expect(fetch(url, init)).resolves.toBe(response);
     expect(transport).toHaveBeenCalledWith(url, init);
     transport.mockImplementationOnce(() => {
       throw new Error("bad transport input");
     });
     await expect(fetch(url)).rejects.toThrow("bad transport input");
-    expect(await fetch(url)).toBe(response);
+    await expect(fetch(url)).resolves.toBe(response);
   });
 });
 
 describe("production CIMD transport", () => {
-  it.live.each(["https://127.0.0.1/metadata.json", "https://10.0.0.1/metadata.json"])(
-    "rejects private metadata address %s",
-    (url) =>
-      Effect.gen(function* () {
-        expect(yield* rejection(url)).toMatchObject({
-          message: expect.stringContaining("public-routable"),
-        });
-      }),
+  it.live.each([
+    "https://127.0.0.1/metadata.json",
+    "https://10.0.0.1/metadata.json",
+  ])("rejects private metadata address %s", (metadata) =>
+    Effect.gen(function* () {
+      expect(yield* rejection(metadata)).toContain("public-routable");
+    })
   );
   it.live("rejects non-HTTPS metadata", () =>
     Effect.gen(function* () {
-      expect(yield* rejection("http://127.0.0.1/metadata.json")).toMatchObject({
-        message: expect.stringContaining("HTTPS"),
-      });
-    }),
+      expect(yield* rejection("http://127.0.0.1/metadata.json")).toContain(
+        "HTTPS"
+      );
+    })
   );
 });

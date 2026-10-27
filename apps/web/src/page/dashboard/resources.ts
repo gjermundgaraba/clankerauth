@@ -1,6 +1,3 @@
-import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
-import { Array, flow, pipe } from "effect";
-import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   Button,
   EmptyState,
@@ -8,12 +5,16 @@ import {
   Panel,
   PropsList,
 } from "@gjermundgaraba-designs/pixel-paper";
+import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
+import { Array, flow, pipe } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { codesView } from "../codes.ts";
 import { Change } from "./change.ts";
 import { addResource, editResource } from "./form.ts";
 import { Message } from "./message.ts";
-import { codesView } from "../codes.ts";
-import { type SectionContext, footView, itemButtonView, noteView } from "./parts.ts";
+import { footView, itemButtonView, noteView } from "./parts.ts";
+import type { SectionContext } from "./parts.ts";
 
 type ResourceView = typeof ResourceSummary.Type;
 
@@ -22,7 +23,7 @@ const BUILT_IN_NOTE =
 
 export const resourcesHeadView = (
   { listing, isHeld }: SectionContext,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html =>
   PageHead.view(
     {
@@ -36,14 +37,17 @@ export const resourcesHeadView = (
             isDisabled: isHeld,
             onClick: Message.ClickedOpenForm({ form: addResource() }),
           },
-          h,
+          h
         ),
       ],
     },
-    h,
+    h
   );
 
-const connectedNames = ({ listing }: SectionContext, identifier: string): string => {
+const connectedNames = (
+  { listing }: SectionContext,
+  identifier: string
+): string => {
   const { clients, connections } = listing.overview;
 
   return pipe(
@@ -51,23 +55,25 @@ const connectedNames = ({ listing }: SectionContext, identifier: string): string
     Array.filter(({ client_id }) =>
       Array.some(
         connections,
-        (connection) => connection.client_id === client_id && connection.resource === identifier,
-      ),
+        (connection) =>
+          connection.client_id === client_id &&
+          connection.resource === identifier
+      )
     ),
     Array.match({
       onEmpty: () => "None",
       onNonEmpty: flow(
         Array.map(({ client_id, client_name }) => client_name ?? client_id),
-        Array.join(", "),
+        Array.join(", ")
       ),
-    }),
+    })
   );
 };
 
 const resourcePanel = (
   context: SectionContext,
   resource: ResourceView,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html => {
   const { identifier, name, scopes, builtIn } = resource;
 
@@ -82,10 +88,13 @@ const resourcePanel = (
             items: [
               { label: "identifier", value: [identifier], isCode: true },
               { label: "scopes", value: codesView(scopes, "None", h) },
-              { label: "connected clients", value: [connectedNames(context, identifier)] },
+              {
+                label: "connected clients",
+                value: [connectedNames(context, identifier)],
+              },
             ],
           },
-          h,
+          h
         ),
         ...(builtIn ? [noteView(BUILT_IN_NOTE, h)] : []),
       ],
@@ -97,32 +106,36 @@ const resourcePanel = (
                 {
                   label: "edit",
                   itemName: name,
-                  onClick: Message.ClickedOpenForm({ form: editResource(resource) }),
+                  onClick: Message.ClickedOpenForm({
+                    form: editResource(resource),
+                  }),
                   isHeld: context.isHeld,
                 },
-                h,
+                h
               ),
               itemButtonView(
                 {
                   label: "delete",
                   itemName: name,
-                  onClick: Message.ClickedChange({ change: Change.DeleteResource({ identifier }) }),
+                  onClick: Message.ClickedChange({
+                    change: Change.DeleteResource({ identifier }),
+                  }),
                   isHeld: context.isHeld,
                 },
-                h,
+                h
               ),
             ],
-        h,
+        h
       ),
     },
-    h,
+    h
   );
 };
 
 export const resourcesPanels = (
   context: SectionContext,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => [
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
   noteView("Protected APIs and MCP servers, and the scopes they define.", h),
   ...Array.match(context.listing.overview.resources, {
     onEmpty: () => [
@@ -140,11 +153,11 @@ export const resourcesPanels = (
                   "Define a protected API or MCP server. Compatible MCP clients onboard automatically when you connect.",
                 ],
               },
-              h,
+              h
             ),
           ],
         },
-        h,
+        h
       ),
     ],
     onNonEmpty: (resources) =>

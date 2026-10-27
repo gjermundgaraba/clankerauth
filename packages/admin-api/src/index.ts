@@ -1,22 +1,25 @@
-import { Context, type Effect, Schema, type Scope } from "effect";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
+import { Context, Schema } from "effect";
+import type { Effect, Scope } from "effect";
 import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
 /**
  * This issuer's own fault: a failed query, an unreadable row, an unexpected provider failure.
  * The schema defines the public response; the diagnostic cause reaches logs, never a caller.
  */
-export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
-  "InternalServerError",
-  { message: Schema.String },
-  { httpApiStatus: 500 },
-) {
+export class InternalServerError extends Schema.TaggedError<
+  InternalServerError,
+  { readonly brand: unique symbol }
+>()("InternalServerError", { message: Schema.String }, { httpApiStatus: 500 }) {
   override cause?: unknown;
 
   static readonly of = (cause: unknown) => {
-    const error = new InternalServerError({ message: "Request could not be completed" });
+    const error = new InternalServerError({
+      message: "Request could not be completed",
+    });
+
     error.cause = cause;
 
     return error;
@@ -24,34 +27,48 @@ export class InternalServerError extends Schema.TaggedError<InternalServerError>
 }
 
 /** The issuer could not decide the request now, such as when its session store is unreachable. */
-export class ServiceUnavailable extends Schema.TaggedError<ServiceUnavailable>()(
-  "ServiceUnavailable",
-  { message: Schema.String },
-  { httpApiStatus: 503 },
-) {}
+export class ServiceUnavailable extends Schema.TaggedError<
+  ServiceUnavailable,
+  { readonly brand: unique symbol }
+>()("ServiceUnavailable", { message: Schema.String }, { httpApiStatus: 503 }) {}
 
-export class ClientNotFound extends Schema.TaggedError<ClientNotFound>()(
+export class ClientNotFound extends Schema.TaggedError<
+  ClientNotFound,
+  { readonly brand: unique symbol }
+>()(
   "ClientNotFound",
   { clientId: Schema.String, message: Schema.String },
-  { httpApiStatus: 404 },
+  { httpApiStatus: 404 }
 ) {
   static readonly of = (clientId: string) =>
-    new ClientNotFound({ clientId, message: `No client ${clientId} is registered` });
+    new ClientNotFound({
+      clientId,
+      message: `No client ${clientId} is registered`,
+    });
 }
 
-export class ResourceNotFound extends Schema.TaggedError<ResourceNotFound>()(
+export class ResourceNotFound extends Schema.TaggedError<
+  ResourceNotFound,
+  { readonly brand: unique symbol }
+>()(
   "ResourceNotFound",
   { identifier: Schema.String, message: Schema.String },
-  { httpApiStatus: 404 },
+  { httpApiStatus: 404 }
 ) {
   static readonly of = (identifier: string) =>
-    new ResourceNotFound({ identifier, message: `No resource ${identifier} exists` });
+    new ResourceNotFound({
+      identifier,
+      message: `No resource ${identifier} exists`,
+    });
 }
 
-export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
+export class ApiKeyNotFound extends Schema.TaggedError<
+  ApiKeyNotFound,
+  { readonly brand: unique symbol }
+>()(
   "ApiKeyNotFound",
   { keyId: Schema.String, message: Schema.String },
-  { httpApiStatus: 404 },
+  { httpApiStatus: 404 }
 ) {
   static readonly of = (keyId: string) =>
     new ApiKeyNotFound({ keyId, message: `No API key ${keyId} exists` });
@@ -61,10 +78,13 @@ export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
  * The client registered itself, through DCR or CIMD: the owner can revoke, block or delete it,
  * but its access and registration are its own, and consent decides what it gets.
  */
-export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
+export class ClientIsAutomatic extends Schema.TaggedError<
+  ClientIsAutomatic,
+  { readonly brand: unique symbol }
+>()(
   "ClientIsAutomatic",
   { clientId: Schema.String, message: Schema.String },
-  { httpApiStatus: 409 },
+  { httpApiStatus: 409 }
 ) {
   static readonly of = (clientId: string) =>
     new ClientIsAutomatic({
@@ -74,32 +94,30 @@ export class ClientIsAutomatic extends Schema.TaggedError<ClientIsAutomatic>()(
 }
 
 /** First-run setup has already created the owner. */
-export class OwnerExists extends Schema.TaggedError<OwnerExists>()(
-  "OwnerExists",
-  { message: Schema.String },
-  { httpApiStatus: 409 },
-) {
-  static readonly of = () => new OwnerExists({ message: "Setup already completed" });
+export class OwnerExists extends Schema.TaggedError<
+  OwnerExists,
+  { readonly brand: unique symbol }
+>()("OwnerExists", { message: Schema.String }, { httpApiStatus: 409 }) {
+  static readonly of = () =>
+    new OwnerExists({ message: "Setup already completed" });
 }
 
 /** The provider refused the request's input on a rule of its own, which `message` states. */
-export class ProviderRefused extends Schema.TaggedError<ProviderRefused>()(
-  "ProviderRefused",
-  { message: Schema.String },
-  { httpApiStatus: 400 },
-) {}
+export class ProviderRefused extends Schema.TaggedError<
+  ProviderRefused,
+  { readonly brand: unique symbol }
+>()("ProviderRefused", { message: Schema.String }, { httpApiStatus: 400 }) {}
 
 /** A request body the issuer could not read, on a route that is not an action. */
-export class UnreadableRequest extends Schema.TaggedError<UnreadableRequest>()(
-  "UnreadableRequest",
-  { message: Schema.String },
-  { httpApiStatus: 400 },
-) {}
+export class UnreadableRequest extends Schema.TaggedError<
+  UnreadableRequest,
+  { readonly brand: unique symbol }
+>()("UnreadableRequest", { message: Schema.String }, { httpApiStatus: 400 }) {}
 
 const undecided = [ServiceUnavailable, InternalServerError] as const;
 
 export class CurrentOwner extends Context.Service<CurrentOwner, Owner>()(
-  "clankerauth/CurrentOwner",
+  "clankerauth/CurrentOwner"
 ) {}
 
 export interface Owner {
@@ -107,7 +125,11 @@ export interface Owner {
   readonly email: string;
   /** Whether the caller may change anything; the dashboard session always may. */
   readonly writable: boolean;
-  readonly providerHeaders: Effect.Effect<Headers, InternalServerError, Scope.Scope>;
+  readonly providerHeaders: Effect.Effect<
+    Headers,
+    InternalServerError,
+    Scope.Scope
+  >;
 }
 
 // why: the cookie name varies by deployment, and a layer serves only its own descriptor's binding.
@@ -120,13 +142,21 @@ export const ownerSession = (cookie: string) =>
 // why: a browser sends its cookies itself, so only the server would read this cookie name.
 export const OwnerSession = ownerSession("better-auth.session_token");
 
-export const OwnerToken = Authentication.make("clankerauth.OwnerToken", CurrentOwner, {
-  error: undecided,
-});
+export const OwnerToken = Authentication.make(
+  "clankerauth.OwnerToken",
+  CurrentOwner,
+  {
+    error: undecided,
+  }
+);
 
-export const administrationIdentifier = (origin: string) => new URL("/", origin).href;
+export const administrationIdentifier = (origin: string) =>
+  new URL("/", origin).href;
 
-export const administrationScopes = { read: "clankerauth:read", write: "clankerauth:write" };
+export const administrationScopes = {
+  read: "clankerauth:read",
+  write: "clankerauth:write",
+};
 
 export const MINIMUM_PASSWORD_LENGTH = 8;
 
@@ -135,10 +165,12 @@ export const MAXIMUM_PASSWORD_LENGTH = 128;
 export const passwordRule = `Passwords have ${MINIMUM_PASSWORD_LENGTH} to ${MAXIMUM_PASSWORD_LENGTH} characters`;
 
 export const SetupInput = Schema.Struct({
-  email: Schema.String.check(Schema.isPattern(/\S/u, { message: "Setup requires an email" })),
+  email: Schema.String.check(
+    Schema.isPattern(/\S/u, { message: "Setup requires an email" })
+  ),
   password: Schema.String.check(
     Schema.isMinLength(MINIMUM_PASSWORD_LENGTH, { message: passwordRule }),
-    Schema.isMaxLength(MAXIMUM_PASSWORD_LENGTH, { message: passwordRule }),
+    Schema.isMaxLength(MAXIMUM_PASSWORD_LENGTH, { message: passwordRule })
   ),
 });
 
@@ -152,7 +184,7 @@ export const ApplicationType = Schema.Literals(["web", "native"]);
 
 /** The resources a managed client may obtain, each named once. */
 const ResourceSelection = Schema.Array(Schema.String).check(
-  Schema.isUnique({ message: "Choose unique Resources" }),
+  Schema.isUnique({ message: "Choose unique Resources" })
 );
 
 /** The provider's registration fields, passed through unchanged, and the client's `resources`. */
@@ -200,8 +232,8 @@ export const Client = Schema.Struct({
 export const ClientCredentials = Client.pipe(
   Schema.fieldsAssign({
     client_secret: Schema.optional(Schema.String),
-    client_secret_expires_at: Schema.optional(Schema.Number),
-  }),
+    client_secret_expires_at: Schema.optional(Schema.Finite),
+  })
 );
 
 export const Resource = Schema.Struct({
@@ -210,25 +242,32 @@ export const Resource = Schema.Struct({
   scopes: Schema.Array(Schema.String),
 });
 
-export const ResourceSummary = Resource.pipe(Schema.fieldsAssign({ builtIn: Schema.Boolean }));
+export const ResourceSummary = Resource.pipe(
+  Schema.fieldsAssign({ builtIn: Schema.Boolean })
+);
 
 // why: the issuer trims each field before storing it, so these checks allow surrounding spaces.
 export const ResourceInput = Schema.Struct({
   identifier: Schema.String,
-  name: Schema.String.check(Schema.isPattern(/\S/u, { message: "Resources require a name" })),
+  name: Schema.String.check(
+    Schema.isPattern(/\S/u, { message: "Resources require a name" })
+  ),
   scopes: Schema.Array(
     Schema.String.check(
-      Schema.isPattern(/^\s*[\x21\x23-\x5B\x5D-\x7E]+\s*$/u, {
+      Schema.isPattern(/^\s*[\u0021\u0023-\u005B\u005D-\u007E]+\s*$/u, {
         message: "Resources require well-formed custom scopes",
-      }),
-    ),
+      })
+    )
   ),
 });
 
 export const ResourceId = Schema.Struct({ identifier: Schema.String });
 
 /** What `putResource` stored, and whether it created the resource rather than updating it. */
-export const PutResourceResult = Schema.Struct({ resource: Resource, created: Schema.Boolean });
+export const PutResourceResult = Schema.Struct({
+  resource: Resource,
+  created: Schema.Boolean,
+});
 
 export const ClientAccess = Schema.Struct({
   client_id: Schema.String,
@@ -240,9 +279,14 @@ export const ClientAccessInput = Schema.Struct({
   resources: ResourceSelection,
 });
 
-export const ClientAccessResult = Schema.Struct({ clientAccess: Schema.Array(ClientAccess) });
+export const ClientAccessResult = Schema.Struct({
+  clientAccess: Schema.Array(ClientAccess),
+});
 
-export const KeyPermissions = Schema.Record(Schema.String, Schema.Array(Schema.String));
+export const KeyPermissions = Schema.Record(
+  Schema.String,
+  Schema.Array(Schema.String)
+);
 
 /**
  * Permissions as the owner grants them: at least one resource, each with scopes named once.
@@ -255,14 +299,20 @@ const KeyGrants = Schema.Record(
     Schema.isMinLength(1, {
       message: "Select explicitly granted, currently available Resource scopes",
     }),
-    Schema.isUnique({ message: "Select explicitly granted, currently available Resource scopes" }),
-  ),
-).check(Schema.isMinProperties(1, { message: "Select at least one Resource and scope" }));
+    Schema.isUnique({
+      message: "Select explicitly granted, currently available Resource scopes",
+    })
+  )
+).check(
+  Schema.isMinProperties(1, {
+    message: "Select at least one Resource and scope",
+  })
+);
 
 /** A key's name as the owner writes it; the issuer stores it trimmed. */
 const KeyName = Schema.String.check(
   Schema.isMaxLength(100, { message: "Key names require 1–100 characters" }),
-  Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" }),
+  Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" })
 );
 
 // why: an input without an offset reads as UTC, so no instant depends on the host's time zone.
@@ -324,7 +374,9 @@ export const IssuerActions = [
     ...anyone,
     error: [OwnerExists, ProviderRefused, InternalServerError],
     input: SetupInput,
-    success: Schema.Struct({ created: Schema.Boolean }).pipe(HttpApiSchema.status(201)),
+    success: Schema.Struct({ created: Schema.Boolean }).pipe(
+      HttpApiSchema.status(201)
+    ),
   }),
   Action.make("keyList", {
     description:
@@ -356,7 +408,8 @@ export const Administration = [
     success: ClientListResult,
   }),
   Action.make("createClient", {
-    description: "Register a first-party OAuth client. Returns its secret once when confidential.",
+    description:
+      "Register a first-party OAuth client. Returns its secret once when confidential.",
     readOnly: false,
     ...owned,
     error: [ProviderRefused, InternalServerError],
@@ -364,10 +417,16 @@ export const Administration = [
     success: ClientCredentials.pipe(HttpApiSchema.status(201)),
   }),
   Action.make("updateClient", {
-    description: "Rename a first-party client or change its redirect URIs and application type.",
+    description:
+      "Rename a first-party client or change its redirect URIs and application type.",
     readOnly: false,
     ...owned,
-    error: [ClientNotFound, ClientIsAutomatic, ProviderRefused, InternalServerError],
+    error: [
+      ClientNotFound,
+      ClientIsAutomatic,
+      ProviderRefused,
+      InternalServerError,
+    ],
     input: ClientUpdateInput,
     success: Client,
   }),
@@ -398,10 +457,16 @@ export const Administration = [
     success: Schema.Struct({ blocked: Schema.Boolean }),
   }),
   Action.make("rotateClientSecret", {
-    description: "Rotate a confidential client secret. Returns the new secret once.",
+    description:
+      "Rotate a confidential client secret. Returns the new secret once.",
     readOnly: false,
     ...owned,
-    error: [ClientNotFound, ClientIsAutomatic, ProviderRefused, InternalServerError],
+    error: [
+      ClientNotFound,
+      ClientIsAutomatic,
+      ProviderRefused,
+      InternalServerError,
+    ],
     input: ClientId,
     success: ClientCredentials,
   }),
@@ -453,7 +518,10 @@ export const Administration = [
     ...owned,
     error: [ProviderRefused, InternalServerError],
     input: ApiKeyInput,
-    success: ApiKey.pipe(Schema.fieldsAssign({ key: Schema.String }), HttpApiSchema.status(201)),
+    success: ApiKey.pipe(
+      Schema.fieldsAssign({ key: Schema.String }),
+      HttpApiSchema.status(201)
+    ),
   }),
   Action.make("updateApiKey", {
     description: "Update an API key’s name, permissions or enabled state.",
@@ -473,12 +541,15 @@ export const Administration = [
   }),
 ] as const;
 
-type ActionError = [...typeof IssuerActions, ...typeof Administration][number]["error"][number];
+type ActionError = [
+  ...typeof IssuerActions,
+  ...typeof Administration,
+][number]["error"][number];
 
 export const errors = [
   ...new Set([
     ...[...IssuerActions, ...Administration].flatMap(
-      (action): ReadonlyArray<ActionError> => action.error,
+      (action): readonly ActionError[] => action.error
     ),
     ...undecided,
     UnreadableRequest,

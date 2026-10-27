@@ -19,17 +19,17 @@ Without Docker: `vp install --frozen-lockfile && vp run build && vp run start`, 
 
 Open the configured origin, create the owner account, and add a resource. Do this on the private network before exposing the service.
 
-| Variable                               | Meaning                                                                                                                                                                                                                                                                                                               |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLANKERAUTH_BASE_URL`                 | Public origin without a path. HTTPS unless loopback or `CLANKERAUTH_ALLOW_INSECURE_HTTP`. The OAuth issuer is `CLANKERAUTH_BASE_URL/api/auth`.                                                                                                                                                                        |
-| `CLANKERAUTH_BETTER_AUTH_SECRET`       | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups.                                                                                                                                                                                |
-| `CLANKERAUTH_DATABASE`                 | SQLite file, default `data/clankerauth.sqlite`. Persist the whole directory. The container defaults to `/data/clankerauth.sqlite`.                                                                                                                                                                                    |
-| `CLANKERAUTH_MCP_ALLOWED_ORIGINS`      | Comma-separated additional browser origins allowed to call administration MCP. Exact HTTPS origins, or loopback HTTP for development; defaults to none.                                                                                                                                                               |
-| `CLANKERAUTH_HOST`, `CLANKERAUTH_PORT` | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`.                                                                                                                                                                                                                            |
-| `CLANKERAUTH_TRUST_PROXY`              | `true` when a reverse proxy sets `X-Forwarded-For`; the last hop becomes the client address for rate limiting. Default `false`.                                                                                                                                                                                       |
-| `CLANKERAUTH_ALLOW_INSECURE_HTTP`      | `true` permits a plain-HTTP issuer and MCP origins beyond loopback, for private networks without TLS. Default `false`.                                                                                                                                                                                                |
-| `CLANKERAUTH_COOKIE_DOMAIN`            | Parent domain of `CLANKERAUTH_BASE_URL`, for example `home.example`, that the forward-auth cookie is shared with. Required for forward auth; without it the routes are not served.                                                                                                                                    |
-| `OTEL_*`                               | Standard [OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/): set `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces, metrics and logs to a collector; headers, timeouts and `OTEL_SDK_DISABLED` are honoured. Unset means no telemetry is exported. |
+| Variable | Meaning |
+| --- | --- |
+| `CLANKERAUTH_BASE_URL` | Public origin without a path. HTTPS unless loopback or `CLANKERAUTH_ALLOW_INSECURE_HTTP`. The OAuth issuer is `CLANKERAUTH_BASE_URL/api/auth`. |
+| `CLANKERAUTH_BETTER_AUTH_SECRET` | At least 32 random characters, for example `openssl rand -hex 32`. Encrypts signing keys and signs cookies; keep it with your backups. |
+| `CLANKERAUTH_DATABASE` | SQLite file, default `data/clankerauth.sqlite`. Persist the whole directory. The container defaults to `/data/clankerauth.sqlite`. |
+| `CLANKERAUTH_MCP_ALLOWED_ORIGINS` | Comma-separated additional browser origins allowed to call administration MCP. Exact HTTPS origins, or loopback HTTP for development; defaults to none. |
+| `CLANKERAUTH_HOST`, `CLANKERAUTH_PORT` | Bind address and port, default `127.0.0.1:3000`. The container defaults to `0.0.0.0:3000`. |
+| `CLANKERAUTH_TRUST_PROXY` | `true` when a reverse proxy sets `X-Forwarded-For`; the last hop becomes the client address for rate limiting. Default `false`. |
+| `CLANKERAUTH_ALLOW_INSECURE_HTTP` | `true` permits a plain-HTTP issuer and MCP origins beyond loopback, for private networks without TLS. Default `false`. |
+| `CLANKERAUTH_COOKIE_DOMAIN` | Parent domain of `CLANKERAUTH_BASE_URL`, for example `home.example`, that the forward-auth cookie is shared with. Required for forward auth; without it the routes are not served. |
+| `OTEL_*` | Standard [OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/): set `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces, metrics and logs to a collector; headers, timeouts and `OTEL_SDK_DISABLED` are honoured. Unset means no telemetry is exported. |
 
 Run it behind a reverse proxy with TLS. The server uses `CLANKERAUTH_BASE_URL` as its canonical origin and ignores forwarded host and protocol headers, except on `/forward-auth`, where they only decide where a browser returns after login. Rate limits key on the direct peer address unless `CLANKERAUTH_TRUST_PROXY=true`, in which case the last `X-Forwarded-For` hop set by your proxy is used. Run one instance per database; SQLite runs in WAL mode on a local filesystem. `/healthz` reports database connectivity. Back up by stopping the server and copying the database directory, or use SQLite's backup API while running. There is no password recovery: keep the owner password in a password manager, and keep the database and secret together.
 
@@ -73,7 +73,10 @@ Set `CLANKERAUTH_COOKIE_DOMAIN` to the domain the issuer and the apps share, her
 Verify access tokens with Better Auth's helper, pinning issuer and audience:
 
 ```ts
-import { requestToResourceInput, verifyAccessTokenRequest } from "better-auth/oauth2";
+import {
+  requestToResourceInput,
+  verifyAccessTokenRequest,
+} from "better-auth/oauth2";
 
 const claims = await verifyAccessTokenRequest(requestToResourceInput(request), {
   jwksUrl: "https://clankerauth.internal/api/auth/jwks",
@@ -110,9 +113,12 @@ A list is valid for 24 hours from `iat`, and the SDK reads the next one after a 
 vp install --frozen-lockfile
 vp -C apps/web exec playwright install chromium
 vp run dev      # dashboard on :3000, API on :3001, state in .dev/
+vp check       # format, lint and type check (vp check --fix applies the fixes)
 vp run ready    # format, lint, types, builds, all tests
 vp run test:lint # lint-policy regression fixtures
 ```
+
+Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with the Effect and Foldkit presets, configured in `oxlint.config.ts` and `oxfmt.config.ts`, which name every exception and its reason.
 
 - `packages/admin-api`: the issuer administration contract defined with effect-actions, shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
@@ -126,47 +132,22 @@ The packages are public on npm. To release, bump the versions you want to publis
 
 ### effect-actions integration
 
-Custom API operations use
-[`@gjermundgaraba/effect-actions`](https://github.com/gjermundgaraba/effect-actions)
-and are exposed at `POST /api/<action>`. No-input actions take
-`{}`; create actions return HTTP 201. OAuth protocol endpoints and the
-operational `GET /healthz` endpoint are separate.
+Custom API operations use [`@gjermundgaraba/effect-actions`](https://github.com/gjermundgaraba/effect-actions) and are exposed at `POST /api/<action>`. No-input actions take `{}`; create actions return HTTP 201. OAuth protocol endpoints and the operational `GET /healthz` endpoint are separate.
 
-| Action                 | Access                                                                                     | Transport |
-| ---------------------- | ------------------------------------------------------------------------------------------ | --------- |
-| `setupStatus`          | Public                                                                                     | HTTP      |
-| `setupOwner`           | Public; succeeds only before an owner exists                                               | HTTP      |
-| `keyList`              | Public; entries are sealed to the keys they describe                                       | HTTP      |
-| Administration actions | Owner session cookie (SameSite), at `POST /api/<action>`                                   | HTTP      |
-| Administration actions | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `POST /api/owner/<action>` | HTTP      |
-| Administration tools   | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `/mcp`                     | MCP       |
+| Action | Access | Transport |
+| --- | --- | --- |
+| `setupStatus` | Public | HTTP |
+| `setupOwner` | Public; succeeds only before an owner exists | HTTP |
+| `keyList` | Public; entries are sealed to the keys they describe | HTTP |
+| Administration actions | Owner session cookie (SameSite), at `POST /api/<action>` | HTTP |
+| Administration actions | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `POST /api/owner/<action>` | HTTP |
+| Administration tools | OAuth access token or API key for `<CLANKERAUTH_BASE_URL>/`, at `/mcp` | MCP |
 
-A token or key needs `clankerauth:read` to list and `clankerauth:write` for everything else,
-over HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding,
-`POST /api/<action>`; `/api/owner/<action>` serves the same owner operations to an access
-token or an administration key, as the `clankerauth` command calls them, and nothing else. The
-dashboard uses the direct typed action client. Each action declares the failures it can
-produce, and each failure names its subject and carries a `message`. Input that does not
-decode, such as a setup password outside 8 to 128 characters, or that decodes but the issuer's
-own checks refuse, answers effect-actions' built-in `InvalidInput` (400), naming the field at
-fault. A client, resource or API key that does not exist answers `ClientNotFound`,
-`ResourceNotFound` or `ApiKeyNotFound` (404) with its identifier; editing or linking a client
-that registered itself answers `ClientIsAutomatic` (409), and a second setup `OwnerExists`
-(409). Input the provider refuses on a rule of its own, such as an invalid email or redirect
-URI, answers `ProviderRefused` (400). Data the issuer cannot read answers sanitized
-`InternalServerError` JSON (500). MCP uses native tool errors: declared domain
-failures are JSON text with `isError: true`, while schema failures use native
-validation/internal-error messages. Successful tool results return the action's output
-as `structuredContent`.
+A token or key needs `clankerauth:read` to list and `clankerauth:write` for everything else, over HTTP and MCP alike. Issuer actions and the dashboard's owner operations share one binding, `POST /api/<action>`; `/api/owner/<action>` serves the same owner operations to an access token or an administration key, as the `clankerauth` command calls them, and nothing else. The dashboard uses the direct typed action client. Each action declares the failures it can produce, and each failure names its subject and carries a `message`. Input that does not decode, such as a setup password outside 8 to 128 characters, or that decodes but the issuer's own checks refuse, answers effect-actions' built-in `InvalidInput` (400), naming the field at fault. A client, resource or API key that does not exist answers `ClientNotFound`, `ResourceNotFound` or `ApiKeyNotFound` (404) with its identifier; editing or linking a client that registered itself answers `ClientIsAutomatic` (409), and a second setup `OwnerExists` (409). Input the provider refuses on a rule of its own, such as an invalid email or redirect URI, answers `ProviderRefused` (400). Data the issuer cannot read answers sanitized `InternalServerError` JSON (500). MCP uses native tool errors: declared domain failures are JSON text with `isError: true`, while schema failures use native validation/internal-error messages. Successful tool results return the action's output as `structuredContent`.
 
 ### Connect to administration MCP
 
-Point an OAuth-capable MCP client at `<CLANKERAUTH_BASE_URL>/mcp`. The client discovers
-this issuer, registers using CIMD or DCR, and opens the owner login and consent
-page. `clankerauth:read` allows the listing tools: clients, resources, connections and
-API-key metadata. `clankerauth:write` allows every tool, including client and API-key
-creation, and so amounts to access to every resource. Untick `clankerauth:write` on the consent screen to give an agent read-only access. Create and rotate operations return secrets once.
-No separate dashboard grant is needed.
+Point an OAuth-capable MCP client at `<CLANKERAUTH_BASE_URL>/mcp`. The client discovers this issuer, registers using CIMD or DCR, and opens the owner login and consent page. `clankerauth:read` allows the listing tools: clients, resources, connections and API-key metadata. `clankerauth:write` allows every tool, including client and API-key creation, and so amounts to access to every resource. Untick `clankerauth:write` on the consent screen to give an agent read-only access. Create and rotate operations return secrets once. No separate dashboard grant is needed.
 
 For browser-hosted MCP clients, add their origins to the server environment:
 
@@ -174,32 +155,13 @@ For browser-hosted MCP clients, add their origins to the server environment:
 CLANKERAUTH_MCP_ALLOWED_ORIGINS=https://mcp.example.com,http://localhost:5173
 ```
 
-These are exact web origins, without paths, trailing slashes, or wildcards. The
-issuer's own origin is always allowed. The same allowlist governs MCP Origin
-validation and CORS, including preflight and exposed authentication/session headers.
-Actual MCP requests require OAuth bearer tokens; browser clients should omit
-cookies. Native and server clients that send no Origin need no allowlist entry.
-This setting does not grant OAuth access or relax the dashboard's cookie policy.
+These are exact web origins, without paths, trailing slashes, or wildcards. The issuer's own origin is always allowed. The same allowlist governs MCP Origin validation and CORS, including preflight and exposed authentication/session headers. Actual MCP requests require OAuth bearer tokens; browser clients should omit cookies. Native and server clients that send no Origin need no allowlist entry. This setting does not grant OAuth access or relax the dashboard's cookie policy.
 
-The built-in **clankerauth administration** resource is created at startup, identified by
-the issuer's origin root with its trailing slash, `<CLANKERAUTH_BASE_URL>/`, as an
-application's resource is. Its tokens are taken at `/mcp` and `/api/owner/<action>`; the
-dashboard at `/` takes the owner's session cookie alone.
-It is fixed: every start restores its name and scopes, and it cannot be edited or deleted. Protected-resource metadata
-is public at `/.well-known/oauth-protected-resource` and advertises `clankerauth:read`,
-`clankerauth:write` and `offline_access`. Clients must send the resource parameter during authorization
-and token exchange. The authentication challenge requests both administration scopes, so
-the owner decides at consent. Clients
-that want rotating refresh tokens also request `offline_access` and declare the
-`refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh
-access must authorize again after expiration.
+The built-in **clankerauth administration** resource is created at startup, identified by the issuer's origin root with its trailing slash, `<CLANKERAUTH_BASE_URL>/`, as an application's resource is. Its tokens are taken at `/mcp` and `/api/owner/<action>`; the dashboard at `/` takes the owner's session cookie alone. It is fixed: every start restores its name and scopes, and it cannot be edited or deleted. Protected-resource metadata is public at `/.well-known/oauth-protected-resource` and advertises `clankerauth:read`, `clankerauth:write` and `offline_access`. Clients must send the resource parameter during authorization and token exchange. The authentication challenge requests both administration scopes, so the owner decides at consent. Clients that want rotating refresh tokens also request `offline_access` and declare the `refresh_token` grant type. Access tokens last fifteen minutes; clients without refresh access must authorize again after expiration.
 
 Every MCP and `/api/owner` request requires a bearer: an OAuth access token, verified with the same SDK as consumer resource servers, or an administration key. Owner cookies do not authenticate MCP. Tokens must belong to this issuer, owner and resource with `clankerauth:read` or `clankerauth:write`, and their client must still exist and not be blocked; a token with neither gets `insufficient_scope`. Every tool is listed, and a call to a changing tool without `clankerauth:write` is refused with an HTTP 403 `insufficient_scope` challenge naming that scope, on which an OAuth client steps up. **Block client** and deletion therefore end MCP access on the next request; **Revoke** ends refresh, and the current access token expires within fifteen minutes. Unblocking does not restore revoked grants. Browser-session expiry and dashboard sign-out do not revoke administration MCP access.
 
-MCP serves only the stateless **2026-07-28** revision; clients of the earlier,
-session-based revisions are refused. OAuth clients must support resource indicators. Effect's native
-HTTP server streams responses instead of buffering them; historical two-endpoint
-SSE remains unsupported. Request bodies are limited to 64 KiB; larger uploads are disconnected.
+MCP serves only the stateless **2026-07-28** revision; clients of the earlier, session-based revisions are refused. OAuth clients must support resource indicators. Effect's native HTTP server streams responses instead of buffering them; historical two-endpoint SSE remains unsupported. Request bodies are limited to 64 KiB; larger uploads are disconnected.
 
 `GET /openapi.json` is public.
 
@@ -211,41 +173,18 @@ curl "$CLANKERAUTH_BASE_URL/api/listClients" \
 
 ### Administer from the command line
 
-[`@gjermundgaraba/clankerauth`](apps/cli/README.md) is the `clankerauth` command. `clankerauth
-login <url>` signs in as the owner through the browser, and every administration action is a
-command over `/api/owner` printing JSON. `clankerauth login <application URL>` signs in to that
-application's resource too, with the scopes it publishes, and `clankerauth token <application
-URL>` prints a current access token for it, so a script takes its bearer token from
-there instead of keeping an API key. Unattended, it takes an administration key from
-`CLANKERAUTH_TOKEN` instead, with the issuer in `CLANKERAUTH_URL`. A program written with
-Effect takes either from `token` of the SDK's `/credentials` instead, and calls administration in process with
-[`@gjermundgaraba/clankerauth-admin-api`](packages/admin-api/README.md).
+[`@gjermundgaraba/clankerauth`](apps/cli/README.md) is the `clankerauth` command. `clankerauth login <url>` signs in as the owner through the browser, and every administration action is a command over `/api/owner` printing JSON. `clankerauth login <application URL>` signs in to that application's resource too, with the scopes it publishes, and `clankerauth token <application URL>` prints a current access token for it, so a script takes its bearer token from there instead of keeping an API key. Unattended, it takes an administration key from `CLANKERAUTH_TOKEN` instead, with the issuer in `CLANKERAUTH_URL`. A program written with Effect takes either from `token` of the SDK's `/credentials` instead, and calls administration in process with [`@gjermundgaraba/clankerauth-admin-api`](packages/admin-api/README.md).
 
 ### Administer unattended with an API key
 
-A program with no browser and no disk to keep a sign-in on, such as a deployer, administers
-with an **administration key**: an API key granted on the administration resource,
-`<CLANKERAUTH_BASE_URL>/`, with `clankerauth:read`, `clankerauth:write` or both. The owner
-creates it like any other key, in the dashboard or with the CLI:
+A program with no browser and no disk to keep a sign-in on, such as a deployer, administers with an **administration key**: an API key granted on the administration resource, `<CLANKERAUTH_BASE_URL>/`, with `clankerauth:read`, `clankerauth:write` or both. The owner creates it like any other key, in the dashboard or with the CLI:
 
 ```sh
 clankerauth create-api-key --name deployer --expires-at null \
   --permissions '{"https://clankerauth.home.example/":["clankerauth:read","clankerauth:write"]}'
 ```
 
-It is sent as `Authorization: Bearer <key>` to `/api/owner/<action>` or `/mcp`. The
-`clankerauth` command reads it from `CLANKERAUTH_TOKEN`, with the issuer's origin in
-`CLANKERAUTH_URL`, and needs no sign-in then; a program hands the same variable to `token` or
-`authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. The
-issuer reads the key's administration grant from its own database on every request, so
-disabling, deleting, re-scoping or expiring the key ends administration on the next request.
-That grant never enters a key list, so administration's stays empty; grants the same key holds on other resources
-reach their key lists as any key's do, and changes to them apply within about a minute. It acts as the
-owner, so a key with `clankerauth:write` can do everything the owner can over
-administration, including creating, re-scoping and deleting administration keys, itself among
-them; that is allowed, since `clankerauth:write` already amounts to access to every resource.
-It cannot sign in to the dashboard or call its cookie binding, `/api/<action>`. Give it `clankerauth:read` alone
-when a program only lists, and an expiry when it should lapse on its own.
+It is sent as `Authorization: Bearer <key>` to `/api/owner/<action>` or `/mcp`. The `clankerauth` command reads it from `CLANKERAUTH_TOKEN`, with the issuer's origin in `CLANKERAUTH_URL`, and needs no sign-in then; a program hands the same variable to `token` or `authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. The issuer reads the key's administration grant from its own database on every request, so disabling, deleting, re-scoping or expiring the key ends administration on the next request. That grant never enters a key list, so administration's stays empty; grants the same key holds on other resources reach their key lists as any key's do, and changes to them apply within about a minute. It acts as the owner, so a key with `clankerauth:write` can do everything the owner can over administration, including creating, re-scoping and deleting administration keys, itself among them; that is allowed, since `clankerauth:write` already amounts to access to every resource. It cannot sign in to the dashboard or call its cookie binding, `/api/<action>`. Give it `clankerauth:read` alone when a program only lists, and an expiry when it should lapse on its own.
 
 See the breaking [0.27.0](docs/releases/0.27.0.md), [0.26.0](docs/releases/0.26.0.md), [0.25.0](docs/releases/0.25.0.md), [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 

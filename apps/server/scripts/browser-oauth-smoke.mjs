@@ -5,30 +5,39 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+
 import { chromium } from "playwright";
 import { createServer as createViteServer } from "vite";
 
-const directory = await mkdtemp(join(tmpdir(), "clankerauth-browser-oauth-"));
+const directory = await mkdtemp(
+  path.join(tmpdir(), "clankerauth-browser-oauth-")
+);
 
 const fixture = await createViteServer({
   configFile: false,
-  root: fileURLToPath(new URL("./", import.meta.url)),
+  root: import.meta.dirname,
   server: { host: "127.0.0.1", port: 0 },
   plugins: [
     {
       name: "oauth-browser-fixture",
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
-          if (!["/", "/callback"].includes(new URL(request.url, "http://fixture").pathname)) {
-            return next();
+          if (
+            !["/", "/callback"].includes(
+              new URL(request.url, "http://fixture").pathname
+            )
+          ) {
+            next();
+
+            return;
           }
 
           response.setHeader("content-type", "text/html");
           response.end(
-            '<!doctype html><title>MCP browser test</title><script type="module" src="/browser-oauth-client.js"></script>',
+            '<!doctype html><title>MCP browser test</title><script type="module" src="/browser-oauth-client.ts"></script>'
           );
         });
       },
@@ -46,9 +55,11 @@ reservation.listen(0, "127.0.0.1");
 
 await once(reservation, "listening");
 
-const port = reservation.address().port;
+const { port } = reservation.address();
 
-await new Promise((done) => reservation.close(done));
+reservation.close();
+
+await once(reservation, "close");
 
 const issuer = `http://127.0.0.1:${port}`;
 
@@ -63,13 +74,13 @@ const child = spawn(
       ...process.env,
       CLANKERAUTH_BASE_URL: issuer,
       CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-      CLANKERAUTH_DATABASE: join(directory, "clankerauth.sqlite"),
+      CLANKERAUTH_DATABASE: path.join(directory, "clankerauth.sqlite"),
       CLANKERAUTH_HOST: "127.0.0.1",
       CLANKERAUTH_PORT: String(port),
       CLANKERAUTH_MCP_ALLOWED_ORIGINS: clientOrigin,
     },
     stdio: ["ignore", "pipe", "pipe"],
-  },
+  }
 );
 
 let output = "";
@@ -87,13 +98,21 @@ let browser;
 try {
   let ready = false;
 
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (child.exitCode !== null) throw new Error(`Server exited during startup: ${output}`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`Server exited during startup: ${output}`);
+    }
 
     try {
-      ready = (await fetch(`${issuer}/healthz`, { signal: AbortSignal.timeout(500) })).ok;
+      const health = await fetch(`${issuer}/healthz`, {
+        signal: AbortSignal.timeout(500),
+      });
 
-      if (ready) break;
+      ready = health.ok;
+
+      if (ready) {
+        break;
+      }
     } catch {
       // why: the listener may not be bound yet
     }
@@ -118,21 +137,30 @@ try {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const policyViolations = [];
   page.on("console", (message) => {
-    if (message.type() === "error" && message.text().includes("Content Security Policy")) {
+    if (
+      message.type() === "error" &&
+      message.text().includes("Content Security Policy")
+    ) {
       policyViolations.push(message.text());
     }
   });
   const tokenGrants = [];
   page.on("request", (request) => {
     if (request.url() === `${issuer}/api/auth/oauth2/token`) {
-      tokenGrants.push(new URLSearchParams(request.postData()).get("grant_type"));
+      tokenGrants.push(
+        new URLSearchParams(request.postData()).get("grant_type")
+      );
     }
   });
   await page.goto(`${clientOrigin}/?issuer=${encodeURIComponent(issuer)}`);
   await page.waitForFunction(() => Boolean(window.mcpTest));
-  const discovery = await page.evaluate(() => window.mcpTest.inspectDiscovery());
+
+  const discovery = await page.evaluate(
+    async () => await window.mcpTest.inspectDiscovery()
+  );
+
   assert.equal(discovery.status, 401);
-  assert.ok(discovery.challenge);
+  assert.notEqual(discovery.challenge ?? "", "");
   assert.equal(discovery.resource.resource, new URL("/", issuer).href);
   assert.deepEqual(discovery.resource.scopes_supported, [
     "clankerauth:read",
@@ -140,39 +168,69 @@ try {
     "offline_access",
   ]);
 
-  const start = await page.evaluate(() => window.mcpTest.connect());
+  const start = await page.evaluate(async () => await window.mcpTest.connect());
   const authorization = new URL(start.authorizationUrl);
   assert.equal(authorization.origin, issuer);
   assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
   assert.deepEqual(
     new Set(authorization.searchParams.get("scope").split(" ")),
-    new Set(["clankerauth:read", "clankerauth:write", "offline_access"]),
+    new Set(["clankerauth:read", "clankerauth:write", "offline_access"])
   );
   await page.goto(authorization.href);
-  await page.getByLabel("Email", { exact: true }).fill("browser@example.internal");
+  await page
+    .getByLabel("Email", { exact: true })
+    .fill("browser@example.internal");
   await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByRole("button", { name: /sign in/iu }).click();
   await page.getByRole("heading", { name: "Allow this connection?" }).waitFor();
-  await page.getByRole("button", { name: /allow access/i }).click();
+  await page.getByRole("button", { name: /allow access/iu }).click();
   await page.waitForURL(`${clientOrigin}/callback?**`);
   await page.waitForFunction(() => Boolean(window.mcpTest));
-  assert.deepEqual(await page.evaluate(() => window.mcpTest.finishAuth()), {
-    hasRefreshToken: true,
-  });
-  assert.equal((await page.evaluate(() => window.mcpTest.connect())).connected, true);
-  assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("createClient"));
-  const created = await page.evaluate(() => window.mcpTest.createClient());
+  assert.deepEqual(
+    await page.evaluate(async () => await window.mcpTest.finishAuth()),
+    {
+      hasRefreshToken: true,
+    }
+  );
+
+  const reconnected = await page.evaluate(
+    async () => await window.mcpTest.connect()
+  );
+
+  assert.equal(reconnected.connected, true);
+  const tools = await page.evaluate(async () => await window.mcpTest.tools());
+  assert.equal(tools.includes("createClient"), true);
+
+  const created = await page.evaluate(
+    async () => await window.mcpTest.createClient()
+  );
+
   assert.equal(created.isError, false, JSON.stringify(created));
   assert.equal(created.structuredContent.client_name, "Created by browser MCP");
-  const refreshed = await page.evaluate(() => window.mcpTest.refresh());
-  assert.deepEqual(refreshed, { result: "AUTHORIZED", rotated: true, hasAccessToken: true });
+
+  const refreshed = await page.evaluate(
+    async () => await window.mcpTest.refresh()
+  );
+
+  assert.deepEqual(refreshed, {
+    result: "AUTHORIZED",
+    rotated: true,
+    hasAccessToken: true,
+  });
   assert.deepEqual(tokenGrants, ["authorization_code", "refresh_token"]);
-  assert.ok((await page.evaluate(() => window.mcpTest.tools())).includes("listClients"));
-  await page.evaluate(() => window.mcpTest.close());
+
+  const refreshedTools = await page.evaluate(
+    async () => await window.mcpTest.tools()
+  );
+
+  assert.equal(refreshedTools.includes("listClients"), true);
+  await page.evaluate(async () => {
+    await window.mcpTest.close();
+  });
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(policyViolations, []);
   console.log(
-    "Cross-origin browser MCP OAuth passed (PKCE, consent, SDK scopes, mutation, refresh, 2026-07-28 transport).",
+    "Cross-origin browser MCP OAuth passed (PKCE, consent, SDK scopes, mutation, refresh, 2026-07-28 transport)."
   );
 } finally {
   await browser?.close();

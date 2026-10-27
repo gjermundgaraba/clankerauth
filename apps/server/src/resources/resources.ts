@@ -1,33 +1,40 @@
-import { Clock, Context, Effect, Layer, Schema, Scope, Semaphore } from "effect";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   CurrentOwner,
   ResourceNotFound,
-  type ClientAccess,
-  type ClientAccessInput,
-  type ClientAccessResult,
-  type ClientIsAutomatic,
-  type ClientNotFound,
-  type InternalServerError,
-  type ProviderRefused,
-  type ResourceId,
-  type ResourceSummary,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Database, persisted, type Sql } from "../platform/sqlite.ts";
-import { invalidInput, provider, refusal } from "../issuer/errors.ts";
-import { Issuer } from "../issuer/issuer.ts";
+import type {
+  ClientAccess,
+  ClientAccessInput,
+  ClientAccessResult,
+  ClientIsAutomatic,
+  ClientNotFound,
+  InternalServerError,
+  ProviderRefused,
+  ResourceId,
+  ResourceSummary,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
+import type { Scope } from "effect";
+import { Clock, Context, Effect, Layer, Schema, Semaphore } from "effect";
+
 import { clearAuthorization } from "../authorization/authorization.ts";
 import { requireManaged } from "../clients/managed.ts";
+import { invalidInput, provider, refusal } from "../issuer/errors.ts";
+import { Issuer } from "../issuer/issuer.ts";
+import { Database, persisted } from "../platform/sqlite.ts";
+import type { Sql } from "../platform/sqlite.ts";
 import {
   accessForClient,
   protocolScopes,
   ResourceCatalog,
   scopesOf,
   validateSelection,
-  type ResourceValue,
 } from "./catalog.ts";
+import type { ResourceValue } from "./catalog.ts";
 
-const clientIds = persisted(Schema.Array(Schema.Struct({ clientId: Schema.String })));
+const clientIds = persisted(
+  Schema.Array(Schema.Struct({ clientId: Schema.String }))
+);
 
 const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
@@ -42,24 +49,40 @@ const canonical = (identifier: string) => {
   }
 };
 
-const validateInput = Effect.fn("Resources.validateInput")(function* (input: ResourceValue) {
+const validateInput = Effect.fn("Resources.validateInput")(function* (
+  input: ResourceValue
+) {
   const identifier = input.identifier.trim();
   const name = input.name.trim();
   const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
 
-  if (!canonical(identifier))
+  if (!canonical(identifier)) {
     return yield* invalidInput(
       ["identifier"],
-      "Resource identifiers must be absolute URIs in canonical form, without a fragment",
+      "Resource identifiers must be absolute URIs in canonical form, without a fragment"
     );
+  }
 
-  const reserved = input.scopes.findIndex((scope) => protocolScopes.includes(scope.trim()));
+  const reserved = input.scopes.findIndex((scope) =>
+    protocolScopes.includes(scope.trim())
+  );
 
-  if (reserved !== -1)
-    return yield* invalidInput(["scopes", reserved], "offline_access is reserved");
+  if (reserved !== -1) {
+    return yield* invalidInput(
+      ["scopes", reserved],
+      "offline_access is reserved"
+    );
+  }
 
   return { identifier, name, scopes } satisfies ResourceValue;
 });
+
+const reserved = (resource: typeof ResourceSummary.Type | undefined) =>
+  resource?.builtIn === true
+    ? Effect.fail(
+        invalidInput(["identifier"], "The administration Resource is fixed")
+      )
+    : Effect.void;
 
 type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
@@ -68,18 +91,21 @@ export class Resources extends Context.Service<
   Resources,
   {
     readonly get: (
-      input: typeof ResourceId.Type,
-    ) => Effect.Effect<typeof ResourceSummary.Type, InternalServerError | ResourceNotFound>;
+      input: typeof ResourceId.Type
+    ) => Effect.Effect<
+      typeof ResourceSummary.Type,
+      InternalServerError | ResourceNotFound
+    >;
     /** Creates the resource, or updates the one with its identifier. */
     readonly put: (
-      input: ResourceValue,
+      input: ResourceValue
     ) => Effect.Effect<
       { resource: ResourceValue; created: boolean },
       Refusal,
       CurrentOwner | Scope.Scope
     >;
     readonly delete: (
-      input: typeof ResourceId.Type,
+      input: typeof ResourceId.Type
     ) => Effect.Effect<
       { deleted: boolean },
       InternalServerError | Action.InvalidInput | ResourceNotFound,
@@ -87,15 +113,18 @@ export class Resources extends Context.Service<
     >;
     /** Links a managed client to exactly these resources, clearing what removed links allowed. */
     readonly setAccess: (
-      input: typeof ClientAccessInput.Type,
+      input: typeof ClientAccessInput.Type
     ) => Effect.Effect<
       typeof ClientAccessResult.Type,
-      InternalServerError | Action.InvalidInput | ClientNotFound | ClientIsAutomatic
+      | InternalServerError
+      | Action.InvalidInput
+      | ClientNotFound
+      | ClientIsAutomatic
     >;
     /** `setAccess` for a client this issuer has just registered, so managed. */
     readonly link: (
       clientId: string,
-      identifiers: readonly string[],
+      identifiers: readonly string[]
     ) => Effect.Effect<
       ReadonlyArray<typeof ClientAccess.Type>,
       InternalServerError | Action.InvalidInput
@@ -109,21 +138,23 @@ export class Resources extends Context.Service<
       const { auth, publishScopes } = yield* Issuer;
       const catalog = yield* ResourceCatalog;
       const mutating = yield* Semaphore.make(1);
-      const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => mutating.withPermit(effect);
+
+      const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        mutating.withPermit(effect);
 
       // why: the provider reads each client's stored scopes; SQL rebuilds them without a session
       const syncClient = Effect.fn("Resources.syncClient")(function* (
         query: Sql,
         resources: readonly ResourceValue[],
-        clientId: string,
+        clientId: string
       ) {
         const links = yield* accessForClient(clientId, query);
 
         const scopes = JSON.stringify(
           scopesOf(
             resources,
-            links.map((link) => link.resource),
-          ),
+            links.map((link) => link.resource)
+          )
         );
 
         yield* query`UPDATE oauthClient SET scopes = ${scopes}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId} AND scopes IS NOT ${scopes}`;
@@ -131,53 +162,61 @@ export class Resources extends Context.Service<
 
       // why: resource and client-scope writes are separate; resync heals a failure between them
       const synchronize = Effect.fn("Resources.synchronize")(function* () {
-        const resources = yield* catalog.list();
+        const resources = yield* catalog.list;
 
         const scopes = scopesOf(
           resources,
-          resources.map((resource) => resource.identifier),
+          resources.map((resource) => resource.identifier)
         );
 
         yield* publishScopes(scopes);
         yield* sql`UPDATE oauthClient SET scopes = ${JSON.stringify(scopes)}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE userId IS NULL AND scopes IS NOT ${JSON.stringify(scopes)}`;
 
         for (const client of yield* clientIds(
-          yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NOT NULL ORDER BY clientId`,
-        ))
+          yield* sql`SELECT clientId FROM oauthClient WHERE userId IS NOT NULL ORDER BY clientId`
+        )) {
           yield* syncClient(sql, resources, client.clientId);
+        }
       });
 
-      const reserved = (resource: typeof ResourceSummary.Type | undefined) =>
-        resource?.builtIn
-          ? Effect.fail(invalidInput(["identifier"], "The administration Resource is fixed"))
-          : Effect.void;
-
-      const providerHeaders = Effect.flatMap(CurrentOwner, (owner) => owner.providerHeaders);
+      const providerHeaders = Effect.flatMap(
+        CurrentOwner,
+        (owner) => owner.providerHeaders
+      );
 
       yield* synchronize();
 
       const link = Effect.fn("Resources.link")(function* (
         clientId: string,
-        identifiers: readonly string[],
+        identifiers: readonly string[]
       ) {
-        const resources = yield* catalog.list();
+        const resources = yield* catalog.list;
         yield* validateSelection(resources, identifiers);
         const now = yield* Clock.currentTimeMillis;
 
         yield* transaction((query) =>
           Effect.gen(function* () {
-            const previous = (yield* accessForClient(clientId, query)).map((link) => link.resource);
+            const previous = (yield* accessForClient(clientId, query)).map(
+              ({ resource }) => resource
+            );
 
-            for (const identifier of previous.filter((id) => !identifiers.includes(id))) {
+            for (const identifier of previous.filter(
+              (id) => !identifiers.includes(id)
+            )) {
               yield* query`DELETE FROM oauthClientResource WHERE clientId = ${clientId} AND resourceId = ${identifier}`;
-              yield* clearAuthorization(query, { clientId, resource: identifier });
+              yield* clearAuthorization(query, {
+                clientId,
+                resource: identifier,
+              });
             }
 
-            for (const identifier of identifiers)
+            for (const identifier of identifiers) {
               yield* query`INSERT OR IGNORE INTO oauthClientResource (id, clientId, resourceId, createdAt)
                 VALUES (${crypto.randomUUID()}, ${clientId}, ${identifier}, ${new Date(now).toISOString()})`;
+            }
+
             yield* syncClient(query, resources, clientId);
-          }),
+          })
         );
 
         return yield* accessForClient(clientId, sql);
@@ -185,7 +224,9 @@ export class Resources extends Context.Service<
 
       return {
         link,
-        get: Effect.fn("Resources.get")(function* ({ identifier }: typeof ResourceId.Type) {
+        get: Effect.fn("Resources.get")(function* ({
+          identifier,
+        }: typeof ResourceId.Type) {
           const resource = yield* catalog.get(identifier);
 
           return resource ?? (yield* ResourceNotFound.of(identifier));
@@ -199,41 +240,53 @@ export class Resources extends Context.Service<
 
           if (existing === undefined) {
             yield* transaction((query) =>
-              clearAuthorization(query, { resource: resource.identifier }),
+              clearAuthorization(query, { resource: resource.identifier })
             );
             yield* provider(
-              () =>
-                auth.api.adminCreateOAuthResource({
+              async () =>
+                await auth.api.adminCreateOAuthResource({
                   headers,
-                  body: { identifier: resource.identifier, name: resource.name, allowedScopes },
+                  body: {
+                    identifier: resource.identifier,
+                    name: resource.name,
+                    allowedScopes,
+                  },
                 }),
-              { refused: refusal },
+              { refused: refusal }
             );
-          } else
+          } else {
             yield* provider(
-              () =>
-                auth.api.adminUpdateOAuthResource({
+              async () =>
+                await auth.api.adminUpdateOAuthResource({
                   headers,
                   params: resourceParams(resource.identifier),
                   body: { name: resource.name, allowedScopes },
                 }),
-              { refused: refusal },
+              { refused: refusal }
             );
+          }
 
           yield* synchronize();
 
           return { resource, created: existing === undefined };
         }, serialized),
-        delete: Effect.fn("Resources.delete")(function* ({ identifier }: typeof ResourceId.Type) {
+        delete: Effect.fn("Resources.delete")(function* ({
+          identifier,
+        }: typeof ResourceId.Type) {
           yield* reserved(yield* catalog.get(identifier));
           const headers = yield* providerHeaders;
 
           yield* provider(
-            () =>
-              auth.api.adminDeleteOAuthResource({ headers, params: resourceParams(identifier) }),
-            { missing: () => ResourceNotFound.of(identifier) },
+            async () =>
+              await auth.api.adminDeleteOAuthResource({
+                headers,
+                params: resourceParams(identifier),
+              }),
+            { missing: () => ResourceNotFound.of(identifier) }
           );
-          yield* transaction((query) => clearAuthorization(query, { resource: identifier }));
+          yield* transaction((query) =>
+            clearAuthorization(query, { resource: identifier })
+          );
           yield* synchronize();
 
           return { deleted: true };
@@ -247,6 +300,6 @@ export class Resources extends Context.Service<
           return { clientAccess: yield* link(clientId, identifiers) };
         }),
       };
-    }),
+    })
   );
 }

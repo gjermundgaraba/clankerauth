@@ -10,6 +10,7 @@
  * endpoint of a binding naming it then declares, and a binding nothing.
  */
 import { Data, Schema } from "effect";
+
 import type { Principal } from "./verify.ts";
 
 /**
@@ -21,7 +22,9 @@ export class Unauthorized extends Data.TaggedError("Unauthorized")<{
 }> {
   declare readonly cause?: unknown;
 
-  constructor(options: { readonly message?: string; readonly cause?: unknown } = {}) {
+  constructor(
+    options: { readonly message?: string; readonly cause?: unknown } = {}
+  ) {
     super({ message: options.message ?? "Authentication required" });
     Object.defineProperty(this, "cause", { value: options.cause });
   }
@@ -33,14 +36,20 @@ export class Unauthorized extends Data.TaggedError("Unauthorized")<{
  * `Authentication.make("notes.Login", CurrentPrincipal, { error: ProviderUnavailable })`.
  * Its public response is the schema. Diagnostic causes are internal, non-enumerable fields.
  */
-export class ProviderUnavailable extends Schema.TaggedError<ProviderUnavailable>()(
+export class ProviderUnavailable extends Schema.TaggedError<
+  ProviderUnavailable,
+  { readonly brand: unique symbol }
+>()(
   "ProviderUnavailable",
   { operation: Schema.String },
-  { httpApiStatus: 503 },
+  { httpApiStatus: 503 }
 ) {
   declare readonly cause?: unknown;
 
-  constructor(options: { readonly operation: string; readonly cause?: unknown }) {
+  constructor(options: {
+    readonly operation: string;
+    readonly cause?: unknown;
+  }) {
     super({ operation: options.operation });
     Object.defineProperty(this, "cause", { value: options.cause });
   }
@@ -58,10 +67,13 @@ export class InsufficientScope extends Data.TaggedError("InsufficientScope")<{
   readonly actor: Principal["actor"];
 }> {}
 
-export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
-  "ConfigurationError",
-  { message: Schema.String },
-) {}
+export class ConfigurationError extends Schema.TaggedError<
+  ConfigurationError,
+  { readonly brand: unique symbol }
+>()("ConfigurationError", { message: Schema.String }) {}
 
 /** What verification fails with. */
-export type AuthenticationError = Unauthorized | InsufficientScope | ProviderUnavailable;
+export type AuthenticationError =
+  | Unauthorized
+  | InsufficientScope
+  | ProviderUnavailable;

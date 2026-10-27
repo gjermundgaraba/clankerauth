@@ -8,8 +8,14 @@
  * and that header is what tells the issuer whether a request may be redirected through
  * sign-in. Relaying the browser's own header is the whole point of the check.
  */
+import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
-import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
+import type {
+  IncomingHttpHeaders,
+  IncomingMessage,
+  Server,
+  ServerResponse,
+} from "node:http";
 import type { Duplex } from "node:stream";
 
 /** Paths a caller reaches with its own bearer, or with none at all. */
@@ -46,8 +52,9 @@ export interface CheckedRequest {
 }
 
 /** Whether a resource option selects per request path rather than naming one resource. */
-const isPerPath = (resource: CheckOptions["resource"]): resource is (path: string) => string =>
-  typeof resource === "function";
+const isPerPath = (
+  resource: CheckOptions["resource"]
+): resource is (path: string) => string => typeof resource === "function";
 
 const pathOf = (target: string) => {
   const stop = target.search(/[?#]/u);
@@ -55,8 +62,13 @@ const pathOf = (target: string) => {
   return stop === -1 ? target : target.slice(0, stop);
 };
 
-const headerValue = (value: string | ReadonlyArray<string> | undefined) =>
-  value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value);
+const headerValue = (value: string | readonly string[] | undefined) => {
+  if (value === undefined) {
+    return "";
+  }
+
+  return Array.isArray(value) ? value.join(", ") : String(value);
+};
 
 /**
  * Ask the issuer whether one request may proceed. Rejects instead of deciding when the
@@ -70,57 +82,65 @@ export const check = (options: CheckOptions) => {
   const resourceFor = (path: string) =>
     isPerPath(options.resource) ? options.resource(path) : options.resource;
 
-  return (request: CheckedRequest): Promise<Decision> =>
-    new Promise<Decision>((resolve, reject) => {
-      const uri = request.url ?? "/";
-      const url = new URL("/forward-auth", options.issuer);
-      url.searchParams.set("resource", resourceFor(pathOf(uri)));
+  return async (request: CheckedRequest): Promise<Decision> => {
+    const { promise, resolve, reject } = Promise.withResolvers<Decision>();
+    const uri = request.url ?? "/";
+    const url = new URL("/forward-auth", options.issuer);
+    url.searchParams.set("resource", resourceFor(pathOf(uri)));
 
-      const outgoing = httpRequest(
-        url,
-        {
-          headers: {
-            cookie: headerValue(request.headers.cookie),
-            "sec-fetch-mode": headerValue(request.headers["sec-fetch-mode"]),
-            "x-forwarded-proto": app.protocol.slice(0, -1),
-            "x-forwarded-host": app.host,
-            "x-forwarded-uri": uri,
-          },
+    const outgoing = httpRequest(
+      url,
+      {
+        headers: {
+          cookie: headerValue(request.headers.cookie),
+          "sec-fetch-mode": headerValue(request.headers["sec-fetch-mode"]),
+          "x-forwarded-proto": app.protocol.slice(0, -1),
+          "x-forwarded-host": app.host,
+          "x-forwarded-uri": uri,
         },
-        (answer) => {
-          const status = answer.statusCode ?? 502;
-          const { authorization, location } = answer.headers;
+      },
+      (answer) => {
+        const status = answer.statusCode ?? 502;
+        const { authorization, location } = answer.headers;
 
-          if (status === 204 && authorization === undefined) {
-            answer.resume();
-            reject(
-              new Error("Forward auth answered 204 without an Authorization header to forward"),
-            );
-
-            return;
-          }
-
-          const chunks: Buffer[] = [];
-          answer.on("data", (chunk: Buffer) => chunks.push(chunk));
-          answer.on("error", reject);
-          answer.on("end", () =>
-            resolve({
-              status,
-              authorization,
-              location,
-              body: Buffer.concat(chunks),
-              contentType: answer.headers["content-type"],
-            }),
+        if (status === 204 && authorization === undefined) {
+          answer.resume();
+          reject(
+            new Error(
+              "Forward auth answered 204 without an Authorization header to forward"
+            )
           );
-        },
-      );
 
-      outgoing.setTimeout(timeout, () => {
-        outgoing.destroy(new Error(`Forward auth did not answer within ${timeout}ms`));
-      });
-      outgoing.on("error", reject);
-      outgoing.end();
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        answer.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        answer.on("error", reject);
+        answer.on("end", () => {
+          resolve({
+            status,
+            authorization,
+            location,
+            body: Buffer.concat(chunks),
+            contentType: answer.headers["content-type"],
+          });
+        });
+      }
+    );
+
+    outgoing.setTimeout(timeout, () => {
+      outgoing.destroy(
+        new Error(`Forward auth did not answer within ${timeout}ms`)
+      );
     });
+    outgoing.on("error", reject);
+    outgoing.end();
+
+    return await promise;
+  };
 };
 
 /** The upgrades this edge owns, and where it proxies them once they are checked. */
@@ -149,7 +169,8 @@ export interface EdgeOptions extends CheckOptions {
 const isUnder = (path: string, prefixes: readonly string[]) =>
   prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 
-const toError = (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause)));
+const toError = (cause: unknown) =>
+  cause instanceof Error ? cause : new Error(String(cause));
 
 /**
  * Connect-style middleware: an unauthenticated navigation is redirected through the
@@ -160,47 +181,68 @@ export const middleware = (options: EdgeOptions) => {
   const ask = check(options);
   const publicPaths = options.publicPaths ?? [...defaultPublicPaths];
 
-  return (request: CheckedRequest, response: ServerResponse, next: () => void): void => {
+  return (
+    request: CheckedRequest,
+    response: ServerResponse,
+    next: () => void
+  ): void => {
     const path = pathOf(request.url ?? "/");
 
-    if (request.headers.authorization !== undefined || isUnder(path, publicPaths)) {
+    if (
+      request.headers.authorization !== undefined ||
+      isUnder(path, publicPaths)
+    ) {
       next();
 
       return;
     }
 
-    void ask(request).then(
-      (decision) => {
-        if (decision.status === 204) {
-          request.headers.authorization = decision.authorization;
-          next();
+    const decide = async () => {
+      let decision: Decision;
 
-          return;
-        }
-
-        const headers: Record<string, string> = {};
-
-        if (decision.location !== undefined) headers["location"] = decision.location;
-
-        if (decision.contentType !== undefined) headers["content-type"] = decision.contentType;
-        response.writeHead(decision.status, headers);
-        response.end(decision.body);
-      },
-      (cause: unknown) => {
-        const error = toError(cause);
+      try {
+        decision = await ask(request);
+      } catch (error_) {
+        const error = toError(error_);
         options.onError?.(error);
         response.writeHead(502, { "content-type": "text/plain" });
         response.end(error.message);
-      },
-    );
+
+        return;
+      }
+
+      if (decision.status === 204) {
+        request.headers.authorization = decision.authorization;
+        next();
+
+        return;
+      }
+
+      const headers: Record<string, string> = {};
+
+      if (decision.location !== undefined) {
+        headers["location"] = decision.location;
+      }
+
+      if (decision.contentType !== undefined) {
+        headers["content-type"] = decision.contentType;
+      }
+
+      response.writeHead(decision.status, headers);
+      response.end(decision.body);
+    };
+
+    void decide();
   };
 };
 
 const copyHeaders = (headers: IncomingHttpHeaders) =>
   Object.fromEntries(
     Object.entries(headers).flatMap(([name, value]) =>
-      value === undefined ? [] : [[name, Array.isArray(value) ? value.join(", ") : value]],
-    ),
+      value === undefined
+        ? []
+        : [[name, Array.isArray(value) ? value.join(", ") : value]]
+    )
   );
 
 /**
@@ -214,13 +256,19 @@ export const upgrade = (options: EdgeOptions) => {
 
   return (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
     const path = pathOf(request.url ?? "/");
-    const sockets = options.sockets;
+    const { sockets } = options;
 
-    if (sockets === undefined || !isUnder(path, sockets.paths)) return false;
+    if (sockets === undefined || !isUnder(path, sockets.paths)) {
+      return false;
+    }
+
     const backend = new URL(sockets.backend);
 
     const fail = (status: number, reason: string, error?: Error) => {
-      if (error) options.onError?.(error);
+      if (error) {
+        options.onError?.(error);
+      }
+
       socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     };
 
@@ -242,19 +290,30 @@ export const upgrade = (options: EdgeOptions) => {
       upstream.on("upgrade", (answer, peer, peerHead) => {
         let handshake = "HTTP/1.1 101 Switching Protocols\r\n";
 
-        for (let index = 0; index < answer.rawHeaders.length; index += 2)
+        for (let index = 0; index < answer.rawHeaders.length; index += 2) {
           handshake += `${answer.rawHeaders[index]}: ${answer.rawHeaders[index + 1]}\r\n`;
+        }
+
         socket.write(`${handshake}\r\n`);
 
-        if (peerHead.length) socket.write(peerHead);
+        if (peerHead.length) {
+          socket.write(peerHead);
+        }
 
-        if (head.length) peer.write(head);
+        if (head.length) {
+          peer.write(head);
+        }
+
         peer.on("error", (error: Error) => {
           options.onError?.(error);
           socket.destroy();
         });
-        socket.once("close", () => peer.end());
-        peer.once("close", () => socket.end());
+        socket.once("close", () => {
+          peer.end();
+        });
+        peer.once("close", () => {
+          socket.end();
+        });
         socket.pipe(peer);
         peer.pipe(socket);
       });
@@ -262,27 +321,40 @@ export const upgrade = (options: EdgeOptions) => {
         answer.resume();
         fail(answer.statusCode ?? 502, "Upgrade refused");
       });
-      upstream.on("error", (cause: Error) => fail(502, "Bad Gateway", cause));
+      upstream.on("error", (cause: Error) => {
+        fail(502, "Bad Gateway", cause);
+      });
       upstream.end();
     };
 
-    void ask(request).then(
-      (decision) => {
-        // why: proxying a socket its client left during the check leaks both handshake halves.
-        if (socket.destroyed) return;
+    const decide = async () => {
+      let decision: Decision;
 
-        if (decision.status !== 204 || decision.authorization === undefined) {
-          fail(401, "Unauthorized");
-
-          return;
+      try {
+        decision = await ask(request);
+      } catch (error) {
+        if (!socket.destroyed) {
+          fail(502, "Bad Gateway", toError(error));
         }
 
-        proxy(decision.authorization);
-      },
-      (cause: unknown) => {
-        if (!socket.destroyed) fail(502, "Bad Gateway", toError(cause));
-      },
-    );
+        return;
+      }
+
+      // why: proxying a socket its client left during the check leaks both handshake halves.
+      if (socket.destroyed) {
+        return;
+      }
+
+      if (decision.status !== 204 || decision.authorization === undefined) {
+        fail(401, "Unauthorized");
+
+        return;
+      }
+
+      proxy(decision.authorization);
+    };
+
+    void decide();
 
     return true;
   };
@@ -293,9 +365,12 @@ export const attach = (server: Server, options: EdgeOptions) => {
   const handle = middleware(options);
   const take = upgrade(options);
 
-  server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    take(request, socket, head);
-  });
+  server.on(
+    "upgrade",
+    (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      take(request, socket, head);
+    }
+  );
 
   return handle;
 };
@@ -303,16 +378,24 @@ export const attach = (server: Server, options: EdgeOptions) => {
 /** The development server this plugin attaches to. Structural, so Vite is never imported. */
 export interface DevServerLike {
   readonly middlewares: {
-    use(
-      handler: (request: IncomingMessage, response: ServerResponse, next: () => void) => void,
-    ): void;
+    use: (
+      handler: (
+        request: IncomingMessage,
+        response: ServerResponse,
+        next: () => void
+      ) => void
+    ) => void;
   };
   readonly httpServer?:
     | {
-        on(
+        on: (
           event: "upgrade",
-          listener: (request: IncomingMessage, socket: Duplex, head: Buffer) => void,
-        ): void;
+          listener: (
+            request: IncomingMessage,
+            socket: Duplex,
+            head: Buffer
+          ) => void
+        ) => void;
       }
     | null
     | undefined;
@@ -343,13 +426,16 @@ export const forwardAuth = (options: EdgeOptions) => {
 /** Claim a free loopback port before anything that must know its own origin up front. */
 export const reserveLoopbackPort = async (): Promise<number> => {
   const reservation = createServer();
-  await new Promise<void>((done) => reservation.listen(0, "127.0.0.1", done));
+  const listening = once(reservation, "listening");
+  reservation.listen(0, "127.0.0.1");
+  await listening;
   const address = reservation.address();
 
-  if (!(address instanceof Object)) throw new Error("Could not reserve a loopback port");
-  await new Promise<void>((done, reject) =>
-    reservation.close((error) => (error ? reject(error) : done())),
-  );
+  if (!(address instanceof Object)) {
+    throw new Error("Could not reserve a loopback port");
+  }
+
+  await reservation[Symbol.asyncDispose]();
 
   return address.port;
 };

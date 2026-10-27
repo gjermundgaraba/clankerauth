@@ -1,8 +1,11 @@
 import { Effect } from "effect";
 import { Cookies, HttpRouter, HttpServerResponse } from "effect/http";
+
 import { ResponseCookies } from "../owner/setup.ts";
 
-export const responseCookies = HttpRouter.middleware<{ provides: ResponseCookies }>()((handler) =>
+export const responseCookies = HttpRouter.middleware<{
+  provides: ResponseCookies;
+}>()((handler) =>
   Effect.gen(function* () {
     const pending: string[] = [];
 
@@ -11,7 +14,10 @@ export const responseCookies = HttpRouter.middleware<{ provides: ResponseCookies
     });
 
     return pending.length
-      ? HttpServerResponse.mergeCookies(response, Cookies.fromSetCookie(pending))
+      ? HttpServerResponse.mergeCookies(
+          response,
+          Cookies.fromSetCookie(pending)
+        )
       : response;
-  }),
+  })
 );

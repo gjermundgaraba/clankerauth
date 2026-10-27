@@ -1,33 +1,42 @@
-import { Context, Effect, Layer, Redacted } from "effect";
-import type { Kysely } from "kysely";
-import { getCurrentAdapter } from "@better-auth/core/context";
-import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
 import { apiKey } from "@better-auth/api-key";
-import { jwt, type JwtOptions } from "better-auth/plugins/jwt";
 import { cimd } from "@better-auth/cimd";
+import { getCurrentAdapter } from "@better-auth/core/context";
 import {
   getOAuthProviderState,
   oauthProvider,
-  type ClientMetadataResourceFetch,
 } from "@better-auth/oauth-provider";
-import { getMigrations } from "better-auth/db/migration";
-import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
+import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import {
   administrationIdentifier,
   administrationScopes,
   MAXIMUM_PASSWORD_LENGTH,
   MINIMUM_PASSWORD_LENGTH,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Database, type DatabaseSchema } from "../platform/sqlite.ts";
+import * as KeyList from "@gjermundgaraba/clankerauth-sdk/key-list";
+import { betterAuth } from "better-auth";
+import type { Auth, BetterAuthOptions } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { getAdapter } from "better-auth/db/adapter";
+import { getMigrations } from "better-auth/db/migration";
+import { jwt } from "better-auth/plugins/jwt";
+import type { JwtOptions } from "better-auth/plugins/jwt";
+import { Context, Effect, Layer, Predicate, Redacted } from "effect";
+import type { Kysely } from "kysely";
+
+import { resourceReference } from "../authorization/authorization.ts";
 import { CimdTransport } from "../platform/cimd-transport.ts";
 import { peerHeader } from "../platform/node-http.ts";
-import { resourceReference } from "../authorization/authorization.ts";
-import { exactlyOneResource, protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
+import { Database } from "../platform/sqlite.ts";
+import type { DatabaseSchema } from "../platform/sqlite.ts";
+import {
+  exactlyOneResource,
+  protocolScopes,
+  ResourceCatalog,
+} from "../resources/catalog.ts";
+import { SchemaRepairRequired } from "./errors.ts";
+import { Settings } from "./settings.ts";
+import type { IssuerSettings } from "./settings.ts";
 import { signer } from "./signing.ts";
-import { Settings, type IssuerSettings } from "./settings.ts";
-
-const isString = (value: unknown): value is string => typeof value === "string";
 
 export const accessTokenLifetime = 15 * 60;
 
@@ -40,8 +49,7 @@ const providerOptions = (
   kysely: Kysely<DatabaseSchema>,
   catalog: ResourceCatalog["Service"],
   cimdTransport: ClientMetadataResourceFetch,
-  runCallback: RunCallback,
-  ownerExists: () => Promise<boolean>,
+  runCallback: RunCallback
 ) => {
   const jwtOptions = {
     disableSettingJwtHeader: true,
@@ -57,7 +65,11 @@ const providerOptions = (
       {
         identifier: administrationIdentifier(settings.baseURL),
         name: "clankerauth administration",
-        allowedScopes: [...protocolScopes, administrationScopes.read, administrationScopes.write],
+        allowedScopes: [
+          ...protocolScopes,
+          administrationScopes.read,
+          administrationScopes.write,
+        ],
       },
     ],
     resourceSeedMode: "merge",
@@ -75,25 +87,35 @@ const providerOptions = (
           identifier === undefined ||
           identifiers.length !== 1 ||
           !(await runCallback(catalog.get(identifier)))
-        )
+        ) {
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: exactlyOneResource,
           });
+        }
+
         const clientId = query.get("client_id");
 
-        if (!clientId || !(await runCallback(catalog.hasAccess(clientId, identifier))))
+        if (
+          clientId === null ||
+          clientId === "" ||
+          !(await runCallback(catalog.hasAccess(clientId, identifier)))
+        ) {
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
             error_description: "Client access is required",
           });
+        }
+
         const allowed = await runCallback(catalog.scopesFor(identifiers));
 
-        if (scopes.some((scope) => !allowed.includes(scope)))
+        if (scopes.some((scope) => !allowed.includes(scope))) {
           throw new APIError("BAD_REQUEST", {
             error: "invalid_scope",
-            error_description: "Resource scopes changed; start authorization again",
+            error_description:
+              "Resource scopes changed; start authorization again",
           });
+        }
 
         return resourceReference(identifier);
       },
@@ -131,23 +153,33 @@ const providerOptions = (
       user: {
         create: {
           before: async () => {
-            if (await ownerExists())
-              throw new APIError("CONFLICT", { message: "Setup already completed" });
+            // why: runs inside the provider's sign-up transaction, so it must use that adapter
+            const adapter = await getCurrentAdapter(await getAdapter(options));
+
+            if ((await adapter.count({ model: "user" })) > 0) {
+              throw new APIError("CONFLICT", {
+                message: "Setup already completed",
+              });
+            }
           },
         },
       },
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
+        const body: unknown = ctx.body;
+
         // why: the provider defaults to web clients, which refuse MCP clients' loopback redirects
-        if (ctx.path === "/oauth2/register") {
-          const redirects = ctx.body.redirect_uris;
+        if (ctx.path === "/oauth2/register" && Predicate.isObject(body)) {
+          const redirects = body["redirect_uris"];
 
           if (
-            !ctx.body.application_type &&
+            !Predicate.isTruthy(body["application_type"]) &&
             Array.isArray(redirects) &&
             redirects.some((uri) => {
-              if (!isString(uri)) return false;
+              if (!Predicate.isString(uri)) {
+                return false;
+              }
 
               try {
                 return new URL(uri).protocol !== "https:";
@@ -155,11 +187,12 @@ const providerOptions = (
                 return false;
               }
             })
-          )
-            ctx.body.application_type = "native";
+          ) {
+            body["application_type"] = "native";
+          }
 
           // why: consent picks the resources; the provider would refuse a registration's list
-          delete ctx.body.resources;
+          delete body["resources"];
         }
       }),
     },
@@ -227,45 +260,51 @@ export class Issuer extends Context.Service<
       const catalog = yield* ResourceCatalog;
       const { fetch } = yield* CimdTransport;
       // why: provider callbacks get these services, never a later request's identity or scope
-      const runCallback = Effect.runPromiseWith(yield* Effect.context<never>());
+      const runCallback = Effect.runPromiseWith(yield* Effect.context());
 
       const { options, oauthPlugin } = providerOptions(
         settings,
         kysely,
         catalog,
         fetch,
-        runCallback,
-        // why: runs inside the provider's sign-up transaction, so it must use that adapter
-        async () => {
-          const adapter = await getCurrentAdapter((await auth.$context).adapter);
-
-          return (await adapter.count({ model: "user" })) > 0;
-        },
+        runCallback
       );
 
       // why: migration and initialization cannot be cancelled, so the database must outlive them
-      const { auth, context } = yield* Effect.fn("Auth.initialize")(function* () {
-        const plan = yield* Effect.tryPromise(() => getMigrations(options));
+      const initialized = yield* Effect.gen(function* () {
+        const plan = yield* Effect.tryPromise(
+          async () => await getMigrations(options)
+        );
 
-        if (plan.schemaProblems.length)
-          return yield* Effect.fail(new Error("Database schema requires manual repair"));
-        yield* Effect.tryPromise(() => plan.runMigrations());
+        if (plan.schemaProblems.length) {
+          return yield* new SchemaRepairRequired({
+            message: "Database schema requires manual repair",
+          });
+        }
+
+        yield* Effect.tryPromise(async () => {
+          await plan.runMigrations();
+        });
+
         const auth = betterAuth(options);
-        const context = yield* Effect.tryPromise(() => auth.$context);
+
+        const context = yield* Effect.tryPromise(
+          async () => await auth.$context
+        );
+
         // why: the provider mints a missing signing key on first use, and two first uses mint two.
-        yield* Effect.tryPromise(() => auth.api.getJwks());
+        yield* Effect.tryPromise(async () => await auth.api.getJwks());
 
         return { auth, context };
-      }, Effect.uninterruptible)();
+      }).pipe(Effect.uninterruptible, Effect.withSpan("Auth.initialize"));
 
       return {
-        auth,
-        context,
+        ...initialized,
         publishScopes: (scopes) =>
           Effect.sync(() => {
             oauthPlugin.options.scopes = [...scopes];
           }),
       };
-    }),
+    })
   );
 }

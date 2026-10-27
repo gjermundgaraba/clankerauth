@@ -1,13 +1,14 @@
+import { Tips } from "@gjermundgaraba-designs/pixel-paper";
 import { Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 import { Url } from "foldkit/url";
-import { Tips } from "@gjermundgaraba-designs/pixel-paper";
 
-import * as Dashboard from "./page/dashboard/index.ts";
 import * as Consent from "./page/consent.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";
-import { type AppRoute, urlToAppRoute } from "./route.ts";
+import { urlToAppRoute } from "./route.ts";
+import type { AppRoute } from "./route.ts";
 
 export const Access = defineTaggedUnion({
   SetupRequired: {},

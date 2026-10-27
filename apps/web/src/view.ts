@@ -1,4 +1,3 @@
-import type { Document, Html, HtmlBuilder } from "foldkit/html";
 import {
   Announcer,
   Button,
@@ -9,21 +8,23 @@ import {
   SkipLink,
   Tips,
 } from "@gjermundgaraba-designs/pixel-paper";
+import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import * as Dashboard from "./page/dashboard/index.ts";
 import { Message } from "./message.ts";
-import { type Model, Page, routeOf } from "./model.ts";
+import { Page, routeOf } from "./model.ts";
+import type { Model } from "./model.ts";
 import * as Consent from "./page/consent.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";
 import { PRODUCT, wallCardView } from "./page/wall.ts";
 import {
   AppRoute,
-  type DashboardRoute,
   clientsRouter,
   isDashboardRoute,
   loginRouter,
 } from "./route.ts";
+import type { DashboardRoute } from "./route.ts";
 
 const titled = (title: string): string => `${title} | ${PRODUCT}`;
 
@@ -34,7 +35,7 @@ const dashboardTitle = (route: AppRoute): string =>
   AppRoute.matchOrElse(
     sectionOf(route),
     { Resources: () => titled("Resources"), Keys: () => titled("API keys") },
-    () => titled("Clients"),
+    () => titled("Clients")
   );
 
 const titleOf = (model: Model): string =>
@@ -58,7 +59,7 @@ const startingView = (h: HtmlBuilder<Message>): Html =>
         Loading.view({ isLoading: true, label: "loading" }, h),
       ],
     },
-    h,
+    h
   );
 
 const failedView = (reason: string, h: HtmlBuilder<Message>): Html =>
@@ -76,12 +77,17 @@ const failedView = (reason: string, h: HtmlBuilder<Message>): Html =>
             isDefault: true,
             onClick: Message.ClickedRetryAccess(),
           },
-          h,
+          h
         ),
       ],
-      body: [Outcome.view({ tone: "Error", title: "Unable to continue", body: [reason] }, h)],
+      body: [
+        Outcome.view(
+          { tone: "Error", title: "Unable to continue", body: [reason] },
+          h
+        ),
+      ],
     },
-    h,
+    h
   );
 
 const notFoundView = (h: HtmlBuilder<Message>): Html =>
@@ -90,15 +96,24 @@ const notFoundView = (h: HtmlBuilder<Message>): Html =>
     {
       title: PRODUCT,
       meta: "404",
-      actions: [LinkButton.view({ label: "go to the dashboard", href: clientsRouter() }, h)],
+      actions: [
+        LinkButton.view(
+          { label: "go to the dashboard", href: clientsRouter() },
+          h
+        ),
+      ],
       body: [
         Outcome.view(
-          { tone: "Error", title: "Not found", body: ["Nothing lives at this address."] },
-          h,
+          {
+            tone: "Error",
+            title: "Not found",
+            body: ["Nothing lives at this address."],
+          },
+          h
         ),
       ],
     },
-    h,
+    h
   );
 
 const pageView = (model: Model, h: HtmlBuilder<Message>): Html =>
@@ -143,7 +158,7 @@ const isLiveRegionInDialog = (page: Page): boolean =>
   Page.matchOrElse(
     page,
     { Dashboard: ({ dashboard }) => Dashboard.isDialogOpen(dashboard) },
-    () => false,
+    () => false
   );
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
@@ -160,6 +175,6 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
         view: Tips.view,
         toParentMessage: (message) => Message.GotTipsMessage({ message }),
       }),
-    ],
+    ]
   ),
 });

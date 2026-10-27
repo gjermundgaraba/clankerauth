@@ -1,14 +1,14 @@
 import { defineRule } from "vite-plus/lint/plugins";
-
 import type { ESTree } from "vite-plus/lint/plugins";
 
-type Options = { readonly allow?: ReadonlyArray<string> };
+import { optionList } from "./options.ts";
 
 const runs = (object: string, property: string) =>
   object === "Effect"
     ? /^run[A-Z]/u.test(property)
     : object === "ManagedRuntime" ||
-      ((object === "NodeRuntime" || object === "BunRuntime") && property === "runMain");
+      ((object === "NodeRuntime" || object === "BunRuntime") &&
+        property === "runMain");
 
 export const noManualEffectRunRule = defineRule({
   meta: {
@@ -19,7 +19,7 @@ export const noManualEffectRunRule = defineRule({
     },
     messages: {
       manual:
-        "`{{runner}}` runs an Effect by hand. Return the Effect, or run it in an entry or a bridge that the root vite.config.ts allows.",
+        "`{{runner}}` runs an Effect by hand. Return the Effect, or run it in an entry or a bridge that the root oxlint.config.ts allows.",
     },
     schema: [
       {
@@ -34,17 +34,23 @@ export const noManualEffectRunRule = defineRule({
 
     return {
       Program() {
-        // SAFETY: oxlint checks the options against `meta.schema`.
-        const options = (context.options[0] ?? {}) as Options;
-        allowed = new Set(options.allow ?? []);
+        allowed = new Set(optionList(context.options, "allow"));
       },
       MemberExpression(node: ESTree.MemberExpression) {
-        if (node.object.type !== "Identifier" || node.computed) return;
+        if (node.object.type !== "Identifier" || node.computed) {
+          return;
+        }
 
-        if (node.property.type !== "Identifier") return;
+        if (node.property.type !== "Identifier") {
+          return;
+        }
+
         const property = node.property.name;
 
-        if (!runs(node.object.name, property) || allowed.has(property)) return;
+        if (!runs(node.object.name, property) || allowed.has(property)) {
+          return;
+        }
+
         context.report({
           node,
           messageId: "manual",

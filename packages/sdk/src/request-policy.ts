@@ -44,7 +44,10 @@ const pathOf = (target: string): string => {
   const authority = target.indexOf("://");
   const start = authority === -1 ? 0 : target.indexOf("/", authority + 3);
 
-  if (start === -1) return "/";
+  if (start === -1) {
+    return "/";
+  }
+
   const rest = target.slice(start);
   const stop = rest.search(/[?#]/u);
 
@@ -58,13 +61,21 @@ const forbidden = HttpServerResponse.text("Forbidden", { status: 403 });
  * services, so a Node `upgrade` handler applies the same rule as the router.
  */
 export const make = (options: Options) => {
-  const host = options.publicUrl.host;
-  const origins = new Set([options.publicUrl.origin, ...(options.allowedOrigins ?? [])]);
+  const { host } = options.publicUrl;
+
+  const origins = new Set([
+    options.publicUrl.origin,
+    ...(options.allowedOrigins ?? []),
+  ]);
 
   const allows = (request: Request): boolean => {
-    if (pathOf(request.target) === probePath) return true;
+    if (pathOf(request.target) === probePath) {
+      return true;
+    }
 
-    if (request.host !== host) return false;
+    if (request.host !== host) {
+      return false;
+    }
 
     return request.origin === undefined || origins.has(request.origin);
   };
@@ -83,7 +94,7 @@ export const make = (options: Options) => {
         });
 
         return permitted ? yield* httpEffect : forbidden;
-      }),
+      })
     ),
   };
 };

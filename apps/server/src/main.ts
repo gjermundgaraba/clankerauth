@@ -1,18 +1,19 @@
-import { Effect, Layer } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { Otlp, OtlpSerialization } from "effect/observability";
+
 import { nodeHandler } from "./http/application.ts";
 import { Settings } from "./issuer/settings.ts";
 import { CimdTransport } from "./platform/cimd-transport.ts";
-import { issuerServices } from "./services.ts";
 import { listen } from "./platform/node-http.ts";
+import { issuerServices } from "./services.ts";
 
 process.umask(0o077);
 
-const telemetry = Otlp.layerFromConfig({ resource: { serviceName: "clankerauth" } }).pipe(
-  Layer.provide([FetchHttpClient.layer, OtlpSerialization.layerJson]),
-);
+const telemetry = Otlp.layerFromConfig({
+  resource: { serviceName: "clankerauth" },
+}).pipe(Layer.provide([FetchHttpClient.layer, OtlpSerialization.layerJson]));
 
 const issuer = issuerServices(Settings.layer, CimdTransport.layer);
 
@@ -22,9 +23,12 @@ const program = Effect.scoped(
     const listener = yield* listen(settings.port, settings.host);
     yield* listener.serve(yield* nodeHandler());
     yield* Effect.logInfo("clankerauth ready");
-    yield* Effect.never;
-  }),
+
+    return yield* Effect.never;
+  })
 );
 
 // why: the collector outlives the issuer, so migration and shutdown spans still reach it
-NodeRuntime.runMain(Effect.provide(program, issuer.pipe(Layer.provideMerge(telemetry))));
+NodeRuntime.runMain(
+  Effect.provide(program, issuer.pipe(Layer.provideMerge(telemetry)))
+);

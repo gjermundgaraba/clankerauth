@@ -5,14 +5,22 @@ import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 
-assert.ok(process.argv[2], "Pass the production package directory");
+import { ClientListResult } from "@gjermundgaraba/clankerauth-admin-api";
+import { Schema } from "effect";
 
-const root = resolve(process.argv[2]);
+const packageDirectory = process.argv.at(2);
 
-const directory = mkdtempSync(join(tmpdir(), "clankerauth-package-"));
+assert.ok(
+  packageDirectory !== undefined && packageDirectory !== "",
+  "Pass the production package directory"
+);
+
+const root = path.resolve(packageDirectory);
+
+const directory = mkdtempSync(path.join(tmpdir(), "clankerauth-package-"));
 
 const reservation = createServer();
 
@@ -20,39 +28,48 @@ reservation.listen(0, "127.0.0.1");
 
 await once(reservation, "listening");
 
-const port = reservation.address().port;
+const { port } = reservation.address();
 
-await new Promise((done) => reservation.close(done));
+reservation.close();
+
+await once(reservation, "close");
 
 const baseURL = `http://127.0.0.1:${port}`;
-
-const isString = (value) => Object.prototype.toString.call(value) === "[object String]";
 
 const env = {
   ...process.env,
   CLANKERAUTH_BASE_URL: baseURL,
   CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-  CLANKERAUTH_DATABASE: join(directory, "clankerauth.sqlite"),
+  CLANKERAUTH_DATABASE: path.join(directory, "clankerauth.sqlite"),
   CLANKERAUTH_HOST: "127.0.0.1",
   CLANKERAUTH_PORT: String(port),
 };
 
 const password = randomBytes(24).toString("hex");
 
+/** @type {import("node:child_process").ChildProcess | undefined} */
 let child;
 
-async function start() {
-  child = spawn(process.execPath, [join(root, "dist/main.mjs")], {
+const start = async () => {
+  child = spawn(process.execPath, [path.join(root, "dist/main.mjs")], {
     cwd: directory,
     env,
     stdio: "ignore",
   });
 
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (child.exitCode !== null) throw new Error("Production server exited during startup");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (child.exitCode !== null) {
+      throw new Error("Production server exited during startup");
+    }
 
     try {
-      if ((await fetch(`${baseURL}/healthz`, { signal: AbortSignal.timeout(500) })).ok) return;
+      const health = await fetch(`${baseURL}/healthz`, {
+        signal: AbortSignal.timeout(500),
+      });
+
+      if (health.ok) {
+        return;
+      }
     } catch {
       // why: the listener may not be bound yet
     }
@@ -61,9 +78,9 @@ async function start() {
   }
 
   throw new Error("Production server did not become ready");
-}
+};
 
-async function stop() {
+const stop = async () => {
   if (child && child.exitCode === null && child.signalCode === null) {
     const exited = once(child, "exit");
     child.kill("SIGTERM");
@@ -71,33 +88,85 @@ async function stop() {
   }
 
   child = undefined;
-}
+};
 
-const post = (path, body, headers = {}) =>
-  fetch(baseURL + path, {
+const decodeMetadata = Schema.decodeUnknownSync(
+  Schema.Struct({
+    issuer: Schema.String,
+    client_id_metadata_document_supported: Schema.Boolean,
+    registration_endpoint: Schema.String,
+    authorization_endpoint: Schema.String,
+    token_endpoint: Schema.String,
+    jwks_uri: Schema.String,
+  })
+);
+
+const decodeRegistration = Schema.decodeUnknownSync(
+  Schema.Struct({
+    client_id: Schema.String,
+    client_secret: Schema.optional(Schema.String),
+  })
+);
+
+const decodeProtectedResource = Schema.decodeUnknownSync(
+  Schema.Struct({
+    resource: Schema.String,
+    scopes_supported: Schema.Array(Schema.String),
+  })
+);
+
+const decodeRedirect = Schema.decodeUnknownSync(
+  Schema.Struct({ url: Schema.String })
+);
+
+const decodeTokens = Schema.decodeUnknownSync(
+  Schema.Struct({ access_token: Schema.String, refresh_token: Schema.String })
+);
+
+const decodeToolResult = Schema.decodeUnknownSync(
+  Schema.Struct({
+    result: Schema.Struct({
+      structuredContent: Schema.Struct({ resources: Schema.Unknown }),
+    }),
+  })
+);
+
+const decodeKeys = Schema.decodeUnknownSync(
+  Schema.Struct({ keys: Schema.Array(Schema.Unknown) })
+);
+
+const decodeClients = Schema.decodeUnknownSync(ClientListResult, {
+  onExcessProperty: "error",
+});
+
+const post = async (pathname, body, headers = {}) =>
+  await fetch(baseURL + pathname, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 
-const login = (value) =>
-  post(
+/** @param {string} value The password to sign in with. */
+const login = async (value) =>
+  await post(
     "/api/auth/sign-in/email",
     { email: "package@example.internal", password: value },
-    { origin: baseURL },
+    { origin: baseURL }
   );
 
 try {
   await start();
-  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: true });
+  const required = await post("/api/setupStatus", {});
+  assert.deepEqual(await required.json(), { required: true });
   await stop();
   await start();
-  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: true });
+  const stillRequired = await post("/api/setupStatus", {});
+  assert.deepEqual(await stillRequired.json(), { required: true });
 
   const setup = await post(
     "/api/setupOwner",
     { email: "package@example.internal", password },
-    { origin: baseURL },
+    { origin: baseURL }
   );
 
   assert.equal(setup.status, 201);
@@ -117,7 +186,13 @@ try {
     scopes: ["read"],
   };
 
-  const empty = await (await post("/api/listClients", {}, { cookie, origin: baseURL })).json();
+  const listed = await post(
+    "/api/listClients",
+    {},
+    { cookie, origin: baseURL }
+  );
+
+  const empty = decodeClients(await listed.json());
 
   const builtin = {
     identifier: `${baseURL}/`,
@@ -133,15 +208,23 @@ try {
     origin: baseURL,
   });
 
-  assert.equal(createdResource.status, 200, await createdResource.clone().text());
+  assert.equal(
+    createdResource.status,
+    200,
+    await createdResource.clone().text()
+  );
 
-  const metadata = await (
-    await fetch(`${baseURL}/.well-known/oauth-authorization-server/api/auth`)
-  ).json();
+  const discovery = await fetch(
+    `${baseURL}/.well-known/oauth-authorization-server/api/auth`
+  );
 
+  const metadata = decodeMetadata(await discovery.json());
   assert.equal(metadata.issuer, `${baseURL}/api/auth`);
   assert.equal(metadata.client_id_metadata_document_supported, true);
-  assert.equal(metadata.registration_endpoint, `${baseURL}/api/auth/oauth2/register`);
+  assert.equal(
+    metadata.registration_endpoint,
+    `${baseURL}/api/auth/oauth2/register`
+  );
 
   const registration = await fetch(metadata.registration_endpoint, {
     method: "POST",
@@ -154,15 +237,18 @@ try {
   });
 
   assert.equal(registration.status, 201, await registration.clone().text());
-  const registered = await registration.json();
-  assert.ok(isString(registered.client_id));
+  const registered = decodeRegistration(await registration.json());
   assert.equal(registered.client_secret, undefined);
   const denied = await fetch(`${baseURL}/mcp`, { method: "POST" });
   assert.equal(denied.status, 401);
 
-  const protectedResource = await (
-    await fetch(`${baseURL}/.well-known/oauth-protected-resource`)
-  ).json();
+  const resourceDiscovery = await fetch(
+    `${baseURL}/.well-known/oauth-protected-resource`
+  );
+
+  const protectedResource = decodeProtectedResource(
+    await resourceDiscovery.json()
+  );
 
   assert.equal(protectedResource.resource, builtin.identifier);
   assert.deepEqual(protectedResource.scopes_supported, [
@@ -190,7 +276,12 @@ try {
 
   // why: fetch requests get the provider's redirect descriptor; navigations get a 302
   assert.equal(authorize.status, 200, await authorize.clone().text());
-  const consentUrl = new URL((await authorize.json()).url, baseURL);
+
+  const consentUrl = new URL(
+    decodeRedirect(await authorize.json()).url,
+    baseURL
+  );
+
   assert.equal(consentUrl.pathname, "/consent");
 
   const consent = await post(
@@ -199,11 +290,11 @@ try {
       accept: true,
       oauth_query: consentUrl.search.slice(1),
     },
-    { cookie, origin: baseURL },
+    { cookie, origin: baseURL }
   );
 
   assert.equal(consent.status, 200, await consent.clone().text());
-  const callback = new URL((await consent.json()).url);
+  const callback = new URL(decodeRedirect(await consent.json()).url);
   assert.equal(callback.searchParams.get("state"), "package-smoke");
 
   const tokenResponse = await fetch(metadata.token_endpoint, {
@@ -220,8 +311,7 @@ try {
   });
 
   assert.equal(tokenResponse.status, 200, await tokenResponse.clone().text());
-  const token = await tokenResponse.json();
-  assert.ok(isString(token.refresh_token));
+  const token = decodeTokens(await tokenResponse.json());
 
   const mcp = await fetch(`${baseURL}/mcp`, {
     method: "POST",
@@ -243,64 +333,101 @@ try {
         _meta: {
           "io.modelcontextprotocol/protocolVersion": "2026-07-28",
           "io.modelcontextprotocol/clientCapabilities": {},
-          "io.modelcontextprotocol/clientInfo": { name: "production-smoke", version: "0" },
+          "io.modelcontextprotocol/clientInfo": {
+            name: "production-smoke",
+            version: "0",
+          },
         },
       },
     }),
   });
 
   assert.equal(mcp.status, 200);
-  assert.deepEqual((await mcp.json()).result.structuredContent.resources, [
+  const reply = decodeToolResult(await mcp.json());
+  assert.deepEqual(reply.result.structuredContent.resources, [
     builtin,
     { ...resource, builtIn: false },
   ]);
-  const session = await fetch(`${baseURL}/api/auth/get-session`, { headers: { cookie } });
+
+  const session = await fetch(`${baseURL}/api/auth/get-session`, {
+    headers: { cookie },
+  });
+
   assert.equal(session.status, 200);
   assert.equal(session.headers.has("set-auth-jwt"), false);
 
   const assets = new Set();
 
-  for (const path of ["/", "/resources", "/keys", "/setup", "/login", "/consent"]) {
-    const page = await fetch(baseURL + path);
+  for (const route of [
+    "/",
+    "/resources",
+    "/keys",
+    "/setup",
+    "/login",
+    "/consent",
+  ]) {
+    const page = await fetch(baseURL + route);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /<title>clankerauth<\/title>/);
-    const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
+    assert.match(html, /<title>clankerauth<\/title>/u);
+
+    const references = [
+      ...html.matchAll(/(?:src|href)="(?<asset>\/assets\/[^" ]+)"/gu),
+    ];
+
     assert.ok(references.length > 0);
 
-    for (const [, asset] of references) assets.add(asset);
+    for (const reference of references) {
+      const asset = reference.groups?.["asset"];
+      assert.ok(asset !== undefined, reference[0]);
+      assets.add(asset);
+    }
   }
 
-  for (const asset of assets) assert.equal((await fetch(baseURL + asset)).status, 200);
+  for (const asset of assets) {
+    const served = await fetch(baseURL + asset);
+    assert.equal(served.status, 200);
+  }
 
   const blocked = await post(
     "/api/blockClient",
     { client_id: registered.client_id, blocked: true },
-    { cookie, origin: baseURL },
+    { cookie, origin: baseURL }
   );
 
   assert.equal(blocked.status, 200, await blocked.clone().text());
-  const keys = await (await fetch(metadata.jwks_uri)).json();
-  assert.ok(keys.keys.length > 0);
+  const published = await fetch(metadata.jwks_uri);
+  /** @type {unknown} */
+  const keys = await published.json();
+  assert.ok(decodeKeys(keys).keys.length > 0);
   await stop();
   await start();
-  assert.deepEqual(await (await fetch(metadata.jwks_uri)).json(), keys);
+  const republished = await fetch(metadata.jwks_uri);
+  assert.deepEqual(await republished.json(), keys);
 
-  const persistedClients = await post("/api/listClients", {}, { cookie, origin: baseURL });
+  const persistedClients = await post(
+    "/api/listClients",
+    {},
+    { cookie, origin: baseURL }
+  );
 
   assert.equal(persistedClients.status, 200);
-  const persisted = await persistedClients.json();
-  assert.deepEqual(persisted.resources, [builtin, { ...resource, builtIn: false }]);
+  const persisted = decodeClients(await persistedClients.json());
+  assert.deepEqual(persisted.resources, [
+    builtin,
+    { ...resource, builtIn: false },
+  ]);
   assert.equal(persisted.clients.length, 1);
   assert.equal(persisted.clients[0].client_id, registered.client_id);
   assert.equal(persisted.clients[0].onboarding, "dcr");
   assert.equal(persisted.clients[0].blocked, true);
-  assert.deepEqual(await (await post("/api/setupStatus", {})).json(), { required: false });
+  const completed = await post("/api/setupStatus", {});
+  assert.deepEqual(await completed.json(), { required: false });
 
   const repeatedSetup = await post(
     "/api/setupOwner",
     { email: "another@example.internal", password },
-    { origin: baseURL },
+    { origin: baseURL }
   );
 
   assert.equal(repeatedSetup.status, 409);

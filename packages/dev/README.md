@@ -10,7 +10,13 @@ npm install --save-dev @gjermundgaraba/clankerauth-dev
 import { startDisposableIssuer } from "@gjermundgaraba/clankerauth-dev";
 
 const issuer = await startDisposableIssuer({
-  resources: [{ identifier: "http://127.0.0.1:8080/", name: "Notes", scopes: ["notes:read"] }],
+  resources: [
+    {
+      identifier: "http://127.0.0.1:8080/",
+      name: "Notes",
+      scopes: ["notes:read"],
+    },
+  ],
   client: {
     name: "Notes console",
     redirect: "http://localhost:5173/callback",
@@ -33,10 +39,14 @@ Each call listens on a random loopback port, creates a fresh SQLite database and
 The issuer provisions what a test or a development script would otherwise script by hand against its HTTP API:
 
 ```ts
-const key = await issuer.apiKey({ permissions: { [resource.identifier]: ["notes:read"] } });
+const key = await issuer.apiKey({
+  permissions: { [resource.identifier]: ["notes:read"] },
+});
 
 // Needs a cookieDomain: the forward cookie is what a browser holds.
-const { cookie, cookies } = await issuer.ownerSession("http://app.notes.localhost:5173");
+const { cookie, cookies } = await issuer.ownerSession(
+  "http://app.notes.localhost:5173"
+);
 const token = await issuer.ownerToken({
   resource: resource.identifier,
   appOrigin: "http://app.notes.localhost:5173",
@@ -50,7 +60,11 @@ const token = await issuer.ownerToken({
 Pass `dataDir` and a fixed `port` to keep the issuer's state:
 
 ```ts
-const issuer = await startDisposableIssuer({ ...options, dataDir: ".dev/clankerauth", port: 5174 });
+const issuer = await startDisposableIssuer({
+  ...options,
+  dataDir: ".dev/clankerauth",
+  port: 5174,
+});
 ```
 
 The owner account and password, the signing secret, the registered client and the database are kept in that directory, and provisioning is idempotent, so the next start reuses them: the same sign-in works, API keys minted before still verify, and browser storage keyed by the origin survives. A fixed port is part of that, because the origin is what cookies and registered redirect URIs are keyed by. `close()` leaves the directory alone. Treat it as the whole secret of the workspace and keep it out of version control. `credentials.json` is written and read by this package alone and is validated against its schema on every start, so an edited or truncated file is refused rather than half-read. Without `dataDir`, nothing changes: a temporary directory, a random port, and everything removed by `close()`.
@@ -59,8 +73,18 @@ To develop an app behind forward auth, pass a `cookieDomain`:
 
 ```ts
 const issuer = await startDisposableIssuer({
-  resources: [{ identifier: "http://app.notes.localhost:8080/", name: "Notes", scopes: [] }],
-  client: { name: "Notes console", redirect: "http://localhost:5173/callback", resources: [] },
+  resources: [
+    {
+      identifier: "http://app.notes.localhost:8080/",
+      name: "Notes",
+      scopes: [],
+    },
+  ],
+  client: {
+    name: "Notes console",
+    redirect: "http://localhost:5173/callback",
+    resources: [],
+  },
   cookieDomain: "notes.localhost",
 });
 
@@ -74,7 +98,10 @@ The issuer then serves `/forward-auth?resource=<identifier>`, `/forward-auth/con
 `@gjermundgaraba/clankerauth-dev/edge` is the deployment edge for local development: the `forward_auth` check, and for upgrades a reverse proxy. Do not write one again.
 
 ```ts
-import { forwardAuth, reserveLoopbackPort } from "@gjermundgaraba/clankerauth-dev/edge";
+import {
+  forwardAuth,
+  reserveLoopbackPort,
+} from "@gjermundgaraba/clankerauth-dev/edge";
 
 export default defineConfig({
   plugins: [

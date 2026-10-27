@@ -1,29 +1,66 @@
-import { it } from "@effect/vitest";
-import { Context, Effect, Layer, Schema } from "effect";
+import { createHash, randomBytes } from "node:crypto";
+
 import { documentPaths } from "@clankerauth/web/document-paths";
-import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
+import { it } from "@effect/vitest";
+import {
+  ClientId,
+  ClientListResult,
+  InternalServerError,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import { Context, Effect, Layer, Schema } from "effect";
+import { createLocalJWKSet, jwtVerify } from "jose";
 import { sql as query } from "kysely";
 import { describe, expect } from "vite-plus/test";
-import { createHash, randomBytes } from "node:crypto";
-import { createLocalJWKSet, jwtVerify } from "jose";
+
+import { Issuer, refreshTokenReuseSeconds } from "../src/issuer/issuer.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
+import { peerHeader } from "../src/platform/node-http.ts";
+import { Database } from "../src/platform/sqlite.ts";
+import { ResourceCatalog } from "../src/resources/catalog.ts";
+import {
+  administrationResource,
+  decodeJson,
+  Jwks,
+  Tokens,
+} from "./mcp-oauth-helper.ts";
 import {
   advanceDate,
   cookieJar,
   issuerGeneration,
+  requireStatus,
   testSettings,
   WebApplication,
 } from "./test-issuer.ts";
-import { peerHeader } from "../src/platform/node-http.ts";
-
-import { administrationResource } from "./mcp-oauth-helper.ts";
-import { Database } from "../src/platform/sqlite.ts";
-import { OwnerAccount } from "../src/owner/owner.ts";
-import { Issuer, refreshTokenReuseSeconds } from "../src/issuer/issuer.ts";
-import { ResourceCatalog } from "../src/resources/catalog.ts";
 
 const FormFields = Schema.Record(Schema.String, Schema.String);
 
-type TestRequestBody = typeof Schema.JsonObject.Type;
+const AccessToken = Schema.Struct({ access_token: Schema.String });
+
+const Registered = Schema.Struct({
+  client_id: Schema.String,
+  client_secret: Schema.optionalKey(Schema.String),
+  redirect_uris: Schema.Array(Schema.String),
+  token_endpoint_auth_method: Schema.String,
+});
+
+const Continuation = Schema.Struct({ url: Schema.String });
+
+const Discovery = Schema.Struct({
+  scopes_supported: Schema.Array(Schema.String),
+});
+
+const Session = Schema.Struct({
+  session: Schema.Struct({ expiresAt: Schema.String }),
+});
+
+const Refusal = Schema.Struct({ _tag: Schema.String, issues: Schema.Unknown });
+
+class Rejected extends Schema.TaggedError<
+  Rejected,
+  { readonly brand: unique symbol }
+>()("Rejected", { cause: Schema.Unknown }) {}
+
+type TestRequestBody = Schema.JsonObject;
 
 const password = "test-only owner password 8rS!";
 
@@ -35,25 +72,32 @@ const resourceB = "https://reports.internal/api";
 
 const baseURL = "http://localhost:3000";
 
-class CookieJar extends Context.Service<CookieJar, ReturnType<typeof cookieJar>>()(
-  "service.test/CookieJar",
-) {}
+class CookieJar extends Context.Service<
+  CookieJar,
+  ReturnType<typeof cookieJar>
+>()("service.test/CookieJar") {}
 
-const generation = () => WebApplication.layer.pipe(Layer.provideMerge(issuerGeneration()));
+const generation = () =>
+  WebApplication.layer.pipe(Layer.provideMerge(issuerGeneration()));
 
-const browser = () => Layer.merge(testSettings({ baseURL }), Layer.sync(CookieJar, cookieJar));
+const browser = () =>
+  Layer.merge(testSettings({ baseURL }), Layer.sync(CookieJar, cookieJar));
 
 const onGeneration = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provide(effect, generation());
 
 const serviceIssuer = () => generation().pipe(Layer.provideMerge(browser()));
 
-const sql = (strings: TemplateStringsArray, ...parameters: readonly unknown[]) =>
+const sql = (
+  strings: TemplateStringsArray,
+  ...parameters: readonly unknown[]
+) =>
   Effect.flatMap(Database, (database) => database.sql(strings, ...parameters));
 
-const json = (response: Response) => Effect.promise(() => response.json());
+const json = decodeJson(Schema.Json);
 
-const text = (response: Response) => Effect.promise(() => response.clone().text());
+const text = (response: Response) =>
+  Effect.promise(async () => await response.clone().text());
 
 const request = (
   path: string,
@@ -63,7 +107,7 @@ const request = (
     form?: boolean;
     origin?: string;
     authorization?: string | undefined;
-  } = {},
+  } = {}
 ) =>
   Effect.gen(function* () {
     const handle = yield* WebApplication;
@@ -74,60 +118,82 @@ const request = (
       [peerHeader]: "127.0.0.1",
     });
 
-    if (options.authorization) headers.set("authorization", options.authorization);
+    if (options.authorization !== undefined) {
+      headers.set("authorization", options.authorization);
+    }
 
-    if (!options.anonymous) headers.set("cookie", cookies.header());
-
-    if (body)
-      headers.set(
-        "content-type",
-        options.form ? "application/x-www-form-urlencoded" : "application/json",
-      );
+    if (options.anonymous !== true) {
+      headers.set("cookie", cookies.header());
+    }
 
     let encoded: string | null = null;
 
     if (body !== undefined) {
-      if (options.form) {
-        encoded = new URLSearchParams(Schema.decodeUnknownSync(FormFields)(body)).toString();
-      } else {
-        encoded = JSON.stringify(body);
-      }
+      headers.set(
+        "content-type",
+        options.form === true
+          ? "application/x-www-form-urlencoded"
+          : "application/json"
+      );
+
+      encoded =
+        options.form === true
+          ? new URLSearchParams(
+              yield* Schema.decodeUnknownEffect(FormFields)(body)
+            ).toString()
+          : JSON.stringify(body);
     }
 
-    const response = yield* Effect.promise(() =>
-      handle(
-        new Request(new URL(path, baseURL), {
-          method: body ? "POST" : "GET",
-          headers,
-          body: encoded,
-        }),
-      ),
+    const response = yield* Effect.promise(
+      async () =>
+        await handle(
+          new Request(new URL(path, baseURL), {
+            method: body === undefined ? "GET" : "POST",
+            headers,
+            body: encoded,
+          })
+        )
     );
 
-    if (!options.anonymous) cookies.keep(response);
+    if (options.anonymous !== true) {
+      cookies.keep(response);
+    }
 
     return response;
   });
 
-const login = (pass = password) => request("/api/auth/sign-in/email", { email, password: pass });
+const login = (pass = password) =>
+  request("/api/auth/sign-in/email", { email, password: pass });
+
+const listing = () =>
+  Effect.flatMap(request("/api/listClients", {}), json).pipe(
+    Effect.flatMap(
+      Schema.decodeUnknownEffect(ClientListResult, {
+        onExcessProperty: "error",
+      })
+    )
+  );
 
 const resourceFixtures = [
-  { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read", "notes:write"] },
+  {
+    identifier: resourceA,
+    name: "Notes MCP",
+    scopes: ["notes:read", "notes:write"],
+  },
   { identifier: resourceB, name: "Reports", scopes: ["reports:read"] },
 ];
 
 const putResourceFixtures = Effect.gen(function* () {
-  const listing = yield* json(yield* request("/api/listClients", {}));
+  const { resources } = yield* listing();
 
   for (const resource of resourceFixtures) {
-    if (
-      listing.resources.some(
-        (row: { identifier: string }) => row.identifier === resource.identifier,
-      )
-    )
+    if (resources.some((row) => row.identifier === resource.identifier)) {
       continue;
+    }
+
     const response = yield* request("/api/putResource", resource);
-    expect(response.status, yield* text(response)).toBe(200);
+
+    yield* requireStatus(response, 200);
   }
 });
 
@@ -145,7 +211,7 @@ const client = (resource = resourceA, confidential = false) =>
 
     expect(response.status, yield* text(response)).toBe(201);
 
-    return yield* json(response);
+    return yield* decodeJson(Registered)(response);
   });
 
 const dynamicClient = Effect.gen(function* () {
@@ -160,26 +226,22 @@ const dynamicClient = Effect.gen(function* () {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
     },
-    { anonymous: true },
+    { anonymous: true }
   );
 
-  expect(response.status, yield* text(response)).toBe(201);
+  yield* requireStatus(response, 201);
 
-  return yield* json(response);
+  return yield* decodeJson(ClientId)(response);
 });
 
-function unprompted(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
-  const flow = authorization(clientId, resource, extra);
-  const url = new URL(flow.path, baseURL);
-  url.searchParams.delete("prompt");
-
-  return { verifier: flow.verifier, path: `${url.pathname}${url.search}` };
-}
-
-function authorization(clientId: string, resource = resourceA, extra: Record<string, string> = {}) {
+const authorization = (
+  clientId: string,
+  resource = resourceA,
+  extra: Record<string, string> = {}
+) => {
   const verifier = randomBytes(32).toString("base64url");
 
-  const query = new URLSearchParams({
+  const search = new URLSearchParams({
     client_id: clientId,
     redirect_uri: "http://127.0.0.1:9876/callback",
     response_type: "code",
@@ -192,15 +254,30 @@ function authorization(clientId: string, resource = resourceA, extra: Record<str
     ...extra,
   });
 
-  return { verifier, path: `/api/auth/oauth2/authorize?${query}` };
-}
+  return { verifier, path: `/api/auth/oauth2/authorize?${search}` };
+};
+
+const unprompted = (
+  clientId: string,
+  resource = resourceA,
+  extra: Record<string, string> = {}
+) => {
+  const flow = authorization(clientId, resource, extra);
+  const url = new URL(flow.path, baseURL);
+  url.searchParams.delete("prompt");
+
+  return { verifier: flow.verifier, path: `${url.pathname}${url.search}` };
+};
 
 const authorize = (clientId: string, resource = resourceA, scope?: string) =>
   Effect.gen(function* () {
+    const defaults =
+      resource === resourceB ? { scope: "offline_access reports:read" } : {};
+
     const flow = authorization(
       clientId,
       resource,
-      scope ? { scope } : resource === resourceB ? { scope: "offline_access reports:read" } : {},
+      scope === undefined ? defaults : { scope }
     );
 
     const response = yield* request(flow.path);
@@ -214,14 +291,22 @@ const authorize = (clientId: string, resource = resourceA, scope?: string) =>
     });
 
     expect(result.status, yield* text(result)).toBe(200);
-    const redirect = new URL((yield* json(result)).url);
+    const redirect = new URL((yield* decodeJson(Continuation)(result)).url);
     expect(redirect.searchParams.get("state")).toBe("state-to-validate");
     expect(redirect.searchParams.get("iss")).toBe(`${baseURL}/api/auth`);
 
-    return { code: redirect.searchParams.get("code")!, verifier: flow.verifier };
+    return {
+      code: redirect.searchParams.get("code")!,
+      verifier: flow.verifier,
+    };
   });
 
-const tokens = (clientId: string, resource = resourceA, authorization?: string, scope?: string) =>
+const issue = (
+  clientId: string,
+  resource = resourceA,
+  credentials?: string,
+  scope?: string
+) =>
   Effect.gen(function* () {
     const grant = yield* authorize(clientId, resource, scope);
 
@@ -235,31 +320,52 @@ const tokens = (clientId: string, resource = resourceA, authorization?: string, 
         code_verifier: grant.verifier,
         resource,
       },
-      { anonymous: true, form: true, authorization },
+      { anonymous: true, form: true, authorization: credentials }
     );
 
     expect(response.status, yield* text(response)).toBe(200);
 
-    return yield* json(response);
+    return response;
   });
+
+const tokens = (
+  clientId: string,
+  resource = resourceA,
+  credentials?: string,
+  scope?: string
+) =>
+  Effect.flatMap(issue(clientId, resource, credentials, scope), (response) =>
+    decodeJson(Tokens)(response)
+  );
 
 const setupOwner = Effect.gen(function* () {
   const response = yield* request("/api/setupOwner", { email, password });
-  expect(response.status, yield* text(response)).toBe(201);
+
+  yield* requireStatus(response, 201);
 });
 
-const ownerIssuer = () => Layer.effectDiscard(setupOwner).pipe(Layer.provideMerge(serviceIssuer()));
+const ownerIssuer = () =>
+  Layer.effectDiscard(setupOwner).pipe(Layer.provideMerge(serviceIssuer()));
 
 const signedInOwner = Effect.gen(function* () {
   yield* setupOwner;
-  expect((yield* login()).status).toBe(200);
+
+  const response = yield* login();
+
+  yield* requireStatus(response, 200);
 });
 
 const signedInIssuer = () =>
   Layer.effectDiscard(signedInOwner).pipe(Layer.provideMerge(serviceIssuer()));
 
 const rejection = <A>(evaluate: () => Promise<A>) =>
-  Effect.flip(Effect.tryPromise({ try: evaluate, catch: (error) => error }));
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new Rejected({ cause }),
+  }).pipe(
+    Effect.flip,
+    Effect.map((rejected) => rejected.cause)
+  );
 
 describe("first-run setup", () => {
   it.live(
@@ -268,21 +374,26 @@ describe("first-run setup", () => {
       Effect.gen(function* () {
         yield* onGeneration(
           Effect.gen(function* () {
-            expect(yield* json(yield* request("/api/setupStatus", {}))).toEqual({
+            expect(
+              yield* json(yield* request("/api/setupStatus", {}))
+            ).toStrictEqual({
               required: true,
             });
-          }),
+          })
         );
 
         const owner = yield* onGeneration(
           Effect.gen(function* () {
             const status = yield* request("/api/setupStatus", {});
-            expect(yield* json(status)).toEqual({ required: true });
+            expect(yield* json(status)).toStrictEqual({ required: true });
             expect(status.headers.get("cache-control")).toContain("no-store");
             expect((yield* request("/api/listClients", {})).status).toBe(401);
             expect(
-              (yield* request("/api/auth/sign-up/email", { email, password, name: "Owner" }))
-                .status,
+              (yield* request("/api/auth/sign-up/email", {
+                email,
+                password,
+                name: "Owner",
+              })).status
             ).toBe(404);
 
             const created = yield* request("/api/setupOwner", {
@@ -291,56 +402,83 @@ describe("first-run setup", () => {
             });
 
             expect(created.status, yield* text(created)).toBe(201);
-            expect(yield* json(created)).toEqual({ created: true });
+            expect(yield* json(created)).toStrictEqual({ created: true });
             expect(
               created.headers
                 .getSetCookie()
-                .find((cookie) => cookie.startsWith("better-auth.session_token=")),
+                .find((cookie) =>
+                  cookie.startsWith("better-auth.session_token=")
+                )
             ).not.toMatch(/;\s*Secure/iu);
-            expect(created.headers.getSetCookie().join(";")).toContain("HttpOnly");
-            expect((yield* sql`SELECT count(*) AS n FROM session`)[0]).toEqual({
+            expect(created.headers.getSetCookie().join(";")).toContain(
+              "HttpOnly"
+            );
+            expect({
+              ...(yield* sql`SELECT count(*) AS n FROM session`)[0],
+            }).toStrictEqual({
               n: 1,
             });
-            expect((yield* sql`SELECT name, email, emailVerified FROM user`)[0]).toEqual({
+            expect({
+              ...(yield* sql`SELECT name, email, emailVerified FROM user`)[0],
+            }).toStrictEqual({
               name: "Owner",
               email,
               emailVerified: 0,
             });
-            const owner = yield* (yield* OwnerAccount).find();
-            expect(owner).toBeTypeOf("string");
-            expect(yield* json(yield* request("/api/setupStatus", {}))).toEqual({
+            const found = yield* (yield* OwnerAccount).find;
+            expect(found).toBeTypeOf("string");
+            expect(
+              yield* json(yield* request("/api/setupStatus", {}))
+            ).toStrictEqual({
               required: false,
             });
             expect((yield* request("/api/listClients", {})).status).toBe(200);
-            expect((yield* request("/api/listClients", {}, { anonymous: true })).status).toBe(401);
+            expect(
+              (yield* request("/api/listClients", {}, { anonymous: true }))
+                .status
+            ).toBe(401);
             expect((yield* login()).status).toBe(200);
 
-            return owner;
-          }),
+            return found;
+          })
         );
 
         yield* onGeneration(
           Effect.gen(function* () {
-            expect(yield* (yield* OwnerAccount).find()).toBe(owner);
-            expect(yield* json(yield* request("/api/setupStatus", {}))).toEqual({
+            expect(yield* (yield* OwnerAccount).find).toBe(owner);
+            expect(
+              yield* json(yield* request("/api/setupStatus", {}))
+            ).toStrictEqual({
               required: false,
             });
             expect((yield* request("/api/listClients", {})).status).toBe(200);
-            expect((yield* request("/api/setupOwner", { email, password })).status).toBe(409);
+            expect(
+              (yield* request("/api/setupOwner", { email, password })).status
+            ).toBe(409);
             const { auth } = yield* Issuer;
             expect(
-              yield* rejection(() =>
-                auth.api.signUpEmail({
-                  body: { email: "second@example.internal", password, name: "Owner" },
-                }),
-              ),
-            ).toMatchObject({ statusCode: 409, message: "Setup already completed" });
-            expect((yield* sql`SELECT count(*) AS n FROM user`)[0]).toEqual({
+              yield* rejection(
+                async () =>
+                  await auth.api.signUpEmail({
+                    body: {
+                      email: "second@example.internal",
+                      password,
+                      name: "Owner",
+                    },
+                  })
+              )
+            ).toMatchObject({
+              statusCode: 409,
+              message: "Setup already completed",
+            });
+            expect({
+              ...(yield* sql`SELECT count(*) AS n FROM user`)[0],
+            }).toStrictEqual({
               n: 1,
             });
-          }),
+          })
         );
-      }).pipe(Effect.provide(browser())),
+      }).pipe(Effect.provide(browser()))
   );
 
   it.live("invalid setup input and encoding never create an account", () =>
@@ -355,14 +493,18 @@ describe("first-run setup", () => {
         { email, password: "x".repeat(7) },
         { email, password: "x".repeat(129) },
       ]) {
-        const response = yield* Effect.promise(() =>
-          handle(
-            new Request(`${baseURL}/api/setupOwner`, {
-              method: "POST",
-              headers: { origin: baseURL, "content-type": "application/json" },
-              body: JSON.stringify(body),
-            }),
-          ),
+        const response = yield* Effect.promise(
+          async () =>
+            await handle(
+              new Request(`${baseURL}/api/setupOwner`, {
+                method: "POST",
+                headers: {
+                  origin: baseURL,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify(body),
+              })
+            )
         );
 
         expect(response.status, yield* text(response)).toBe(400);
@@ -371,18 +513,22 @@ describe("first-run setup", () => {
       const malformed: ReadonlyArray<readonly [string, string]> = [
         ["application/json", "{"],
         ["text/plain", JSON.stringify({ email, password })],
-        ["application/x-www-form-urlencoded", new URLSearchParams({ email, password }).toString()],
+        [
+          "application/x-www-form-urlencoded",
+          new URLSearchParams({ email, password }).toString(),
+        ],
       ];
 
       for (const [contentType, body] of malformed) {
-        const response = yield* Effect.promise(() =>
-          handle(
-            new Request(`${baseURL}/api/setupOwner`, {
-              method: "POST",
-              headers: { origin: baseURL, "content-type": contentType },
-              body,
-            }),
-          ),
+        const response = yield* Effect.promise(
+          async () =>
+            await handle(
+              new Request(`${baseURL}/api/setupOwner`, {
+                method: "POST",
+                headers: { origin: baseURL, "content-type": contentType },
+                body,
+              })
+            )
         );
 
         // why: the library's status for an unparseable encoding varies; any 4xx is a refusal
@@ -391,12 +537,14 @@ describe("first-run setup", () => {
         expect(yield* text(response)).not.toContain(password);
       }
 
-      expect((yield* sql`SELECT count(*) AS n FROM user`)[0]).toEqual({
+      expect({
+        ...(yield* sql`SELECT count(*) AS n FROM user`)[0],
+      }).toStrictEqual({
         n: 0,
       });
-      expect(yield* (yield* OwnerAccount).find()).toBeUndefined();
+      expect(yield* (yield* OwnerAccount).find).toBeUndefined();
       yield* setupOwner;
-    }).pipe(Effect.provide(serviceIssuer())),
+    }).pipe(Effect.provide(serviceIssuer()))
   );
 
   it.live.each([
@@ -405,16 +553,23 @@ describe("first-run setup", () => {
     `${"a".repeat(237)}@example.internal`,
   ])("setup email %s remains usable for provider login", (input) =>
     Effect.gen(function* () {
-      const response = yield* request("/api/setupOwner", { email: input, password });
+      const response = yield* request("/api/setupOwner", {
+        email: input,
+        password,
+      });
+
       expect(response.status).toBe(201);
       const normalized = input.trim().toLowerCase();
-      expect((yield* sql`SELECT email FROM user`)[0]).toEqual({
+      expect({ ...(yield* sql`SELECT email FROM user`)[0] }).toStrictEqual({
         email: normalized,
       });
       expect(
-        (yield* request("/api/auth/sign-in/email", { email: normalized, password })).status,
+        (yield* request("/api/auth/sign-in/email", {
+          email: normalized,
+          password,
+        })).status
       ).toBe(200);
-    }).pipe(Effect.provide(serviceIssuer())),
+    }).pipe(Effect.provide(serviceIssuer()))
   );
 
   it.live("simultaneous submissions create exactly one owner", () =>
@@ -422,153 +577,209 @@ describe("first-run setup", () => {
       const responses = yield* Effect.all(
         [
           request("/api/setupOwner", { email, password }),
-          request("/api/setupOwner", { email: "second@example.internal", password }),
+          request("/api/setupOwner", {
+            email: "second@example.internal",
+            password,
+          }),
         ],
-        { concurrency: "unbounded" },
+        { concurrency: "unbounded" }
       );
 
-      expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([
-        201, 409,
-      ]);
+      expect(
+        responses.map((response) => response.status).toSorted((a, b) => a - b)
+      ).toStrictEqual([201, 409]);
 
-      for (const table of ["user", "account", "session"])
-        expect((yield* sql`SELECT count(*) AS n FROM ${query.table(table)}`)[0]).toEqual({ n: 1 });
-    }).pipe(Effect.provide(serviceIssuer())),
+      for (const table of ["user", "account", "session"]) {
+        expect({
+          ...(yield* sql`SELECT count(*) AS n FROM ${query.table(table)}`)[0],
+        }).toStrictEqual({ n: 1 });
+      }
+    }).pipe(Effect.provide(serviceIssuer()))
   );
 
-  it.live("simultaneous submissions with the same email report the loser as a conflict", () =>
-    Effect.gen(function* () {
-      const responses = yield* Effect.all(
-        [
-          request("/api/setupOwner", { email, password }),
-          request("/api/setupOwner", { email, password: `${password} other` }),
-        ],
-        { concurrency: "unbounded" },
-      );
+  it.live(
+    "simultaneous submissions with the same email report the loser as a conflict",
+    () =>
+      Effect.gen(function* () {
+        const responses = yield* Effect.all(
+          [
+            request("/api/setupOwner", { email, password }),
+            request("/api/setupOwner", {
+              email,
+              password: `${password} other`,
+            }),
+          ],
+          { concurrency: "unbounded" }
+        );
 
-      expect(responses.map((response) => response.status).sort((a, b) => a - b)).toEqual([
-        201, 409,
-      ]);
-      expect((yield* sql`SELECT count(*) AS n FROM user`)[0]).toEqual({
-        n: 1,
-      });
-    }).pipe(Effect.provide(serviceIssuer())),
+        expect(
+          responses.map((response) => response.status).toSorted((a, b) => a - b)
+        ).toStrictEqual([201, 409]);
+        expect({
+          ...(yield* sql`SELECT count(*) AS n FROM user`)[0],
+        }).toStrictEqual({
+          n: 1,
+        });
+      }).pipe(Effect.provide(serviceIssuer()))
   );
 
-  it.live("a failed credential insert rolls back the account and permits retry", () =>
-    Effect.gen(function* () {
-      yield* sql`CREATE TRIGGER fail_setup BEFORE INSERT ON account
+  it.live(
+    "a failed credential insert rolls back the account and permits retry",
+    () =>
+      Effect.gen(function* () {
+        yield* sql`CREATE TRIGGER fail_setup BEFORE INSERT ON account
       BEGIN SELECT RAISE(ABORT, 'Injected credential failure'); END`;
-      const failed = yield* request("/api/setupOwner", { email, password });
-      expect(failed.status).toBe(500);
-      const error = yield* text(failed);
-      expect(error).not.toContain(password);
-      expect(error).not.toContain("Injected credential failure");
+        const failed = yield* request("/api/setupOwner", { email, password });
+        expect(failed.status).toBe(500);
+        const error = yield* text(failed);
+        expect(error).not.toContain(password);
+        expect(error).not.toContain("Injected credential failure");
 
-      for (const table of ["user", "account", "session"])
-        expect((yield* sql`SELECT count(*) AS n FROM ${query.table(table)}`)[0]).toEqual({ n: 0 });
-      expect(yield* json(yield* request("/api/setupStatus", {}))).toEqual({
-        required: true,
-      });
-      yield* sql`DROP TRIGGER fail_setup`;
-      yield* setupOwner;
-      expect((yield* login()).status).toBe(200);
-    }).pipe(Effect.provide(serviceIssuer())),
+        for (const table of ["user", "account", "session"]) {
+          expect({
+            ...(yield* sql`SELECT count(*) AS n FROM ${query.table(table)}`)[0],
+          }).toStrictEqual({ n: 0 });
+        }
+
+        expect(
+          yield* json(yield* request("/api/setupStatus", {}))
+        ).toStrictEqual({
+          required: true,
+        });
+        yield* sql`DROP TRIGGER fail_setup`;
+        yield* setupOwner;
+        expect((yield* login()).status).toBe(200);
+      }).pipe(Effect.provide(serviceIssuer()))
   );
 });
 
 describe("owner boundary", () => {
-  it.live("serves the built web workspace rather than the server working directory", () =>
-    Effect.gen(function* () {
-      const assets = new Set<string>();
+  it.live(
+    "serves the built web workspace rather than the server working directory",
+    () =>
+      Effect.gen(function* () {
+        const assets = new Set<string>();
 
-      for (const path of documentPaths) {
-        const response = yield* request(path);
-        expect(response.status).toBe(200);
-        expect(response.headers.get("content-type")).toContain("text/html");
-        const html = yield* text(response);
-        expect(html).toContain("<title>clankerauth</title>");
-        const references = [...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)];
-        expect(references.length).toBeGreaterThan(0);
+        for (const path of documentPaths) {
+          const response = yield* request(path);
+          expect(response.status).toBe(200);
+          expect(response.headers.get("content-type")).toContain("text/html");
+          const html = yield* text(response);
+          expect(html).toContain("<title>clankerauth</title>");
 
-        for (const reference of references) assets.add(reference[1]!);
-      }
+          const references = [
+            ...html.matchAll(/(?:src|href)="(?<asset>\/assets\/[^" ]+)"/gu),
+          ];
 
-      const fonts = new Set<string>();
+          expect(references.length).toBeGreaterThan(0);
 
-      for (const asset of assets) {
-        const result = yield* request(asset);
-        expect(result.status).toBe(200);
-        expect(result.headers.get("content-type")).toBe(
-          asset.endsWith(".js") ? "text/javascript" : "text/css",
-        );
-        const body = yield* text(result);
-        expect(body).not.toBe("");
+          for (const reference of references) {
+            assets.add(reference.groups!["asset"]!);
+          }
+        }
 
-        for (const font of body.matchAll(/url\((\/assets\/[^)]+\.woff2)\)/g)) fonts.add(font[1]!);
-      }
+        const fonts = new Set<string>();
 
-      expect(fonts.size).toBeGreaterThan(0);
+        for (const asset of assets) {
+          const result = yield* request(asset);
+          expect(result.status).toBe(200);
+          expect(result.headers.get("content-type")).toBe(
+            asset.endsWith(".js") ? "text/javascript" : "text/css"
+          );
+          const body = yield* text(result);
+          expect(body).not.toBe("");
 
-      for (const font of fonts) {
-        const result = yield* request(font);
-        expect(result.status).toBe(200);
-        expect(result.headers.get("content-type")).toBe("font/woff2");
-      }
+          for (const font of body.matchAll(
+            /url\((?<font>\/assets\/[^)]+\.woff2)\)/gu
+          )) {
+            fonts.add(font.groups!["font"]!);
+          }
+        }
 
-      expect((yield* request("/src/main.ts")).status).toBe(404);
-    }).pipe(Effect.provide(ownerIssuer())),
+        expect(fonts.size).toBeGreaterThan(0);
+
+        for (const font of fonts) {
+          const result = yield* request(font);
+          expect(result.status).toBe(200);
+          expect(result.headers.get("content-type")).toBe("font/woff2");
+        }
+
+        expect((yield* request("/src/main.ts")).status).toBe(404);
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
   it.live("login throttles brute force without exposing passwords", () =>
     Effect.gen(function* () {
-      for (let i = 0; i < 5; i++) expect((yield* login("deliberately incorrect")).status).toBe(401);
+      for (let i = 0; i < 5; i += 1) {
+        expect((yield* login("deliberately incorrect")).status).toBe(401);
+      }
+
       const limited = yield* login();
       expect(limited.status).toBe(429);
       expect(yield* text(limited)).not.toContain(password);
-    }).pipe(Effect.provide(ownerIssuer())),
+    }).pipe(Effect.provide(ownerIssuer()))
   );
 
-  it.live("closed signup, protected admin, SameSite cookies, credential login and logout", () =>
-    Effect.gen(function* () {
-      expect((yield* request("/api/listClients", {}, { anonymous: true })).status).toBe(401);
-      expect(
-        (yield* request("/api/auth/sign-up/email", {
-          email: "stranger@example.internal",
-          password,
-          name: "Intruder",
-        })).status,
-      ).toBe(404);
-      const { auth } = yield* Issuer;
-      expect(
-        yield* rejection(() =>
-          auth.api.signUpEmail({
-            body: { email: "stranger@example.internal", password, name: "Intruder" },
-          }),
-        ),
-      ).toMatchObject({ statusCode: 409 });
-      expect((yield* login("incorrect password")).status).toBe(401);
-      const signedIn = yield* login();
-      expect(signedIn.status).toBe(200);
-      expect(signedIn.headers.getSetCookie().join(";")).toContain("HttpOnly");
-      expect(signedIn.headers.getSetCookie().join(";")).toContain("SameSite=Lax");
-      const session = yield* request("/api/auth/get-session");
-      expect(session.status).toBe(200);
-      const current = yield* json(session);
-      expect(current.user.id).toBe(yield* (yield* OwnerAccount).find());
-      expect(session.headers.has("set-auth-jwt")).toBe(false);
-      expect((yield* request("/api/listClients", {})).status).toBe(200);
-      expect(
-        (yield* request("/api/auth/oauth2/create-client", {
-          redirect_uris: ["https://evil.example"],
-        })).status,
-      ).toBe(404);
-      expect((yield* request("/api/auth/token")).status).toBe(404);
-      expect((yield* request("/api/auth/sign-out", {})).status).toBe(200);
-      expect((yield* request("/api/listClients", {})).status).toBe(401);
-    }).pipe(Effect.provide(ownerIssuer())),
+  it.live(
+    "closed signup, protected admin, SameSite cookies, credential login and logout",
+    () =>
+      Effect.gen(function* () {
+        expect(
+          (yield* request("/api/listClients", {}, { anonymous: true })).status
+        ).toBe(401);
+        expect(
+          (yield* request("/api/auth/sign-up/email", {
+            email: "stranger@example.internal",
+            password,
+            name: "Intruder",
+          })).status
+        ).toBe(404);
+        const { auth } = yield* Issuer;
+        expect(
+          yield* rejection(
+            async () =>
+              await auth.api.signUpEmail({
+                body: {
+                  email: "stranger@example.internal",
+                  password,
+                  name: "Intruder",
+                },
+              })
+          )
+        ).toMatchObject({ statusCode: 409 });
+        expect((yield* login("incorrect password")).status).toBe(401);
+        const signedIn = yield* login();
+        expect(signedIn.status).toBe(200);
+        expect(signedIn.headers.getSetCookie().join(";")).toContain("HttpOnly");
+        expect(signedIn.headers.getSetCookie().join(";")).toContain(
+          "SameSite=Lax"
+        );
+        const session = yield* request("/api/auth/get-session");
+        expect(session.status).toBe(200);
+        expect(yield* json(session)).toMatchObject({
+          user: { id: yield* (yield* OwnerAccount).find },
+        });
+        expect(session.headers.has("set-auth-jwt")).toBe(false);
+        expect((yield* request("/api/listClients", {})).status).toBe(200);
+        expect(
+          (yield* request("/api/auth/oauth2/create-client", {
+            redirect_uris: ["https://evil.example"],
+          })).status
+        ).toBe(404);
+        expect((yield* request("/api/auth/token")).status).toBe(404);
+        expect((yield* request("/api/auth/sign-out", {})).status).toBe(200);
+        expect((yield* request("/api/listClients", {})).status).toBe(401);
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 });
+
+const expiry = () =>
+  Effect.gen(function* () {
+    const response = yield* request("/api/auth/get-session");
+    expect(response.status).toBe(200);
+
+    return Date.parse((yield* decodeJson(Session)(response)).session.expiresAt);
+  });
 
 describe("OAuth boundaries and lifecycle", () => {
   it.live(
@@ -576,14 +787,6 @@ describe("OAuth boundaries and lifecycle", () => {
     () =>
       Effect.gen(function* () {
         const day = 24 * 60 * 60 * 1000;
-
-        const expiry = () =>
-          Effect.gen(function* () {
-            const response = yield* request("/api/auth/get-session");
-            expect(response.status).toBe(200);
-
-            return Date.parse((yield* json(response)).session.expiresAt);
-          });
 
         yield* login();
         const app = yield* client();
@@ -596,48 +799,84 @@ describe("OAuth boundaries and lifecycle", () => {
             yield* advanceDate(2 * day);
             const redirect = yield* request(unprompted(app.client_id).path);
             expect(redirect.status, yield* text(redirect)).toBe(302);
-            expect(redirect.headers.getSetCookie().join(";")).toContain("session_token");
+            expect(redirect.headers.getSetCookie().join(";")).toContain(
+              "session_token"
+            );
             const renewed = yield* expiry();
             expect(renewed).toBeGreaterThan(initial + day);
             expect(renewed - Date.now()).toBeLessThanOrEqual(30 * day);
-          }),
+          })
         );
-      }).pipe(Effect.provide(ownerIssuer())),
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
-  it.live("managed clients are first party: a signed-in owner is redirected without consent", () =>
+  it.live(
+    "managed clients are first party: a signed-in owner is redirected without consent",
+    () =>
+      Effect.gen(function* () {
+        yield* login();
+        const app = yield* client();
+        const flow = unprompted(app.client_id);
+        const response = yield* request(flow.path);
+        expect(response.status, yield* text(response)).toBe(302);
+        const redirect = new URL(response.headers.get("location")!);
+        expect(`${redirect.origin}${redirect.pathname}`).toBe(
+          "http://127.0.0.1:9876/callback"
+        );
+        expect(redirect.searchParams.get("state")).toBe("state-to-validate");
+        expect(
+          yield* sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`
+        ).toStrictEqual([]);
+
+        const issued = yield* request(
+          "/api/auth/oauth2/token",
+          {
+            grant_type: "authorization_code",
+            client_id: app.client_id,
+            redirect_uri: "http://127.0.0.1:9876/callback",
+            code: redirect.searchParams.get("code"),
+            code_verifier: flow.verifier,
+            resource: resourceA,
+          },
+          { anonymous: true, form: true }
+        );
+
+        expect(issued.status, yield* text(issued)).toBe(200);
+        expect((yield* decodeJson(Tokens)(issued)).scope.split(" ")).toContain(
+          "notes:read"
+        );
+        const prompted = yield* request(authorization(app.client_id).path);
+        expect(
+          new URL(prompted.headers.get("location")!, baseURL).pathname
+        ).toBe("/consent");
+        const dynamic = yield* dynamicClient;
+        const asked = yield* request(unprompted(dynamic.client_id).path);
+        expect(new URL(asked.headers.get("location")!, baseURL).pathname).toBe(
+          "/consent"
+        );
+      }).pipe(Effect.provide(ownerIssuer()))
+  );
+
+  it.live("a public client is created without secret fields", () =>
     Effect.gen(function* () {
       yield* login();
-      const app = yield* client();
-      const flow = unprompted(app.client_id);
-      const response = yield* request(flow.path);
-      expect(response.status, yield* text(response)).toBe(302);
-      const redirect = new URL(response.headers.get("location")!);
-      expect(`${redirect.origin}${redirect.pathname}`).toBe("http://127.0.0.1:9876/callback");
-      expect(redirect.searchParams.get("state")).toBe("state-to-validate");
-      expect(yield* sql`SELECT id FROM oauthConsent WHERE clientId = ${app.client_id}`).toEqual([]);
+      yield* putResourceFixtures;
 
-      const issued = yield* request(
-        "/api/auth/oauth2/token",
-        {
-          grant_type: "authorization_code",
-          client_id: app.client_id,
-          redirect_uri: "http://127.0.0.1:9876/callback",
-          code: redirect.searchParams.get("code"),
-          code_verifier: flow.verifier,
-          resource: resourceA,
-        },
-        { anonymous: true, form: true },
-      );
+      const response = yield* request("/api/createClient", {
+        client_name: "Public application",
+        redirect_uris: ["http://127.0.0.1:9876/callback"],
+        resources: [resourceA],
+        application_type: "native",
+        token_endpoint_auth_method: "none",
+      });
 
-      expect(issued.status, yield* text(issued)).toBe(200);
-      expect((yield* json(issued)).scope.split(" ")).toContain("notes:read");
-      const prompted = yield* request(authorization(app.client_id).path);
-      expect(new URL(prompted.headers.get("location")!, baseURL).pathname).toBe("/consent");
-      const dynamic = yield* dynamicClient;
-      const asked = yield* request(unprompted(dynamic.client_id).path);
-      expect(new URL(asked.headers.get("location")!, baseURL).pathname).toBe("/consent");
-    }).pipe(Effect.provide(ownerIssuer())),
+      expect(response.status, yield* text(response)).toBe(201);
+
+      const created = yield* json(response);
+
+      expect(created).not.toHaveProperty("client_secret");
+      expect(created).not.toHaveProperty("client_secret_expires_at");
+    }).pipe(Effect.provide(ownerIssuer()))
   );
 
   it.live(
@@ -647,8 +886,8 @@ describe("OAuth boundaries and lifecycle", () => {
         yield* login();
         const app = yield* client(resourceA, true);
         expect(app.client_secret).toBeTypeOf("string");
-        const listing = yield* json(yield* request("/api/listClients", {}));
-        expect(JSON.stringify(listing)).not.toContain(app.client_secret);
+        const listed = yield* json(yield* request("/api/listClients", {}));
+        expect(JSON.stringify(listed)).not.toContain(app.client_secret);
         const grant = yield* authorize(app.client_id);
 
         const basic = (secret: string) =>
@@ -667,39 +906,48 @@ describe("OAuth boundaries and lifecycle", () => {
           {
             anonymous: true,
             form: true,
-            authorization: basic(app.client_secret),
+            authorization: basic(app.client_secret!),
             origin: "https://client.example",
-          },
+          }
         );
 
         expect(exchange.status, yield* text(exchange)).toBe(200);
         expect(exchange.headers.get("access-control-allow-origin")).toBe("*");
-        const issued = yield* json(exchange);
+        const issued = yield* decodeJson(Tokens)(exchange);
 
         const introspect = (secret: string) =>
           request(
             "/api/auth/oauth2/introspect",
             { token: issued.access_token },
-            { anonymous: true, form: true, authorization: basic(secret) },
+            { anonymous: true, form: true, authorization: basic(secret) }
           );
 
-        expect((yield* json(yield* introspect(app.client_secret))).active).toBe(true);
+        expect(
+          yield* json(yield* introspect(app.client_secret!))
+        ).toMatchObject({ active: true });
 
-        const rotated = yield* json(
-          yield* request("/api/rotateClientSecret", { client_id: app.client_id }),
+        const rotated = yield* decodeJson(Registered)(
+          yield* request("/api/rotateClientSecret", {
+            client_id: app.client_id,
+          })
         );
 
         expect(rotated.client_secret).toBeTypeOf("string");
         expect(rotated.client_secret).not.toBe(app.client_secret);
-        expect((yield* introspect(app.client_secret)).status).toBe(401);
-        expect((yield* json(yield* introspect(rotated.client_secret))).active).toBe(true);
+        expect((yield* introspect(app.client_secret!)).status).toBe(401);
+        expect(
+          yield* json(yield* introspect(rotated.client_secret!))
+        ).toMatchObject({ active: true });
         yield* request("/api/auth/sign-out", {});
-        expect((yield* json(yield* introspect(rotated.client_secret))).active).toBe(false);
+        expect(
+          yield* json(yield* introspect(rotated.client_secret!))
+        ).toMatchObject({ active: false });
         yield* login();
-        expect((yield* request("/api/deleteClient", { client_id: app.client_id })).status).toBe(
-          200,
-        );
-        expect((yield* json(yield* request("/api/listClients", {}))).clients).toEqual([]);
+        expect(
+          (yield* request("/api/deleteClient", { client_id: app.client_id }))
+            .status
+        ).toBe(200);
+        expect((yield* listing()).clients).toStrictEqual([]);
 
         const refresh = yield* request(
           "/api/auth/oauth2/token",
@@ -709,12 +957,16 @@ describe("OAuth boundaries and lifecycle", () => {
             refresh_token: issued.refresh_token,
             resource: resourceA,
           },
-          { anonymous: true, form: true, authorization: basic(rotated.client_secret) },
+          {
+            anonymous: true,
+            form: true,
+            authorization: basic(rotated.client_secret!),
+          }
         );
 
         expect(refresh.status, yield* text(refresh)).toBe(401);
-        expect((yield* json(refresh)).error).toBe("invalid_client");
-      }).pipe(Effect.provide(ownerIssuer())),
+        expect(yield* json(refresh)).toMatchObject({ error: "invalid_client" });
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
   it.live(
@@ -727,14 +979,15 @@ describe("OAuth boundaries and lifecycle", () => {
         ]) {
           const response = yield* request(path);
           expect(response.status, yield* text(response)).toBe(200);
-          const metadata = yield* json(response);
-          expect(metadata.issuer).toBe(`${baseURL}/api/auth`);
-          expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
-          expect(metadata.registration_endpoint).toBe(`${baseURL}/api/auth/oauth2/register`);
-          expect(metadata.client_id_metadata_document_supported).toBe(true);
-          expect(metadata.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
+          expect(yield* json(response)).toMatchObject({
+            issuer: `${baseURL}/api/auth`,
+            code_challenge_methods_supported: ["S256"],
+            registration_endpoint: `${baseURL}/api/auth/oauth2/register`,
+            client_id_metadata_document_supported: true,
+            grant_types_supported: ["authorization_code", "refresh_token"],
+          });
         }
-      }).pipe(Effect.provide(ownerIssuer())),
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
   it.live("scopes no resource defines are refused before consent", () =>
@@ -743,54 +996,65 @@ describe("OAuth boundaries and lifecycle", () => {
       const app = yield* client();
 
       const response = yield* request(
-        authorization(app.client_id, resourceA, { scope: "notes:read notes:nope" }).path,
+        authorization(app.client_id, resourceA, {
+          scope: "notes:read notes:nope",
+        }).path
       );
 
       expect(response.status, yield* text(response)).toBe(302);
       const location = new URL(response.headers.get("location")!);
-      expect(location.origin + location.pathname).toBe("http://127.0.0.1:9876/callback");
+      expect(location.origin + location.pathname).toBe(
+        "http://127.0.0.1:9876/callback"
+      );
       expect(location.searchParams.get("error")).toBe("invalid_scope");
-    }).pipe(Effect.provide(ownerIssuer())),
+    }).pipe(Effect.provide(ownerIssuer()))
   );
 
-  it.live("login continuation and signed consent denial; altered consent is rejected", () =>
-    Effect.gen(function* () {
-      yield* login();
-      const app = yield* client();
-      (yield* CookieJar).clear();
-      const flow = authorization(app.client_id);
-      const response = yield* request(flow.path);
-      const location = new URL(response.headers.get("location")!, baseURL);
-      expect(location.pathname).toBe("/login");
+  it.live(
+    "login continuation and signed consent denial; altered consent is rejected",
+    () =>
+      Effect.gen(function* () {
+        yield* login();
+        const app = yield* client();
+        (yield* CookieJar).clear();
+        const flow = authorization(app.client_id);
+        const response = yield* request(flow.path);
+        const location = new URL(response.headers.get("location")!, baseURL);
+        expect(location.pathname).toBe("/login");
 
-      const signedIn = yield* request("/api/auth/sign-in/email", {
-        email,
-        password,
-        oauth_query: location.search.slice(1),
-      });
+        const signedIn = yield* request("/api/auth/sign-in/email", {
+          email,
+          password,
+          oauth_query: location.search.slice(1),
+        });
 
-      expect(signedIn.status, yield* text(signedIn)).toBe(200);
-      const continued = new URL((yield* json(signedIn)).url, baseURL);
-      expect(continued.pathname).toBe("/consent");
-      const tampered = new URL(continued);
-      tampered.searchParams.set("resource", resourceB);
-      expect(
-        (yield* request("/api/auth/oauth2/consent", {
-          accept: true,
-          oauth_query: tampered.search.slice(1),
-        })).status,
-      ).toBe(400);
+        expect(signedIn.status, yield* text(signedIn)).toBe(200);
 
-      const denied = yield* request("/api/auth/oauth2/consent", {
-        accept: false,
-        oauth_query: continued.search.slice(1),
-      });
+        const continued = new URL(
+          (yield* decodeJson(Continuation)(signedIn)).url,
+          baseURL
+        );
 
-      expect(denied.status).toBe(200);
-      const result = new URL((yield* json(denied)).url);
-      expect(result.searchParams.get("error")).toBe("access_denied");
-      expect(result.searchParams.get("code")).toBeNull();
-    }).pipe(Effect.provide(ownerIssuer())),
+        expect(continued.pathname).toBe("/consent");
+        const tampered = new URL(continued);
+        tampered.searchParams.set("resource", resourceB);
+        expect(
+          (yield* request("/api/auth/oauth2/consent", {
+            accept: true,
+            oauth_query: tampered.search.slice(1),
+          })).status
+        ).toBe(400);
+
+        const denied = yield* request("/api/auth/oauth2/consent", {
+          accept: false,
+          oauth_query: continued.search.slice(1),
+        });
+
+        expect(denied.status).toBe(200);
+        const result = new URL((yield* decodeJson(Continuation)(denied)).url);
+        expect(result.searchParams.get("error")).toBe("access_denied");
+        expect(result.searchParams.get("code")).toBeNull();
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
   it.live(
@@ -800,29 +1064,35 @@ describe("OAuth boundaries and lifecycle", () => {
         yield* login();
         const app = yield* client();
 
-        const invalidRequests: Record<string, string>[] = [
+        const invalidRequests: Array<Record<string, string>> = [
           { code_challenge_method: "plain" },
           { redirect_uri: "http://127.0.0.1:9876/evil" },
           { resource: "" },
         ];
 
         for (const extra of invalidRequests) {
-          const response = yield* request(authorization(app.client_id, resourceA, extra).path);
+          const response = yield* request(
+            authorization(app.client_id, resourceA, extra).path
+          );
+
           const body = yield* text(response);
           expect(
-            response.status >= 400 || response.headers.get("location")?.includes("error="),
-            body,
+            response.status >= 400 ||
+              response.headers.get("location")?.includes("error="),
+            body
           ).toBeTruthy();
         }
 
         const multiple = yield* request(
-          `${authorization(app.client_id).path}&resource=${encodeURIComponent(resourceB)}`,
+          `${authorization(app.client_id).path}&resource=${encodeURIComponent(resourceB)}`
         );
 
-        expect((yield* json(multiple)).error).toBe("invalid_target");
+        expect(yield* json(multiple)).toMatchObject({
+          error: "invalid_target",
+        });
 
         const unallowed = yield* request(
-          authorization(app.client_id, resourceB, { prompt: "none" }).path,
+          authorization(app.client_id, resourceB, { prompt: "none" }).path
         );
 
         expect(unallowed.status).toBe(400);
@@ -831,15 +1101,19 @@ describe("OAuth boundaries and lifecycle", () => {
           error_description: "Client access is required",
         });
 
-        const forced = yield* request(authorization(app.client_id, resourceB).path);
-        const consentQuery = new URL(forced.headers.get("location")!, baseURL).search;
+        const forced = yield* request(
+          authorization(app.client_id, resourceB).path
+        );
+
+        const consentQuery = new URL(forced.headers.get("location")!, baseURL)
+          .search;
 
         const refused = yield* request("/api/auth/oauth2/consent", {
           accept: true,
           oauth_query: consentQuery.slice(1),
         });
 
-        expect((yield* json(refused)).error).toBe("invalid_target");
+        expect(yield* json(refused)).toMatchObject({ error: "invalid_target" });
         const grant = yield* authorize(app.client_id);
 
         const wrongVerifier = yield* request(
@@ -852,73 +1126,86 @@ describe("OAuth boundaries and lifecycle", () => {
             code_verifier: "x".repeat(43),
             resource: resourceA,
           },
-          { form: true, anonymous: true },
+          { form: true, anonymous: true }
         );
 
         expect(wrongVerifier.status).toBe(400);
-        expect((yield* json(wrongVerifier)).error).toBe("invalid_grant");
-      }).pipe(Effect.provide(ownerIssuer())),
+        expect(yield* json(wrongVerifier)).toMatchObject({
+          error: "invalid_grant",
+        });
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 
-  it.live("issued JWT claims and signing keys remain valid across restart", () =>
-    Effect.gen(function* () {
-      const { a, tokenA, jwks } = yield* onGeneration(
-        Effect.gen(function* () {
-          yield* setupOwner;
-          yield* login();
-          const a = yield* client();
-          const b = yield* client(resourceB);
-          const tokenA = yield* tokens(a.client_id);
-          const tokenB = yield* tokens(b.client_id, resourceB);
-          const jwks = yield* json(yield* request("/api/auth/jwks"));
-          const keys = createLocalJWKSet(jwks);
+  it.live(
+    "issued JWT claims and signing keys remain valid across restart",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* onGeneration(
+          Effect.gen(function* () {
+            yield* setupOwner;
+            yield* login();
+            const a = yield* client();
+            const b = yield* client(resourceB);
+            const tokenA = yield* tokens(a.client_id);
+            const tokenB = yield* tokens(b.client_id, resourceB);
+            const jwks = yield* json(yield* request("/api/auth/jwks"));
 
-          const verified = yield* Effect.promise(() =>
-            jwtVerify(tokenA.access_token, keys, {
-              issuer: `${baseURL}/api/auth`,
-              audience: resourceA,
-              typ: "at+jwt",
-            }),
-          );
+            const keys = createLocalJWKSet(
+              yield* Schema.decodeUnknownEffect(Jwks)(jwks)
+            );
 
-          expect(verified.payload.aud).toEqual(resourceA);
-          expect(verified.payload["scope"]).toContain("notes:read");
-          expect(verified.payload.exp! - verified.payload.iat!).toBeLessThanOrEqual(900);
+            const verified = yield* Effect.promise(
+              async () =>
+                await jwtVerify(tokenA.access_token, keys, {
+                  issuer: `${baseURL}/api/auth`,
+                  audience: resourceA,
+                  typ: "at+jwt",
+                })
+            );
 
-          const verifiedB = yield* Effect.promise(() =>
-            jwtVerify(tokenB.access_token, keys, {
-              issuer: `${baseURL}/api/auth`,
-              audience: resourceB,
-              typ: "at+jwt",
-            }),
-          );
+            expect(verified.payload.aud).toStrictEqual(resourceA);
+            expect(verified.payload["scope"]).toContain("notes:read");
+            expect(
+              verified.payload.exp! - verified.payload.iat!
+            ).toBeLessThanOrEqual(900);
 
-          expect(verifiedB.payload.aud).not.toContain(resourceA);
+            const verifiedB = yield* Effect.promise(
+              async () =>
+                await jwtVerify(tokenB.access_token, keys, {
+                  issuer: `${baseURL}/api/auth`,
+                  audience: resourceB,
+                  typ: "at+jwt",
+                })
+            );
 
-          return { a, tokenA, jwks };
-        }),
-      );
+            expect(verifiedB.payload.aud).not.toContain(resourceA);
 
-      yield* onGeneration(
-        Effect.gen(function* () {
-          expect(yield* json(yield* request("/api/auth/jwks"))).toEqual(jwks);
-          expect((yield* request("/api/listClients", {})).status).toBe(200);
+            return { a, tokenA, jwks };
+          })
+        );
 
-          const refresh = yield* request(
-            "/api/auth/oauth2/token",
-            {
-              grant_type: "refresh_token",
-              client_id: a.client_id,
-              refresh_token: tokenA.refresh_token,
-              resource: resourceA,
-            },
-            { anonymous: true, form: true },
-          );
+        yield* onGeneration(
+          Effect.gen(function* () {
+            expect(yield* json(yield* request("/api/auth/jwks"))).toStrictEqual(
+              first.jwks
+            );
+            expect((yield* request("/api/listClients", {})).status).toBe(200);
 
-          expect(refresh.status, yield* text(refresh)).toBe(200);
-        }),
-      );
-    }).pipe(Effect.provide(browser())),
+            const refresh = yield* request(
+              "/api/auth/oauth2/token",
+              {
+                grant_type: "refresh_token",
+                client_id: first.a.client_id,
+                refresh_token: first.tokenA.refresh_token,
+                resource: resourceA,
+              },
+              { anonymous: true, form: true }
+            );
+
+            expect(refresh.status, yield* text(refresh)).toBe(200);
+          })
+        );
+      }).pipe(Effect.provide(browser()))
   );
 
   it.live(
@@ -933,36 +1220,60 @@ describe("OAuth boundaries and lifecycle", () => {
           request(
             "/api/auth/oauth2/token",
             resource === undefined
-              ? { grant_type: "refresh_token", client_id: app.client_id, refresh_token: token }
+              ? {
+                  grant_type: "refresh_token",
+                  client_id: app.client_id,
+                  refresh_token: token,
+                }
               : {
                   grant_type: "refresh_token",
                   client_id: app.client_id,
                   refresh_token: token,
                   resource,
                 },
-            { form: true, anonymous: true },
+            { form: true, anonymous: true }
           );
 
-        expect((yield* refresh(original.refresh_token, resourceB)).status).toBe(400);
-        const rotatedResponse = yield* refresh(original.refresh_token, resourceA);
+        expect((yield* refresh(original.refresh_token, resourceB)).status).toBe(
+          400
+        );
+
+        const rotatedResponse = yield* refresh(
+          original.refresh_token,
+          resourceA
+        );
+
         expect(rotatedResponse.status, yield* text(rotatedResponse)).toBe(200);
-        const rotated = yield* json(rotatedResponse);
+        const rotated = yield* decodeJson(Tokens)(rotatedResponse);
         expect(rotated.refresh_token).not.toBe(original.refresh_token);
         const replayed = yield* refresh(original.refresh_token, resourceA);
         expect(replayed.status, yield* text(replayed)).toBe(200);
-        expect((yield* json(replayed)).refresh_token).toBe(rotated.refresh_token);
+        expect((yield* decodeJson(Tokens)(replayed)).refresh_token).toBe(
+          rotated.refresh_token
+        );
         const bare = yield* refresh(rotated.refresh_token);
         expect(bare.status, yield* text(bare)).toBe(200);
-        const next = yield* json(bare);
-        const keys = createLocalJWKSet(yield* json(yield* request("/api/auth/jwks")));
-        yield* Effect.promise(() => jwtVerify(next.access_token, keys, { audience: resourceA }));
+        const next = yield* decodeJson(Tokens)(bare);
+
+        const keys = createLocalJWKSet(
+          yield* decodeJson(Jwks)(yield* request("/api/auth/jwks"))
+        );
+
+        yield* Effect.promise(
+          async () =>
+            await jwtVerify(next.access_token, keys, { audience: resourceA })
+        );
 
         yield* Effect.scoped(
           Effect.gen(function* () {
             yield* advanceDate((refreshTokenReuseSeconds + 1) * 1000);
-            expect((yield* refresh(rotated.refresh_token, resourceA)).status).toBe(400);
-            expect((yield* refresh(next.refresh_token, resourceA)).status).toBe(400);
-          }),
+            expect(
+              (yield* refresh(rotated.refresh_token, resourceA)).status
+            ).toBe(400);
+            expect((yield* refresh(next.refresh_token, resourceA)).status).toBe(
+              400
+            );
+          })
         );
 
         const another = yield* tokens(app.client_id);
@@ -974,7 +1285,7 @@ describe("OAuth boundaries and lifecycle", () => {
             token_type_hint: "refresh_token",
             client_id: app.client_id,
           },
-          { form: true, anonymous: true },
+          { form: true, anonymous: true }
         );
 
         expect(revoked.status).toBe(200);
@@ -987,54 +1298,57 @@ describe("OAuth boundaries and lifecycle", () => {
             token_type_hint: "access_token",
             client_id: app.client_id,
           },
-          { form: true, anonymous: true },
+          { form: true, anonymous: true }
         );
 
         expect(jwtRevocation.status).toBe(400);
-        expect((yield* json(jwtRevocation)).error).toBe("unsupported_token_type");
-      }).pipe(Effect.provide(ownerIssuer())),
+        expect(yield* json(jwtRevocation)).toMatchObject({
+          error: "unsupported_token_type",
+        });
+      }).pipe(Effect.provide(ownerIssuer()))
   );
 });
 
+const access = (clientId: string, resources: string[]) =>
+  request("/api/setClientAccess", { client_id: clientId, resources });
+
+const putResource = (
+  identifier: string,
+  scopes: string[],
+  name = "Updated resource"
+) => request("/api/putResource", { identifier, name, scopes });
+
+const exchange = (
+  clientId: string,
+  grant: { code: string; verifier: string },
+  resource: string
+) =>
+  request(
+    "/api/auth/oauth2/token",
+    {
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: "http://127.0.0.1:9876/callback",
+      code: grant.code,
+      code_verifier: grant.verifier,
+      resource,
+    },
+    { anonymous: true, form: true }
+  );
+
+const refresh = (clientId: string, token: string, resource: string) =>
+  request(
+    "/api/auth/oauth2/token",
+    {
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: token,
+      resource,
+    },
+    { anonymous: true, form: true }
+  );
+
 describe("dashboard resources and client access", () => {
-  const listing = () => Effect.flatMap(request("/api/listClients", {}), json);
-
-  const access = (clientId: string, resources: string[]) =>
-    request("/api/setClientAccess", { client_id: clientId, resources });
-
-  const putResource = (identifier: string, scopes: string[], name = "Updated resource") =>
-    request("/api/putResource", { identifier, name, scopes });
-
-  const exchange = (
-    clientId: string,
-    grant: { code: string; verifier: string },
-    resource: string,
-  ) =>
-    request(
-      "/api/auth/oauth2/token",
-      {
-        grant_type: "authorization_code",
-        client_id: clientId,
-        redirect_uri: "http://127.0.0.1:9876/callback",
-        code: grant.code,
-        code_verifier: grant.verifier,
-        resource,
-      },
-      { anonymous: true, form: true },
-    );
-
-  const refresh = (clientId: string, token: string, resource: string) =>
-    request(
-      "/api/auth/oauth2/token",
-      {
-        grant_type: "refresh_token",
-        client_id: clientId,
-        refresh_token: token,
-        resource,
-      },
-      { anonymous: true, form: true },
-    );
-
   it.live(
     "the built-in administration resource survives restart and user resource CRUD persists",
     () =>
@@ -1042,51 +1356,75 @@ describe("dashboard resources and client access", () => {
         yield* onGeneration(
           Effect.gen(function* () {
             yield* signedInOwner;
-            expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
-          }),
+            expect((yield* listing()).resources).toStrictEqual([
+              administrationResource(baseURL),
+            ]);
+          })
         );
 
-        const resource = { identifier: resourceA, name: "Personal MCP", scopes: ["read", "write"] };
+        const resource = {
+          identifier: resourceA,
+          name: "Personal MCP",
+          scopes: ["read", "write"],
+        };
 
         yield* onGeneration(
           Effect.gen(function* () {
-            expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
-            expect(yield* json(yield* request("/api/putResource", resource))).toEqual({
+            expect((yield* listing()).resources).toStrictEqual([
+              administrationResource(baseURL),
+            ]);
+            expect(
+              yield* json(yield* request("/api/putResource", resource))
+            ).toStrictEqual({
               resource,
               created: true,
             });
-            expect(yield* json(yield* request("/api/putResource", resource))).toEqual({
+            expect(
+              yield* json(yield* request("/api/putResource", resource))
+            ).toStrictEqual({
               resource,
               created: false,
             });
-            expect((yield* putResource(resourceA, ["read"], "Renamed MCP")).status).toBe(200);
-          }),
+            expect(
+              (yield* putResource(resourceA, ["read"], "Renamed MCP")).status
+            ).toBe(200);
+          })
         );
 
         yield* onGeneration(
           Effect.gen(function* () {
-            expect((yield* listing()).resources).toEqual([
+            expect((yield* listing()).resources).toStrictEqual([
               administrationResource(baseURL),
-              { ...resource, name: "Renamed MCP", scopes: ["read"], builtIn: false },
+              {
+                ...resource,
+                name: "Renamed MCP",
+                scopes: ["read"],
+                builtIn: false,
+              },
             ]);
-            expect((yield* request("/api/deleteResource", { identifier: resourceA })).status).toBe(
-              200,
-            );
-          }),
+            expect(
+              (yield* request("/api/deleteResource", { identifier: resourceA }))
+                .status
+            ).toBe(200);
+          })
         );
 
         yield* onGeneration(
           Effect.gen(function* () {
-            expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
-            expect((yield* request("/api/getResource", { identifier: resourceA })).status).toBe(
-              404,
-            );
-            expect((yield* request("/api/deleteResource", { identifier: resourceA })).status).toBe(
-              404,
-            );
-          }),
+            expect((yield* listing()).resources).toStrictEqual([
+              administrationResource(baseURL),
+            ]);
+            expect(
+              (yield* request("/api/getResource", { identifier: resourceA }))
+                .status
+            ).toBe(404);
+            expect(
+              (yield* request("/api/deleteResource", { identifier: resourceA }))
+                .status
+            ).toBe(404);
+          })
         );
-      }).pipe(Effect.provide(browser())),
+      }).pipe(Effect.provide(browser()))
   );
 
   it.live(
@@ -1106,9 +1444,10 @@ describe("dashboard resources and client access", () => {
           { ...valid, scopes: ["réad"] },
           { ...valid, scopes: ["offline_access"] },
         ]) {
-          expect((yield* request("/api/putResource", input)).status, JSON.stringify(input)).toBe(
-            400,
-          );
+          expect(
+            (yield* request("/api/putResource", input)).status,
+            JSON.stringify(input)
+          ).toBe(400);
         }
 
         const fragment = yield* request("/api/putResource", {
@@ -1116,7 +1455,7 @@ describe("dashboard resources and client access", () => {
           identifier: "https://api.internal/#fragment",
         });
 
-        expect((yield* json(fragment)).issues).toEqual([
+        expect((yield* decodeJson(Refusal)(fragment)).issues).toStrictEqual([
           {
             path: ["identifier"],
             message:
@@ -1129,25 +1468,34 @@ describe("dashboard resources and client access", () => {
           scopes: ["read", " offline_access "],
         });
 
-        expect((yield* json(reserved)).issues).toEqual([
+        expect((yield* decodeJson(Refusal)(reserved)).issues).toStrictEqual([
           { path: ["scopes", 1], message: "offline_access is reserved" },
         ]);
 
-        expect((yield* request("/api/putResource", valid, { anonymous: true })).status).toBe(401);
-        expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
+        expect(
+          (yield* request("/api/putResource", valid, { anonymous: true }))
+            .status
+        ).toBe(401);
+        expect((yield* listing()).resources).toStrictEqual([
+          administrationResource(baseURL),
+        ]);
         const { context } = yield* Issuer;
-        const ownerId = yield* (yield* OwnerAccount).find();
+        const ownerId = yield* (yield* OwnerAccount).find;
 
-        if (ownerId === undefined) return yield* Effect.die("Missing test owner");
-        yield* Effect.promise(() =>
-          context.adapter.update({
-            model: "session",
-            where: [{ field: "userId", value: ownerId }],
-            update: { createdAt: new Date(Date.now() - 16 * 60_000) },
-          }),
+        if (ownerId === undefined) {
+          return yield* Effect.die("Missing test owner");
+        }
+
+        yield* Effect.promise(
+          async () =>
+            await context.adapter.update({
+              model: "session",
+              where: [{ field: "userId", value: ownerId }],
+              update: { createdAt: new Date(Date.now() - 16 * 60_000) },
+            })
         );
         expect((yield* request("/api/putResource", valid)).status).toBe(200);
-        expect((yield* listing()).resources).toEqual([
+        expect((yield* listing()).resources).toStrictEqual([
           administrationResource(baseURL),
           { ...valid, builtIn: false },
         ]);
@@ -1161,114 +1509,142 @@ describe("dashboard resources and client access", () => {
         });
 
         expect(created.status, yield* text(created)).toBe(201);
-        const app = yield* json(created);
+        const app = yield* decodeJson(ClientId)(created);
         expect(
           (yield* request("/api/rotateClientSecret", {
             client_id: app.client_id,
-          })).status,
+          })).status
         ).toBe(200);
-      }).pipe(Effect.provide(signedInIssuer())),
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
-  it.live("domain refusals and internal failures share one wire vocabulary", () =>
-    Effect.gen(function* () {
-      const resource = { identifier: resourceA, name: "Notes MCP", scopes: ["notes:read"] };
-      expect((yield* request("/api/putResource", resource)).status).toBe(200);
+  it.live(
+    "domain refusals and internal failures share one wire vocabulary",
+    () =>
+      Effect.gen(function* () {
+        const resource = {
+          identifier: resourceA,
+          name: "Notes MCP",
+          scopes: ["notes:read"],
+        };
 
-      const reserved = yield* request("/api/deleteResource", {
-        identifier: `${baseURL}/`,
-      });
+        expect((yield* request("/api/putResource", resource)).status).toBe(200);
 
-      expect(reserved.status).toBe(400);
-      const refused = yield* json(reserved);
-      expect(refused._tag).toBe("InvalidInput");
-      expect(refused.issues).toEqual([
-        { path: ["identifier"], message: "The administration Resource is fixed" },
-      ]);
+        const reserved = yield* request("/api/deleteResource", {
+          identifier: `${baseURL}/`,
+        });
 
-      yield* sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`;
+        expect(reserved.status).toBe(400);
+        const refused = yield* decodeJson(Refusal)(reserved);
+        expect(refused._tag).toBe("InvalidInput");
+        expect(refused.issues).toStrictEqual([
+          {
+            path: ["identifier"],
+            message: "The administration Resource is fixed",
+          },
+        ]);
 
-      const authorize = yield* request(
-        `/api/auth/oauth2/authorize?client_id=unused&resource=${encodeURIComponent(resourceA)}`,
-        undefined,
-        { anonymous: true },
-      );
+        yield* sql`UPDATE oauthResource SET allowedScopes = 'not json' WHERE identifier = ${resourceA}`;
 
-      expect(authorize.status).toBe(500);
-      expect(yield* json(authorize)).toEqual(
-        Schema.encodeSync(InternalServerError)(
-          new InternalServerError({ message: "Request could not be completed" }),
-        ),
-      );
-    }).pipe(Effect.provide(signedInIssuer())),
+        const response = yield* request(
+          `/api/auth/oauth2/authorize?client_id=unused&resource=${encodeURIComponent(resourceA)}`,
+          undefined,
+          { anonymous: true }
+        );
+
+        expect(response.status).toBe(500);
+        expect(yield* json(response)).toStrictEqual(
+          yield* Schema.encodeEffect(InternalServerError)(
+            new InternalServerError({
+              message: "Request could not be completed",
+            })
+          )
+        );
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
-  it.live("resources accept any absolute URI and may define no custom scopes", () =>
-    Effect.gen(function* () {
-      const urn = { identifier: "urn:example:reports", name: "Reports", scopes: [] };
-      expect((yield* request("/api/putResource", urn)).status).toBe(200);
-      expect((yield* listing()).resources).toEqual([
-        administrationResource(baseURL),
-        { ...urn, builtIn: false },
-      ]);
-      expect((yield* putResource(urn.identifier, [], "Renamed reports")).status).toBe(200);
-      expect((yield* request("/api/deleteResource", { identifier: urn.identifier })).status).toBe(
-        200,
-      );
-    }).pipe(Effect.provide(signedInIssuer())),
+  it.live(
+    "resources accept any absolute URI and may define no custom scopes",
+    () =>
+      Effect.gen(function* () {
+        const urn = {
+          identifier: "urn:example:reports",
+          name: "Reports",
+          scopes: [],
+        };
+
+        expect((yield* request("/api/putResource", urn)).status).toBe(200);
+        expect((yield* listing()).resources).toStrictEqual([
+          administrationResource(baseURL),
+          { ...urn, builtIn: false },
+        ]);
+        expect(
+          (yield* putResource(urn.identifier, [], "Renamed reports")).status
+        ).toBe(200);
+        expect(
+          (yield* request("/api/deleteResource", {
+            identifier: urn.identifier,
+          })).status
+        ).toBe(200);
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
-  it.live("managed clients accept several redirect URIs and can be edited", () =>
-    Effect.gen(function* () {
-      const created = yield* request("/api/createClient", {
-        client_name: "Multi-callback client",
-        redirect_uris: ["http://127.0.0.1:9876/callback", "http://localhost:5173/callback"],
-        resources: [],
-        application_type: "native",
-        token_endpoint_auth_method: "client_secret_post",
-      });
+  it.live(
+    "managed clients accept several redirect URIs and can be edited",
+    () =>
+      Effect.gen(function* () {
+        const created = yield* request("/api/createClient", {
+          client_name: "Multi-callback client",
+          redirect_uris: [
+            "http://127.0.0.1:9876/callback",
+            "http://localhost:5173/callback",
+          ],
+          resources: [],
+          application_type: "native",
+          token_endpoint_auth_method: "client_secret_post",
+        });
 
-      expect(created.status, yield* text(created)).toBe(201);
-      const app = yield* json(created);
-      expect(app.redirect_uris).toEqual([
-        "http://127.0.0.1:9876/callback",
-        "http://localhost:5173/callback",
-      ]);
-      expect(app.token_endpoint_auth_method).toBe("client_secret_post");
+        expect(created.status, yield* text(created)).toBe(201);
+        const app = yield* decodeJson(Registered)(created);
+        expect(app.redirect_uris).toStrictEqual([
+          "http://127.0.0.1:9876/callback",
+          "http://localhost:5173/callback",
+        ]);
+        expect(app.token_endpoint_auth_method).toBe("client_secret_post");
 
-      const updated = yield* request("/api/updateClient", {
-        client_id: app.client_id,
-        client_name: "Renamed client",
-        redirect_uris: ["https://app.internal/callback"],
-        application_type: "web",
-      });
-
-      expect(updated.status, yield* text(updated)).toBe(200);
-      expect(yield* json(updated)).toMatchObject({
-        client_id: app.client_id,
-        client_name: "Renamed client",
-        redirect_uris: ["https://app.internal/callback"],
-        application_type: "web",
-      });
-
-      const stored = (yield* listing()).clients.find(
-        (row: { client_id: string }) => row.client_id === app.client_id,
-      );
-
-      expect(stored).toMatchObject({
-        client_name: "Renamed client",
-        redirect_uris: ["https://app.internal/callback"],
-        application_type: "web",
-      });
-      expect(
-        (yield* request("/api/updateClient", {
+        const updated = yield* request("/api/updateClient", {
           client_id: app.client_id,
-          client_name: "Loopback web client",
-          redirect_uris: ["http://127.0.0.1:9876/callback"],
+          client_name: "Renamed client",
+          redirect_uris: ["https://app.internal/callback"],
           application_type: "web",
-        })).status,
-      ).toBe(400);
-    }).pipe(Effect.provide(signedInIssuer())),
+        });
+
+        expect(updated.status, yield* text(updated)).toBe(200);
+        expect(yield* json(updated)).toMatchObject({
+          client_id: app.client_id,
+          client_name: "Renamed client",
+          redirect_uris: ["https://app.internal/callback"],
+          application_type: "web",
+        });
+
+        const stored = (yield* listing()).clients.find(
+          (row: { client_id: string }) => row.client_id === app.client_id
+        );
+
+        expect(stored).toMatchObject({
+          client_name: "Renamed client",
+          redirect_uris: ["https://app.internal/callback"],
+          application_type: "web",
+        });
+        expect(
+          (yield* request("/api/updateClient", {
+            client_id: app.client_id,
+            client_name: "Loopback web client",
+            redirect_uris: ["http://127.0.0.1:9876/callback"],
+            application_type: "web",
+          })).status
+        ).toBe(400);
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
   it.live(
@@ -1284,9 +1660,11 @@ describe("dashboard resources and client access", () => {
         });
 
         expect(created.status, yield* text(created)).toBe(201);
-        const app = yield* json(created);
-        expect((yield* listing()).clientAccess).toEqual([]);
-        expect((yield* listing()).resources).toEqual([administrationResource(baseURL)]);
+        const app = yield* decodeJson(ClientId)(created);
+        expect((yield* listing()).clientAccess).toStrictEqual([]);
+        expect((yield* listing()).resources).toStrictEqual([
+          administrationResource(baseURL),
+        ]);
 
         const resource = {
           identifier: "http://api.internal/mcp",
@@ -1296,115 +1674,170 @@ describe("dashboard resources and client access", () => {
 
         const added = yield* request("/api/putResource", resource);
         expect(added.status, yield* text(added)).toBe(200);
-        const flow = authorization(app.client_id, resource.identifier, { scope: "r" });
+
+        const flow = authorization(app.client_id, resource.identifier, {
+          scope: "r",
+        });
+
         const denied = yield* request(flow.path);
         expect(denied.status).not.toBe(200);
         expect(denied.headers.get("location") ?? "").not.toContain("/consent");
-        expect((yield* access(app.client_id, [resource.identifier])).status).toBe(200);
+        expect(
+          (yield* access(app.client_id, [resource.identifier])).status
+        ).toBe(200);
 
-        const issued = yield* tokens(
-          app.client_id,
-          resource.identifier,
-          undefined,
-          resource.scopes.join(" "),
+        const issued = yield* decodeJson(AccessToken)(
+          yield* issue(
+            app.client_id,
+            resource.identifier,
+            undefined,
+            resource.scopes.join(" ")
+          )
         );
 
-        const keys = createLocalJWKSet(yield* json(yield* request("/api/auth/jwks")));
+        const keys = createLocalJWKSet(
+          yield* decodeJson(Jwks)(yield* request("/api/auth/jwks"))
+        );
 
-        const { payload: claims } = yield* Effect.promise(() =>
-          jwtVerify(issued.access_token, keys, {
-            issuer: `${baseURL}/api/auth`,
-            audience: resource.identifier,
-            typ: "at+jwt",
-          }),
+        const { payload: claims } = yield* Effect.promise(
+          async () =>
+            await jwtVerify(issued.access_token, keys, {
+              issuer: `${baseURL}/api/auth`,
+              audience: resource.identifier,
+              typ: "at+jwt",
+            })
         );
 
         expect(claims.aud).toBe(resource.identifier);
-        expect(new Set(String(claims["scope"]).split(" "))).toEqual(new Set(resource.scopes));
-      }).pipe(Effect.provide(signedInIssuer())),
+        expect(new Set(String(claims["scope"]).split(" "))).toStrictEqual(
+          new Set(resource.scopes)
+        );
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
-  it.live("one client accesses multiple resources but each token request targets one", () =>
-    Effect.gen(function* () {
-      const app = yield* client();
-      expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-      const rows = (yield* listing()).clientAccess;
-      expect(rows).toEqual(
-        expect.arrayContaining([
-          { client_id: app.client_id, resource: resourceA },
-          { client_id: app.client_id, resource: resourceB },
-        ]),
-      );
-      expect((yield* tokens(app.client_id, resourceA)).access_token).toBeTypeOf("string");
-      expect((yield* tokens(app.client_id, resourceB)).access_token).toBeTypeOf("string");
-      expect(
-        (yield* access(app.client_id, [resourceA, "https://missing.internal/api"])).status,
-      ).toBe(400);
-      expect((yield* listing()).clientAccess).toEqual(rows);
-      expect((yield* access(app.client_id, [])).status).toBe(200);
-      expect((yield* listing()).clientAccess).toEqual([]);
-      expect((yield* request("/api/deleteResource", { identifier: resourceA })).status).toBe(200);
-    }).pipe(Effect.provide(signedInIssuer())),
+  it.live(
+    "one client accesses multiple resources but each token request targets one",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* client();
+        expect(
+          (yield* access(app.client_id, [resourceA, resourceB])).status
+        ).toBe(200);
+        const rows = (yield* listing()).clientAccess;
+        expect(rows).toStrictEqual(
+          expect.arrayContaining([
+            { client_id: app.client_id, resource: resourceA },
+            { client_id: app.client_id, resource: resourceB },
+          ])
+        );
+        expect(
+          (yield* tokens(app.client_id, resourceA)).access_token
+        ).toBeTypeOf("string");
+        expect(
+          (yield* tokens(app.client_id, resourceB)).access_token
+        ).toBeTypeOf("string");
+        expect(
+          (yield* access(app.client_id, [
+            resourceA,
+            "https://missing.internal/api",
+          ])).status
+        ).toBe(400);
+        expect((yield* listing()).clientAccess).toStrictEqual(rows);
+        expect((yield* access(app.client_id, [])).status).toBe(200);
+        expect((yield* listing()).clientAccess).toStrictEqual([]);
+        expect(
+          (yield* request("/api/deleteResource", { identifier: resourceA }))
+            .status
+        ).toBe(200);
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
-  it.live("filtered access preserves ordering and isolates clients sharing a resource", () =>
-    Effect.gen(function* () {
-      const first = yield* client();
-      const second = yield* client();
-      const linked = yield* access(first.client_id, [resourceB, resourceA]);
-      expect(linked.status).toBe(200);
-      expect((yield* json(linked)).clientAccess).toEqual([
-        { client_id: first.client_id, resource: resourceA },
-        { client_id: first.client_id, resource: resourceB },
-      ]);
-      expect(yield* (yield* ResourceCatalog).hasAccess(first.client_id, resourceB)).toBe(true);
-      expect(yield* (yield* ResourceCatalog).hasAccess(second.client_id, resourceB)).toBe(false);
-      expect(yield* (yield* ResourceCatalog).hasAccess("missing", resourceA)).toBe(false);
-      expect((yield* access(first.client_id, [])).status).toBe(200);
-      expect((yield* listing()).clientAccess).toEqual([
-        { client_id: second.client_id, resource: resourceA },
-      ]);
-      expect((yield* request("/api/deleteResource", { identifier: resourceA })).status).toBe(200);
-      expect((yield* listing()).clientAccess).toEqual([]);
-      expect((yield* request("/api/deleteResource", { identifier: resourceB })).status).toBe(200);
-    }).pipe(Effect.provide(signedInIssuer())),
+  it.live(
+    "filtered access preserves ordering and isolates clients sharing a resource",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* client();
+        const second = yield* client();
+        const linked = yield* access(first.client_id, [resourceB, resourceA]);
+        expect(linked.status).toBe(200);
+        expect(yield* json(linked)).toStrictEqual({
+          clientAccess: [
+            { client_id: first.client_id, resource: resourceA },
+            { client_id: first.client_id, resource: resourceB },
+          ],
+        });
+        expect(
+          yield* (yield* ResourceCatalog).hasAccess(first.client_id, resourceB)
+        ).toBe(true);
+        expect(
+          yield* (yield* ResourceCatalog).hasAccess(second.client_id, resourceB)
+        ).toBe(false);
+        expect(
+          yield* (yield* ResourceCatalog).hasAccess("missing", resourceA)
+        ).toBe(false);
+        expect((yield* access(first.client_id, [])).status).toBe(200);
+        expect((yield* listing()).clientAccess).toStrictEqual([
+          { client_id: second.client_id, resource: resourceA },
+        ]);
+        expect(
+          (yield* request("/api/deleteResource", { identifier: resourceA }))
+            .status
+        ).toBe(200);
+        expect((yield* listing()).clientAccess).toStrictEqual([]);
+        expect(
+          (yield* request("/api/deleteResource", { identifier: resourceB }))
+            .status
+        ).toBe(200);
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
   it.live("the same scope label has independent consent on each resource", () =>
     Effect.gen(function* () {
       const app = yield* dynamicClient;
-      expect((yield* putResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
+      expect(
+        (yield* putResource(resourceB, ["notes:read", "notes:write"])).status
+      ).toBe(200);
       yield* authorize(app.client_id, resourceA);
-      const responseB = yield* request(unprompted(app.client_id, resourceB).path);
+
+      const responseB = yield* request(
+        unprompted(app.client_id, resourceB).path
+      );
+
       const consentB = new URL(responseB.headers.get("location")!, baseURL);
       expect(consentB.pathname).toBe("/consent");
       expect(
         (yield* request("/api/auth/oauth2/consent", {
           accept: true,
           oauth_query: consentB.search.slice(1),
-        })).status,
+        })).status
       ).toBe(200);
 
       const consents =
         yield* sql`SELECT referenceId, resources FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`;
 
-      expect(consents).toEqual(
+      expect(consents.map((row) => ({ ...row }))).toStrictEqual(
         [
-          { referenceId: `resource:${resourceA}`, resources: JSON.stringify([resourceA]) },
-          { referenceId: `resource:${resourceB}`, resources: JSON.stringify([resourceB]) },
-        ].sort((a, b) => a.referenceId.localeCompare(b.referenceId)),
+          {
+            referenceId: `resource:${resourceA}`,
+            resources: JSON.stringify([resourceA]),
+          },
+          {
+            referenceId: `resource:${resourceB}`,
+            resources: JSON.stringify([resourceB]),
+          },
+        ].toSorted((a, b) => a.referenceId.localeCompare(b.referenceId))
       );
 
       for (const resource of [resourceA, resourceB]) {
         const prior = yield* request(
-          authorization(app.client_id, resource, { prompt: "none" }).path,
+          authorization(app.client_id, resource, { prompt: "none" }).path
         );
 
         const redirect = new URL(prior.headers.get("location")!, baseURL);
         expect(redirect.searchParams.has("code")).toBe(true);
         expect(redirect.searchParams.has("error")).toBe(false);
       }
-    }).pipe(Effect.provide(signedInIssuer())),
+    }).pipe(Effect.provide(signedInIssuer()))
   );
 
   it.live(
@@ -1414,33 +1847,49 @@ describe("dashboard resources and client access", () => {
         const app = yield* dynamicClient;
         const issued = yield* tokens(app.client_id);
         expect(
-          (yield* putResource(resourceA, ["notes:read", "notes:write"], "Renamed")).status,
+          (yield* putResource(
+            resourceA,
+            ["notes:read", "notes:write"],
+            "Renamed"
+          )).status
         ).toBe(200);
-        expect((yield* refresh(app.client_id, issued.refresh_token, resourceA)).status).toBe(200);
         expect(
-          (yield* putResource(resourceA, ["notes:read", "notes:write", "notes:admin"])).status,
+          (yield* refresh(app.client_id, issued.refresh_token, resourceA))
+            .status
+        ).toBe(200);
+        expect(
+          (yield* putResource(resourceA, [
+            "notes:read",
+            "notes:write",
+            "notes:admin",
+          ])).status
         ).toBe(200);
 
-        const metadata = yield* json(
-          yield* request("/.well-known/oauth-authorization-server/api/auth"),
+        const metadata = yield* decodeJson(Discovery)(
+          yield* request("/.well-known/oauth-authorization-server/api/auth")
         );
 
         expect(metadata.scopes_supported).toContain("notes:admin");
 
         const stored = (yield* listing()).clients.find(
-          (row: { client_id: string }) => row.client_id === app.client_id,
+          (row: { client_id: string }) => row.client_id === app.client_id
         );
 
-        expect(stored.scope.split(" ")).toContain("notes:admin");
+        expect(stored?.scope?.split(" ")).toContain("notes:admin");
 
         const response = yield* request(
-          authorization(app.client_id, resourceA, { scope: "notes:admin", prompt: "none" }).path,
+          authorization(app.client_id, resourceA, {
+            scope: "notes:admin",
+            prompt: "none",
+          }).path
         );
 
-        expect(new URL(response.headers.get("location")!, baseURL).searchParams.get("error")).toBe(
-          "consent_required",
-        );
-      }).pipe(Effect.provide(signedInIssuer())),
+        expect(
+          new URL(response.headers.get("location")!, baseURL).searchParams.get(
+            "error"
+          )
+        ).toBe("consent_required");
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 
   it.live(
@@ -1448,139 +1897,237 @@ describe("dashboard resources and client access", () => {
     () =>
       Effect.gen(function* () {
         const app = yield* client();
-        expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-        expect((yield* putResource(resourceB, ["notes:read", "notes:write"])).status).toBe(200);
+        expect(
+          (yield* access(app.client_id, [resourceA, resourceB])).status
+        ).toBe(200);
+        expect(
+          (yield* putResource(resourceB, ["notes:read", "notes:write"])).status
+        ).toBe(200);
         const sharedScopes = "offline_access notes:read";
         const issuedA = yield* tokens(app.client_id, resourceA);
         const retainedRefreshA = yield* tokens(app.client_id, resourceA);
-        const issuedB = yield* tokens(app.client_id, resourceB, undefined, sharedScopes);
-        const pendingA = yield* authorize(app.client_id, resourceA);
-        const retainedA = yield* authorize(app.client_id, resourceA);
-        const pendingB = yield* authorize(app.client_id, resourceB, sharedScopes);
-        expect((yield* putResource(resourceA, ["notes:write"])).status).toBe(200);
-        const narrowed = yield* refresh(app.client_id, issuedA.refresh_token, resourceA);
-        expect(narrowed.status).toBe(200);
-        const narrowedToken = yield* json(narrowed);
-        expect(narrowedToken.scope.split(" ")).not.toContain("notes:read");
-        const keys = createLocalJWKSet(yield* json(yield* request("/api/auth/jwks")));
 
-        const verified = yield* Effect.promise(() =>
-          jwtVerify(narrowedToken.access_token, keys, { audience: resourceA }),
+        const issuedB = yield* tokens(
+          app.client_id,
+          resourceB,
+          undefined,
+          sharedScopes
         );
 
-        expect(String(verified.payload["scope"]).split(" ")).not.toContain("notes:read");
-        const narrowedCode = yield* exchange(app.client_id, pendingA, resourceA);
+        const pendingA = yield* authorize(app.client_id, resourceA);
+        const retainedA = yield* authorize(app.client_id, resourceA);
+
+        const pendingB = yield* authorize(
+          app.client_id,
+          resourceB,
+          sharedScopes
+        );
+
+        expect((yield* putResource(resourceA, ["notes:write"])).status).toBe(
+          200
+        );
+
+        const narrowed = yield* refresh(
+          app.client_id,
+          issuedA.refresh_token,
+          resourceA
+        );
+
+        expect(narrowed.status).toBe(200);
+        const narrowedToken = yield* decodeJson(Tokens)(narrowed);
+        expect(narrowedToken.scope.split(" ")).not.toContain("notes:read");
+
+        const keys = createLocalJWKSet(
+          yield* decodeJson(Jwks)(yield* request("/api/auth/jwks"))
+        );
+
+        const verified = yield* Effect.promise(
+          async () =>
+            await jwtVerify(narrowedToken.access_token, keys, {
+              audience: resourceA,
+            })
+        );
+
+        expect(String(verified.payload["scope"]).split(" ")).not.toContain(
+          "notes:read"
+        );
+
+        const narrowedCode = yield* exchange(
+          app.client_id,
+          pendingA,
+          resourceA
+        );
+
         expect(narrowedCode.status).toBe(200);
-        expect((yield* json(narrowedCode)).scope.split(" ")).not.toContain("notes:read");
-        expect((yield* refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
-        expect((yield* exchange(app.client_id, pendingB, resourceB)).status).toBe(200);
-        expect((yield* putResource(resourceA, ["notes:read", "notes:write"])).status).toBe(200);
+        expect(
+          (yield* decodeJson(Tokens)(narrowedCode)).scope.split(" ")
+        ).not.toContain("notes:read");
+        expect(
+          (yield* refresh(app.client_id, issuedB.refresh_token, resourceB))
+            .status
+        ).toBe(200);
+        expect(
+          (yield* exchange(app.client_id, pendingB, resourceB)).status
+        ).toBe(200);
+        expect(
+          (yield* putResource(resourceA, ["notes:read", "notes:write"])).status
+        ).toBe(200);
 
         const restoredRefresh = yield* refresh(
           app.client_id,
           retainedRefreshA.refresh_token,
-          resourceA,
+          resourceA
         );
 
         expect(restoredRefresh.status).toBe(200);
-        expect((yield* json(restoredRefresh)).scope.split(" ")).toContain("notes:read");
-        const restoredCode = yield* exchange(app.client_id, retainedA, resourceA);
-        expect(restoredCode.status).toBe(200);
-        expect((yield* json(restoredCode)).scope.split(" ")).toContain("notes:read");
-        expect((yield* exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
-      }).pipe(Effect.provide(signedInIssuer())),
-  );
-
-  it.live("removing access revokes that resource's authorization and leaves the others", () =>
-    Effect.gen(function* () {
-      const app = yield* client();
-      expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-      const issuedA = yield* tokens(app.client_id, resourceA);
-      const issuedB = yield* tokens(app.client_id, resourceB);
-      const pendingA = yield* authorize(app.client_id, resourceA);
-
-      const consents = () =>
-        sql`SELECT referenceId FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`;
-
-      const consentsBefore = yield* consents();
-      expect(consentsBefore).toContainEqual({ referenceId: `resource:${resourceA}` });
-      expect((yield* access(app.client_id, [resourceB])).status).toBe(200);
-      expect(yield* consents()).toEqual(
-        consentsBefore.filter((row) => row["referenceId"] !== `resource:${resourceA}`),
-      );
-      expect((yield* refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
-
-      expect((yield* access(app.client_id, [resourceA, resourceB])).status).toBe(200);
-      expect((yield* refresh(app.client_id, issuedA.refresh_token, resourceA)).status).toBe(400);
-      expect((yield* exchange(app.client_id, pendingA, resourceA)).status).toBe(400);
-      expect((yield* refresh(app.client_id, issuedB.refresh_token, resourceB)).status).toBe(200);
-
-      const unaffected = yield* request(
-        authorization(app.client_id, resourceB, {
-          scope: "offline_access reports:read",
-          prompt: "none",
-        }).path,
-      );
-
-      expect(new URL(unaffected.headers.get("location")!, baseURL).searchParams.has("code")).toBe(
-        true,
-      );
-    }).pipe(Effect.provide(signedInIssuer())),
-  );
-
-  it.live("a failed provider resource write preserves stored policy and live discovery", () =>
-    Effect.gen(function* () {
-      const app = yield* client();
-      const before = yield* listing();
-
-      const metadataBefore = yield* json(
-        yield* request("/.well-known/oauth-authorization-server/api/auth"),
-      );
-
-      yield* Effect.acquireUseRelease(
-        sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
-        () =>
-          Effect.gen(function* () {
-            expect((yield* putResource(resourceA, ["notes:read", "new:scope"])).status).toBe(500);
-            expect(yield* listing()).toEqual(before);
-
-            const metadataAfter = yield* json(
-              yield* request("/.well-known/oauth-authorization-server/api/auth"),
-            );
-
-            expect(metadataAfter.scopes_supported).toEqual(metadataBefore.scopes_supported);
-          }),
-        () => sql`DROP TRIGGER reject_scope_update`,
-      );
-
-      expect((yield* tokens(app.client_id)).access_token).toBeTypeOf("string");
-    }).pipe(Effect.provide(signedInIssuer())),
-  );
-
-  it.live("overlapping link and delete requests leave consistent resource access", () =>
-    Effect.gen(function* () {
-      const app = yield* client();
-
-      const results = yield* Effect.all(
-        [
-          access(app.client_id, [resourceA, resourceB]),
-          request("/api/deleteResource", { identifier: resourceB }),
-        ],
-        { concurrency: "unbounded" },
-      );
-
-      // why: linking races the deletion, so it may lose at any provider step
-      expect([200, 400, 404]).toContain(results[0]?.status);
-      expect(results[1]?.status).toBe(200);
-      const state = yield* listing();
-
-      for (const link of state.clientAccess) {
         expect(
-          state.resources.some(
-            (resource: { identifier: string }) => resource.identifier === link.resource,
-          ),
+          (yield* decodeJson(Tokens)(restoredRefresh)).scope.split(" ")
+        ).toContain("notes:read");
+
+        const restoredCode = yield* exchange(
+          app.client_id,
+          retainedA,
+          resourceA
+        );
+
+        expect(restoredCode.status).toBe(200);
+        expect(
+          (yield* decodeJson(Tokens)(restoredCode)).scope.split(" ")
+        ).toContain("notes:read");
+        expect(
+          (yield* exchange(app.client_id, pendingA, resourceA)).status
+        ).toBe(400);
+      }).pipe(Effect.provide(signedInIssuer()))
+  );
+
+  it.live(
+    "removing access revokes that resource's authorization and leaves the others",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* client();
+        expect(
+          (yield* access(app.client_id, [resourceA, resourceB])).status
+        ).toBe(200);
+        const issuedA = yield* tokens(app.client_id, resourceA);
+        const issuedB = yield* tokens(app.client_id, resourceB);
+        const pendingA = yield* authorize(app.client_id, resourceA);
+
+        const consents = () =>
+          sql`SELECT referenceId FROM oauthConsent WHERE clientId = ${app.client_id} ORDER BY referenceId`;
+
+        const consentsBefore = yield* consents();
+        expect(consentsBefore).toContainEqual({
+          referenceId: `resource:${resourceA}`,
+        });
+        expect((yield* access(app.client_id, [resourceB])).status).toBe(200);
+        expect(yield* consents()).toStrictEqual(
+          consentsBefore.filter(
+            (row) => row["referenceId"] !== `resource:${resourceA}`
+          )
+        );
+        expect(
+          (yield* refresh(app.client_id, issuedA.refresh_token, resourceA))
+            .status
+        ).toBe(400);
+
+        expect(
+          (yield* access(app.client_id, [resourceA, resourceB])).status
+        ).toBe(200);
+        expect(
+          (yield* refresh(app.client_id, issuedA.refresh_token, resourceA))
+            .status
+        ).toBe(400);
+        expect(
+          (yield* exchange(app.client_id, pendingA, resourceA)).status
+        ).toBe(400);
+        expect(
+          (yield* refresh(app.client_id, issuedB.refresh_token, resourceB))
+            .status
+        ).toBe(200);
+
+        const unaffected = yield* request(
+          authorization(app.client_id, resourceB, {
+            scope: "offline_access reports:read",
+            prompt: "none",
+          }).path
+        );
+
+        expect(
+          new URL(
+            unaffected.headers.get("location")!,
+            baseURL
+          ).searchParams.has("code")
         ).toBe(true);
-      }
-    }).pipe(Effect.provide(signedInIssuer())),
+      }).pipe(Effect.provide(signedInIssuer()))
+  );
+
+  it.live(
+    "a failed provider resource write preserves stored policy and live discovery",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* client();
+        const before = yield* listing();
+
+        const metadataBefore = yield* decodeJson(Discovery)(
+          yield* request("/.well-known/oauth-authorization-server/api/auth")
+        );
+
+        yield* Effect.acquireUseRelease(
+          sql`CREATE TRIGGER reject_scope_update BEFORE UPDATE OF allowedScopes ON oauthResource BEGIN SELECT RAISE(ABORT, 'injected scope failure'); END`,
+          () =>
+            Effect.gen(function* () {
+              expect(
+                (yield* putResource(resourceA, ["notes:read", "new:scope"]))
+                  .status
+              ).toBe(500);
+              expect(yield* listing()).toStrictEqual(before);
+
+              const metadataAfter = yield* decodeJson(Discovery)(
+                yield* request(
+                  "/.well-known/oauth-authorization-server/api/auth"
+                )
+              );
+
+              expect(metadataAfter.scopes_supported).toStrictEqual(
+                metadataBefore.scopes_supported
+              );
+            }),
+          () => sql`DROP TRIGGER reject_scope_update`
+        );
+
+        expect((yield* tokens(app.client_id)).access_token).toBeTypeOf(
+          "string"
+        );
+      }).pipe(Effect.provide(signedInIssuer()))
+  );
+
+  it.live(
+    "overlapping link and delete requests leave consistent resource access",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* client();
+
+        const results = yield* Effect.all(
+          [
+            access(app.client_id, [resourceA, resourceB]),
+            request("/api/deleteResource", { identifier: resourceB }),
+          ],
+          { concurrency: "unbounded" }
+        );
+
+        // why: linking races the deletion, so it may lose at any provider step
+        expect([200, 400, 404]).toContain(results[0]?.status);
+        expect(results[1]?.status).toBe(200);
+        const state = yield* listing();
+
+        for (const link of state.clientAccess) {
+          expect(
+            state.resources.some(
+              (resource: { identifier: string }) =>
+                resource.identifier === link.resource
+            )
+          ).toBe(true);
+        }
+      }).pipe(Effect.provide(signedInIssuer()))
   );
 });

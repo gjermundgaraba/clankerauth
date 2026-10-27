@@ -1,23 +1,33 @@
+import {
+  ClientIsAutomatic,
+  ClientNotFound,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Effect, Schema } from "effect";
-import { ClientIsAutomatic, ClientNotFound } from "@gjermundgaraba/clankerauth-admin-api";
-import { persisted, type Sql } from "../platform/sqlite.ts";
+
+import { persisted } from "../platform/sqlite.ts";
+import type { Sql } from "../platform/sqlite.ts";
 
 // why: a client that registered itself, through DCR or CIMD, has no owning user
-export const isAutomatic = (client: { readonly userId: string | null }) => client.userId === null;
+export const isAutomatic = (client: { readonly userId: string | null }) =>
+  client.userId === null;
 
 const clientOwners = persisted(
-  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) })),
+  Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) }))
 );
 
 export const requireManaged = Effect.fn("Clients.requireManaged")(function* (
   clientId: string,
-  query: Sql,
+  query: Sql
 ) {
   const [client] = yield* clientOwners(
-    yield* query`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`,
+    yield* query`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`
   );
 
-  if (!client) return yield* Effect.fail(ClientNotFound.of(clientId));
+  if (!client) {
+    return yield* ClientNotFound.of(clientId);
+  }
 
-  if (isAutomatic(client)) return yield* Effect.fail(ClientIsAutomatic.of(clientId));
+  if (isAutomatic(client)) {
+    return yield* ClientIsAutomatic.of(clientId);
+  }
 });

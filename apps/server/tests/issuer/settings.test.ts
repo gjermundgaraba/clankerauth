@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Redacted } from "effect";
 import { expect } from "vite-plus/test";
+
 import { loadSettings } from "../../src/issuer/settings.ts";
 
 const baseURL = "https://clankerauth.example.test";
@@ -12,31 +13,40 @@ const load = (env: Record<string, string> = {}) =>
     Effect.provide(
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
-          env: { CLANKERAUTH_BASE_URL: baseURL, CLANKERAUTH_BETTER_AUTH_SECRET: secret, ...env },
-        }),
-      ),
-    ),
+          env: {
+            CLANKERAUTH_BASE_URL: baseURL,
+            CLANKERAUTH_BETTER_AUTH_SECRET: secret,
+            ...env,
+          },
+        })
+      )
+    )
   );
 
 const rejects = (env: Record<string, string>, variable: string) =>
   Effect.gen(function* () {
-    expect((yield* Effect.flip(load(env))).message, JSON.stringify(env)).toContain(variable);
+    expect(
+      (yield* Effect.flip(load(env))).message,
+      JSON.stringify(env)
+    ).toContain(variable);
   });
 
-it.effect("an environment with only the two required variables is a complete configuration", () =>
-  Effect.gen(function* () {
-    expect(yield* load()).toEqual({
-      baseURL,
-      secret: Redacted.make(secret),
-      database: "data/clankerauth.sqlite",
-      host: "127.0.0.1",
-      port: 3000,
-      mcpAllowedOrigins: [],
-      trustProxy: false,
-      allowInsecureHttp: false,
-      cookieDomain: undefined,
-    });
-  }),
+it.effect(
+  "an environment with only the two required variables is a complete configuration",
+  () =>
+    Effect.gen(function* () {
+      expect(yield* load()).toStrictEqual({
+        baseURL,
+        secret: Redacted.make(secret),
+        database: "data/clankerauth.sqlite",
+        host: "127.0.0.1",
+        port: 3000,
+        mcpAllowedOrigins: [],
+        trustProxy: false,
+        allowInsecureHttp: false,
+        cookieDomain: undefined,
+      });
+    })
 );
 
 it.effect("MCP browser origins are trimmed, and empty when unset", () =>
@@ -49,11 +59,14 @@ it.effect("MCP browser origins are trimmed, and empty when unset", () =>
     ];
 
     expect(
-      (yield* load({ CLANKERAUTH_MCP_ALLOWED_ORIGINS: ` ${origins.join(", ")} ` }))
-        .mcpAllowedOrigins,
-    ).toEqual(origins);
-    expect((yield* load({ CLANKERAUTH_MCP_ALLOWED_ORIGINS: "" })).mcpAllowedOrigins).toEqual([]);
-  }),
+      (yield* load({
+        CLANKERAUTH_MCP_ALLOWED_ORIGINS: ` ${origins.join(", ")} `,
+      })).mcpAllowedOrigins
+    ).toStrictEqual(origins);
+    expect(
+      (yield* load({ CLANKERAUTH_MCP_ALLOWED_ORIGINS: "" })).mcpAllowedOrigins
+    ).toStrictEqual([]);
+  })
 );
 
 it.effect.each([
@@ -75,7 +88,10 @@ it.effect.each([
   "https://client.example.test, ,https://other.example.test",
   "https://client.example.test, *",
 ])("MCP browser configuration rejects non-origin value %j", (origins) =>
-  rejects({ CLANKERAUTH_MCP_ALLOWED_ORIGINS: origins }, "CLANKERAUTH_MCP_ALLOWED_ORIGINS"),
+  rejects(
+    { CLANKERAUTH_MCP_ALLOWED_ORIGINS: origins },
+    "CLANKERAUTH_MCP_ALLOWED_ORIGINS"
+  )
 );
 
 it.effect("proxy trust and plain HTTP are opt-in", () =>
@@ -87,7 +103,10 @@ it.effect("proxy trust and plain HTTP are opt-in", () =>
 
     expect(enabled.trustProxy).toBe(true);
     expect(enabled.allowInsecureHttp).toBe(true);
-    yield* rejects({ CLANKERAUTH_BASE_URL: "http://clankerauth.internal" }, "CLANKERAUTH_BASE_URL");
+    yield* rejects(
+      { CLANKERAUTH_BASE_URL: "http://clankerauth.internal" },
+      "CLANKERAUTH_BASE_URL"
+    );
 
     const insecure = yield* load({
       CLANKERAUTH_BASE_URL: "http://clankerauth.internal",
@@ -96,48 +115,70 @@ it.effect("proxy trust and plain HTTP are opt-in", () =>
     });
 
     expect(insecure.baseURL).toBe("http://clankerauth.internal");
-    expect(insecure.mcpAllowedOrigins).toEqual(["http://client.internal"]);
+    expect(insecure.mcpAllowedOrigins).toStrictEqual([
+      "http://client.internal",
+    ]);
     yield* rejects(
       { CLANKERAUTH_MCP_ALLOWED_ORIGINS: "http://client.internal" },
-      "CLANKERAUTH_MCP_ALLOWED_ORIGINS",
+      "CLANKERAUTH_MCP_ALLOWED_ORIGINS"
     );
-  }),
+  })
 );
 
-it.effect("the cookie domain is optional and must be a bare parent domain of the issuer host", () =>
-  Effect.gen(function* () {
-    expect((yield* load({ CLANKERAUTH_COOKIE_DOMAIN: "example.test" })).cookieDomain).toBe(
-      "example.test",
-    );
-    expect(
-      (yield* load({ CLANKERAUTH_COOKIE_DOMAIN: "clankerauth.example.test" })).cookieDomain,
-    ).toBe("clankerauth.example.test");
+it.effect(
+  "the cookie domain is optional and must be a bare parent domain of the issuer host",
+  () =>
+    Effect.gen(function* () {
+      expect(
+        (yield* load({ CLANKERAUTH_COOKIE_DOMAIN: "example.test" }))
+          .cookieDomain
+      ).toBe("example.test");
+      expect(
+        (yield* load({ CLANKERAUTH_COOKIE_DOMAIN: "clankerauth.example.test" }))
+          .cookieDomain
+      ).toBe("clankerauth.example.test");
 
-    for (const cookieDomain of ["other.test", "test", ".example.test", "127.0.0.1"])
-      yield* rejects({ CLANKERAUTH_COOKIE_DOMAIN: cookieDomain }, "CLANKERAUTH_COOKIE_DOMAIN");
-  }),
+      for (const cookieDomain of [
+        "other.test",
+        "test",
+        ".example.test",
+        "127.0.0.1",
+      ]) {
+        yield* rejects(
+          { CLANKERAUTH_COOKIE_DOMAIN: cookieDomain },
+          "CLANKERAUTH_COOKIE_DOMAIN"
+        );
+      }
+    })
 );
 
-it.effect("the issuer origin, the secret and the port are validated as configuration", () =>
-  Effect.gen(function* () {
-    for (const url of [
-      "http://clankerauth.internal",
-      "https://clankerauth.internal/",
-      "https://clankerauth.internal/path",
-      "https://user:pass@clankerauth.internal",
-      "not a URL",
-    ])
-      yield* rejects({ CLANKERAUTH_BASE_URL: url }, "CLANKERAUTH_BASE_URL");
-    expect((yield* load({ CLANKERAUTH_BASE_URL: "https://clankerauth.internal" })).baseURL).toBe(
-      "https://clankerauth.internal",
-    );
-    yield* rejects(
-      { CLANKERAUTH_BETTER_AUTH_SECRET: "too short to sign anything" },
-      "CLANKERAUTH_BETTER_AUTH_SECRET",
-    );
+it.effect(
+  "the issuer origin, the secret and the port are validated as configuration",
+  () =>
+    Effect.gen(function* () {
+      for (const url of [
+        "http://clankerauth.internal",
+        "https://clankerauth.internal/",
+        "https://clankerauth.internal/path",
+        "https://user:pass@clankerauth.internal",
+        "not a URL",
+      ]) {
+        yield* rejects({ CLANKERAUTH_BASE_URL: url }, "CLANKERAUTH_BASE_URL");
+      }
 
-    for (const port of ["0", "65536", "8080.5", "not a number"])
-      yield* rejects({ CLANKERAUTH_PORT: port }, "PORT");
-    expect((yield* load({ CLANKERAUTH_PORT: "8080" })).port).toBe(8080);
-  }),
+      expect(
+        (yield* load({ CLANKERAUTH_BASE_URL: "https://clankerauth.internal" }))
+          .baseURL
+      ).toBe("https://clankerauth.internal");
+      yield* rejects(
+        { CLANKERAUTH_BETTER_AUTH_SECRET: "too short to sign anything" },
+        "CLANKERAUTH_BETTER_AUTH_SECRET"
+      );
+
+      for (const port of ["0", "65536", "8080.5", "not a number"]) {
+        yield* rejects({ CLANKERAUTH_PORT: port }, "PORT");
+      }
+
+      expect((yield* load({ CLANKERAUTH_PORT: "8080" })).port).toBe(8080);
+    })
 );

@@ -1,6 +1,3 @@
-import type { ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
-import { Array, Option, Record } from "effect";
-import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   Button,
   Chip,
@@ -9,18 +6,25 @@ import {
   Panel,
   PropsList,
 } from "@gjermundgaraba-designs/pixel-paper";
+import type { ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
+import { Array, Option, Record } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { Change } from "./change.ts";
 import { createKey, editGrants, renameKey } from "./form.ts";
 import { Message } from "./message.ts";
-import { type SectionContext, footView, itemButtonView, momentOf, noteView } from "./parts.ts";
+import { footView, itemButtonView, momentOf, noteView } from "./parts.ts";
+import type { SectionContext } from "./parts.ts";
 
 type KeyView = typeof ApiKey.Type;
 
 const INTRO =
   "Direct access for CLIs and automation. Keys carry only the scopes you select, filtered by current Resource policy. Policy changes do not revoke stored grants; restoring policy restores access. Resource servers verify keys offline: a new key works within seconds and a key's expiry applies at once; any other change takes effect within about a minute, and a Resource server that cannot reach this issuer keeps accepting the keys it last saw for up to 24 hours. A grant on clankerauth administration lets a key administer this issuer; disabling, deleting or re-scoping the key ends that access at once.";
 
-export const keysHeadView = (context: SectionContext, h: HtmlBuilder<Message>): Html =>
+export const keysHeadView = (
+  context: SectionContext,
+  h: HtmlBuilder<Message>
+): Html =>
   PageHead.view(
     {
       title: "API keys",
@@ -33,30 +37,40 @@ export const keysHeadView = (context: SectionContext, h: HtmlBuilder<Message>): 
             isDisabled: context.isHeld,
             onClick: Message.ClickedOpenForm({ form: createKey() }),
           },
-          h,
+          h
         ),
       ],
     },
-    h,
+    h
   );
 
-const grantsView = (key: KeyView, h: HtmlBuilder<Message>): ReadonlyArray<Html | string> =>
+const grantsView = (
+  key: KeyView,
+  h: HtmlBuilder<Message>
+): ReadonlyArray<Html | string> =>
   Array.match(Record.toEntries(key.permissions), {
     onEmpty: () => ["None"],
     onNonEmpty: (grants) =>
       Array.intersperse(
         Array.map(grants, ([resource, scopes]) =>
-          h.span([], [h.code([], [resource]), " ", Array.join(scopes, " · ")]),
+          h.span([], [h.code([], [resource]), " ", Array.join(scopes, " · ")])
         ),
-        h.br([]),
+        h.br([])
       ),
   });
 
-const keyPanel = (context: SectionContext, key: KeyView, h: HtmlBuilder<Message>): Html => {
+const keyPanel = (
+  context: SectionContext,
+  key: KeyView,
+  h: HtmlBuilder<Message>
+): Html => {
   const { keyId, name, enabled, expiresAt, createdAt } = key;
 
   const smallButton = (label: string, onClick: Message): Html =>
-    itemButtonView({ label, itemName: name, onClick, isHeld: context.isHeld }, h);
+    itemButtonView(
+      { label, itemName: name, onClick, isHeld: context.isHeld },
+      h
+    );
 
   return Panel.view(
     {
@@ -88,36 +102,43 @@ const keyPanel = (context: SectionContext, key: KeyView, h: HtmlBuilder<Message>
               { label: "grants", value: grantsView(key, h) },
             ],
           },
-          h,
+          h
         ),
       ],
       foot: footView(
         [
-          smallButton("rename", Message.ClickedOpenForm({ form: renameKey(key) })),
+          smallButton(
+            "rename",
+            Message.ClickedOpenForm({ form: renameKey(key) })
+          ),
           smallButton(
             "edit grants",
-            Message.ClickedOpenForm({ form: editGrants(key, context.listing.overview.resources) }),
+            Message.ClickedOpenForm({
+              form: editGrants(key, context.listing.overview.resources),
+            })
           ),
           smallButton(
             enabled ? "disable" : "enable",
-            Message.ClickedChange({ change: Change.SetKeyEnabled({ keyId, isEnabled: !enabled }) }),
+            Message.ClickedChange({
+              change: Change.SetKeyEnabled({ keyId, isEnabled: !enabled }),
+            })
           ),
           smallButton(
             "delete",
-            Message.ClickedChange({ change: Change.DeleteKey({ keyId, name }) }),
+            Message.ClickedChange({ change: Change.DeleteKey({ keyId, name }) })
           ),
         ],
-        h,
+        h
       ),
     },
-    h,
+    h
   );
 };
 
 export const keysPanels = (
   context: SectionContext,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => [
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
   noteView(INTRO, h),
   ...Array.match(context.listing.keys, {
     onEmpty: () => [
@@ -131,13 +152,15 @@ export const keysPanels = (
               {
                 title: "No API keys",
                 headingLevel: 3,
-                body: ["Create a key for a CLI or automation that needs direct access."],
+                body: [
+                  "Create a key for a CLI or automation that needs direct access.",
+                ],
               },
-              h,
+              h
             ),
           ],
         },
-        h,
+        h
       ),
     ],
     onNonEmpty: (keys) => Array.map(keys, (key) => keyPanel(context, key, h)),

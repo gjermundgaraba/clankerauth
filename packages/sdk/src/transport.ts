@@ -1,5 +1,7 @@
 import { Context, Effect } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import type { HttpClientRequest } from "effect/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
+
 import { ProviderUnavailable } from "./errors.ts";
 
 /**
@@ -8,7 +10,7 @@ import { ProviderUnavailable } from "./errors.ts";
  */
 export const execute = (
   client: HttpClient.HttpClient,
-  request: HttpClientRequest.HttpClientRequest,
+  request: HttpClientRequest.HttpClientRequest
 ) =>
   Effect.contextWith((context: Context.Context<never>) =>
     HttpClient.withScope(client)
@@ -18,14 +20,17 @@ export const execute = (
           ...Context.getOrUndefined(context, FetchHttpClient.RequestInit),
           redirect: "manual",
         }),
-        Effect.mapError((cause) => new ProviderUnavailable({ operation: "http.request", cause })),
+        Effect.mapError(
+          (cause) =>
+            new ProviderUnavailable({ operation: "http.request", cause })
+        ),
         Effect.filterOrFail(
           (response) => response.status < 300 || response.status >= 400,
           (response) =>
             new ProviderUnavailable({
               operation: "http.redirect",
               cause: { status: response.status },
-            }),
-        ),
-      ),
+            })
+        )
+      )
   );

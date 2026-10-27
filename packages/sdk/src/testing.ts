@@ -9,9 +9,14 @@
  * claims, scopes, and each key's sealed entry. Node only.
  */
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
 import { Option, Schema } from "effect";
-import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from "jose";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import type { JWTPayload } from "jose";
+
 import * as KeyList from "./key-list.ts";
 
 /**
@@ -21,7 +26,7 @@ import * as KeyList from "./key-list.ts";
 export interface TokenClaims {
   readonly iss?: string | undefined;
   readonly sub?: string | undefined;
-  readonly aud?: string | Array<string> | undefined;
+  readonly aud?: string | string[] | undefined;
   readonly iat?: number | undefined;
   /** Epoch seconds. Default: five minutes from now. */
   readonly exp?: number | undefined;
@@ -64,12 +69,22 @@ export interface FakeIssuer {
   readonly close: () => Promise<void>;
 }
 
-const ListRequest = Schema.fromJsonString(Schema.Struct({ resource: Schema.String }));
+const ListRequest = Schema.fromJsonString(
+  Schema.Struct({ resource: Schema.String })
+);
 
-export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeIssuer> => {
+export const startFakeIssuer = async (
+  options: FakeIssuerOptions
+): Promise<FakeIssuer> => {
   const subject = options.subject ?? "owner";
   const pair = await generateKeyPair("EdDSA");
-  const jwk = { ...(await exportJWK(pair.publicKey)), kid: "fixture", alg: "EdDSA", use: "sig" };
+
+  const jwk = {
+    ...(await exportJWK(pair.publicKey)),
+    kid: "fixture",
+    alg: "EdDSA",
+    use: "sig",
+  };
 
   const keys = new Map<
     string,
@@ -80,25 +95,62 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
   let lists = 0;
   let failure: number | undefined;
 
-  const server = createServer(async (request, response) => {
+  const server = createServer();
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  const address = server.address();
+
+  if (!(address instanceof Object)) {
+    throw new Error("The fake issuer failed to bind a TCP port");
+  }
+
+  const issuer = `http://127.0.0.1:${address.port}/api/auth`;
+
+  const respond = async (
+    request: IncomingMessage,
+    response: ServerResponse
+  ) => {
     const send = (status: number, body: string) => {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(body);
     };
 
-    if (request.url === "/api/auth/jwks")
-      return send(failure ?? 200, JSON.stringify({ keys: [jwk] }));
+    if (request.url === "/api/auth/jwks") {
+      send(failure ?? 200, JSON.stringify({ keys: [jwk] }));
 
-    if (request.url !== "/api/keyList" || request.method !== "POST") return send(404, "{}");
-    lists++;
+      return;
+    }
 
-    if (failure !== undefined) return send(failure, "{}");
+    if (request.url !== "/api/keyList" || request.method !== "POST") {
+      send(404, "{}");
+
+      return;
+    }
+
+    lists += 1;
+
+    if (failure !== undefined) {
+      send(failure, "{}");
+
+      return;
+    }
+
     let text = "";
 
-    for await (const chunk of request) text += String(chunk);
-    const asked = Schema.decodeUnknownOption(ListRequest)(text);
+    for await (const chunk of request) {
+      text += String(chunk);
+    }
 
-    if (Option.isNone(asked)) return send(400, '{"error":"Invalid request"}');
+    const asked = Schema.decodeOption(ListRequest)(text);
+
+    if (Option.isNone(asked)) {
+      send(400, '{"error":"Invalid request"}');
+
+      return;
+    }
+
     const { resource } = asked.value;
 
     const now = Date.now();
@@ -109,12 +161,18 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
 
         return scopes.length && (expiresAt === null || expiresAt > now)
           ? [
-              KeyList.digest(key).then((digest) =>
-                KeyList.seal(digest, resource, { keyId, ownerId: subject, scopes, expiresAt }),
+              KeyList.digest(key).then(
+                async (digest) =>
+                  await KeyList.seal(digest, resource, {
+                    keyId,
+                    ownerId: subject,
+                    scopes,
+                    expiresAt,
+                  })
               ),
             ]
           : [];
-      }),
+      })
     );
 
     const iat = Math.floor(now / 1000);
@@ -127,18 +185,16 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
       .setExpirationTime(iat + KeyList.lifetime)
       .sign(pair.privateKey);
 
-    return send(200, JSON.stringify({ list }));
+    send(200, JSON.stringify({ list }));
+  };
+
+  server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+    void respond(request, response);
   });
-
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-
-  if (!(address instanceof Object)) throw new Error("The fake issuer failed to bind a TCP port");
-  const issuer = `http://127.0.0.1:${address.port}/api/auth`;
 
   return {
     issuer,
-    sign: (claims = {}, typ = "at+jwt") => {
+    sign: async (claims = {}, typ = "at+jwt") => {
       const now = Math.floor(Date.now() / 1000);
       const payload: JWTPayload = {};
 
@@ -151,19 +207,23 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
         client_id: "fixture",
         scope: options.scopes.join(" "),
         ...claims,
-      }))
-        if (value !== undefined) payload[name] = value;
+      })) {
+        if (value !== undefined) {
+          payload[name] = value;
+        }
+      }
 
-      return new SignJWT(payload)
+      return await new SignJWT(payload)
         .setProtectedHeader({ alg: "EdDSA", kid: "fixture", typ })
         .sign(pair.privateKey);
     },
-    apiKey: (permissions = { [options.resource]: options.scopes }, expiresAt) => {
+    apiKey: (permissions, expiresAt) => {
       const key = `${KeyList.keyPrefix}${randomBytes(48).toString("base64url")}`;
+      minted += 1;
 
       keys.set(key, {
-        keyId: `key-${++minted}`,
-        permissions,
+        keyId: `key-${minted}`,
+        permissions: permissions ?? { [options.resource]: options.scopes },
         expiresAt: expiresAt?.getTime() ?? null,
       });
 
@@ -176,10 +236,9 @@ export const startFakeIssuer = async (options: FakeIssuerOptions): Promise<FakeI
       failure = status;
     },
     keyLists: () => lists,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.closeAllConnections();
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: async () => {
+      server.closeAllConnections();
+      await server[Symbol.asyncDispose]();
+    },
   };
 };

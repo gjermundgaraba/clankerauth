@@ -1,26 +1,35 @@
-import { Clock, Context, Effect, Layer, Schema, type Scope } from "effect";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   CurrentOwner,
   ClientNotFound,
-  type ClientIsAutomatic,
-  type InternalServerError,
-  type ProviderRefused,
-  type ClientBlockInput,
-  type ClientCredentials,
-  type ClientId,
-  type ClientInput,
-  type ClientListResult,
-  type ClientRevokeInput,
-  type ClientUpdateInput,
-  type Client,
-  type Connection,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Database, persisted, type Sql } from "../platform/sqlite.ts";
+import type {
+  ClientIsAutomatic,
+  InternalServerError,
+  ProviderRefused,
+  ClientBlockInput,
+  ClientCredentials,
+  ClientId,
+  ClientInput,
+  ClientListResult,
+  ClientRevokeInput,
+  ClientUpdateInput,
+  Client,
+  Connection,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
+import type { Scope } from "effect";
+
+import {
+  clearCodes,
+  clearAuthorization,
+  referencePrefix,
+} from "../authorization/authorization.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
-import { clearCodes, clearAuthorization, referencePrefix } from "../authorization/authorization.ts";
+import { Database, persisted } from "../platform/sqlite.ts";
+import type { Sql } from "../platform/sqlite.ts";
 import { protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
 import { Resources } from "../resources/resources.ts";
 import { isAutomatic, requireManaged } from "./managed.ts";
@@ -33,8 +42,8 @@ const decodeConnections = persisted(
       scopes: Schema.fromJsonString(Schema.Array(Schema.String)),
       approvedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
       refreshedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
-    }),
-  ),
+    })
+  )
 );
 
 const ClientRow = Schema.Struct({
@@ -45,16 +54,46 @@ const ClientRow = Schema.Struct({
   applicationType: Schema.NullOr(Schema.String),
   scopes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
   grantTypes: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
-  disabled: Schema.NullOr(Schema.Number),
+  disabled: Schema.NullOr(Schema.Int),
   clientDiscoveryId: Schema.NullOr(Schema.String),
   userId: Schema.NullOr(Schema.String),
 });
 
 const decodeClients = persisted(Schema.Array(ClientRow));
 
+const onboarding = (row: typeof ClientRow.Type) => {
+  if (row.clientDiscoveryId !== null) {
+    return "cimd" as const;
+  }
+
+  return isAutomatic(row) ? ("dcr" as const) : ("managed" as const);
+};
+
+interface SecretFields {
+  readonly client_secret?: string | undefined;
+  readonly client_secret_expires_at?: number | undefined;
+}
+
+// why: the provider leaves a public client's secret fields `undefined`, which JSON writes as `null`
+const credentials = <Registered extends SecretFields>({
+  client_secret,
+  client_secret_expires_at,
+  ...client
+}: Registered) => ({
+  ...client,
+  ...(client_secret === undefined ? {} : { client_secret }),
+  ...(client_secret_expires_at === undefined
+    ? {}
+    : { client_secret_expires_at }),
+});
+
 type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
-type Owned<A, E = never> = Effect.Effect<A, Refusal | E, CurrentOwner | Scope.Scope>;
+type Owned<A, E = never> = Effect.Effect<
+  A,
+  Refusal | E,
+  CurrentOwner | Scope.Scope
+>;
 
 type Editing = ClientNotFound | ClientIsAutomatic;
 
@@ -62,38 +101,53 @@ export class Clients extends Context.Service<
   Clients,
   {
     /** Clients, resources, managed clients' access and every client's connections. */
-    readonly list: () => Effect.Effect<
+    readonly list: Effect.Effect<
       typeof ClientListResult.Type,
       InternalServerError,
       CurrentOwner
     >;
     /** Registers a first-party client, linked to `resources`; its secret is returned once. */
-    readonly create: (input: typeof ClientInput.Type) => Owned<typeof ClientCredentials.Type>;
-    readonly update: (input: typeof ClientUpdateInput.Type) => Owned<typeof Client.Type, Editing>;
-    readonly rotate: (input: typeof ClientId.Type) => Owned<typeof ClientCredentials.Type, Editing>;
+    readonly create: (
+      input: typeof ClientInput.Type
+    ) => Owned<typeof ClientCredentials.Type>;
+    readonly update: (
+      input: typeof ClientUpdateInput.Type
+    ) => Owned<typeof Client.Type, Editing>;
+    readonly rotate: (
+      input: typeof ClientId.Type
+    ) => Owned<typeof ClientCredentials.Type, Editing>;
     /**
      * What each client holds, per resource: a consent, a live refresh token, or both. A
      * managed client skips consent, so only its refresh tokens show. Scopes are the
      * consent's, else the newest token's; rotation revokes the replaced token.
      */
-    readonly connections: () => Effect.Effect<
+    readonly connections: Effect.Effect<
       ReadonlyArray<typeof Connection.Type>,
       InternalServerError
     >;
     /** Without a resource, every authorization the client holds. */
     readonly revoke: (
-      input: typeof ClientRevokeInput.Type,
-    ) => Effect.Effect<{ revoked: boolean }, InternalServerError | ClientNotFound>;
+      input: typeof ClientRevokeInput.Type
+    ) => Effect.Effect<
+      { revoked: boolean },
+      InternalServerError | ClientNotFound
+    >;
     /**
      * Forgets any client, managed or automatic; an automatic one can register again.
      * Its links, consents and tokens cascade with the row.
      */
     readonly delete: (
-      input: typeof ClientId.Type,
-    ) => Effect.Effect<{ deleted: boolean }, InternalServerError | ClientNotFound>;
+      input: typeof ClientId.Type
+    ) => Effect.Effect<
+      { deleted: boolean },
+      InternalServerError | ClientNotFound
+    >;
     readonly block: (
-      input: typeof ClientBlockInput.Type,
-    ) => Effect.Effect<{ blocked: boolean }, InternalServerError | ClientNotFound>;
+      input: typeof ClientBlockInput.Type
+    ) => Effect.Effect<
+      { blocked: boolean },
+      InternalServerError | ClientNotFound
+    >;
   }
 >()("clankerauth/Clients") {
   static readonly layer = Layer.effect(
@@ -105,15 +159,22 @@ export class Clients extends Context.Service<
       const catalog = yield* ResourceCatalog;
       const resources = yield* Resources;
 
-      const exists = Effect.fn("Clients.exists")(function* (clientId: string, query: Sql) {
-        if (!(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`).length)
-          return yield* Effect.fail(ClientNotFound.of(clientId));
+      const exists = Effect.fn("Clients.exists")(function* (
+        clientId: string,
+        query: Sql
+      ) {
+        if (
+          !(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`)
+            .length
+        ) {
+          return yield* ClientNotFound.of(clientId);
+        }
       });
 
       const revoke = Effect.fn("Clients.revoke")(function* (
         clientId: string,
         resource: string | undefined,
-        query: Sql,
+        query: Sql
       ) {
         yield* exists(clientId, query);
         yield* clearAuthorization(query, { clientId, resource });
@@ -121,7 +182,7 @@ export class Clients extends Context.Service<
         return { revoked: true };
       });
 
-      const connections = Effect.fn("Clients.connections")(function* () {
+      const connections = Effect.gen(function* () {
         const now = new Date(yield* Clock.currentTimeMillis).toISOString();
 
         const rows = yield* decodeConnections(
@@ -140,18 +201,18 @@ export class Clients extends Context.Service<
             FROM held h
             JOIN oauthResource r ON h.referenceId = ${referencePrefix} || r.identifier
             LEFT JOIN oauthConsent c ON c.clientId = h.clientId AND c.referenceId = h.referenceId
-            ORDER BY client_id, resource`,
+            ORDER BY client_id, resource`
         );
 
         return rows.map((row) => ({
           ...row,
           scopes: row.scopes.filter((scope) => !protocolScopes.includes(scope)),
         }));
-      });
+      }).pipe(Effect.withSpan("Clients.connections"));
 
       return {
         connections,
-        list: Effect.fn("Clients.list")(function* () {
+        list: Effect.gen(function* () {
           const { email } = yield* CurrentOwner;
 
           const rows = yield* sql`
@@ -162,25 +223,21 @@ export class Clients extends Context.Service<
 
           const clients = (yield* decodeClients(rows)).map((row) => ({
             client_id: row.clientId,
-            onboarding:
-              row.clientDiscoveryId !== null
-                ? ("cimd" as const)
-                : isAutomatic(row)
-                  ? ("dcr" as const)
-                  : ("managed" as const),
+            onboarding: onboarding(row),
             blocked: row.disabled === 1,
             client_name: row.name ?? undefined,
             redirect_uris: row.redirectUris,
-            token_endpoint_auth_method: row.tokenEndpointAuthMethod ?? undefined,
+            token_endpoint_auth_method:
+              row.tokenEndpointAuthMethod ?? undefined,
             application_type: row.applicationType,
             scope: row.scopes?.join(" "),
             grant_types: row.grantTypes ?? undefined,
           }));
 
           const listed = yield* Effect.all({
-            resources: catalog.list(),
-            clientAccess: catalog.access(),
-            connections: connections(),
+            resources: catalog.list,
+            clientAccess: catalog.access,
+            connections,
           });
 
           return {
@@ -191,8 +248,10 @@ export class Clients extends Context.Service<
             email,
             issuer: `${baseURL}/api/auth`,
           };
-        }),
-        create: Effect.fn("Clients.create")(function* (input: typeof ClientInput.Type) {
+        }).pipe(Effect.withSpan("Clients.list")),
+        create: Effect.fn("Clients.create")(function* (
+          input: typeof ClientInput.Type
+        ) {
           const { providerHeaders } = yield* CurrentOwner;
 
           const scopes = yield* catalog.scopesFor(input.resources);
@@ -200,9 +259,9 @@ export class Clients extends Context.Service<
           const headers = yield* providerHeaders;
 
           const client = yield* provider(
-            () =>
+            async () =>
               // why: the plain endpoint drops skip_consent; the administrative one keeps it
-              auth.api.adminCreateOAuthClient({
+              await auth.api.adminCreateOAuthClient({
                 headers,
                 body: {
                   client_name: input.client_name,
@@ -214,29 +273,32 @@ export class Clients extends Context.Service<
                   skip_consent: true,
                 },
               }),
-            { refused: refusal },
+            { refused: refusal }
           );
 
-          yield* resources
-            .link(client.client_id, input.resources)
-            .pipe(
-              Effect.tapError(() =>
-                provider(() =>
-                  auth.api.deleteOAuthClient({ headers, body: { client_id: client.client_id } }),
-                ),
-              ),
-            );
+          yield* resources.link(client.client_id, input.resources).pipe(
+            Effect.tapError(() =>
+              provider(async () => {
+                await auth.api.deleteOAuthClient({
+                  headers,
+                  body: { client_id: client.client_id },
+                });
+              })
+            )
+          );
 
-          return client;
+          return credentials(client);
         }),
-        update: Effect.fn("Clients.update")(function* (input: typeof ClientUpdateInput.Type) {
+        update: Effect.fn("Clients.update")(function* (
+          input: typeof ClientUpdateInput.Type
+        ) {
           yield* requireManaged(input.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
           return yield* provider(
-            () =>
-              auth.api.updateOAuthClient({
+            async () =>
+              await auth.api.updateOAuthClient({
                 headers,
                 body: {
                   client_id: input.client_id,
@@ -247,18 +309,28 @@ export class Clients extends Context.Service<
                   },
                 },
               }),
-            { refused: refusal, missing: () => ClientNotFound.of(input.client_id) },
+            {
+              refused: refusal,
+              missing: () => ClientNotFound.of(input.client_id),
+            }
           );
         }),
-        rotate: Effect.fn("Clients.rotate")(function* (body: typeof ClientId.Type) {
+        rotate: Effect.fn("Clients.rotate")(function* (
+          body: typeof ClientId.Type
+        ) {
           yield* requireManaged(body.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
           const headers = yield* providerHeaders;
 
-          return yield* provider(() => auth.api.rotateClientSecret({ headers, body }), {
-            refused: refusal,
-            missing: () => ClientNotFound.of(body.client_id),
-          });
+          const rotated = yield* provider(
+            async () => await auth.api.rotateClientSecret({ headers, body }),
+            {
+              refused: refusal,
+              missing: () => ClientNotFound.of(body.client_id),
+            }
+          );
+
+          return credentials(rotated);
         }),
         revoke: ({ client_id, resource }) =>
           transaction((query) => revoke(client_id, resource, query)),
@@ -270,19 +342,21 @@ export class Clients extends Context.Service<
               yield* query`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
 
               return { deleted: true };
-            }),
+            })
           ),
         block: ({ client_id, blocked }) =>
           transaction((query) =>
             Effect.gen(function* () {
-              if (blocked) yield* revoke(client_id, undefined, query);
-              else yield* exists(client_id, query);
+              yield* blocked
+                ? revoke(client_id, undefined, query)
+                : exists(client_id, query);
+
               yield* query`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${client_id}`;
 
               return { blocked };
-            }),
+            })
           ),
       };
-    }),
+    })
   );
 }

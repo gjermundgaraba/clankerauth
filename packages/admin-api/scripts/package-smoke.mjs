@@ -1,42 +1,71 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { installPacked } from "../../../scripts/package-install.mjs";
 
-const execute = promisify(execFile);
+import { Schema } from "effect";
+
+import {
+  assertDeclarations,
+  execute,
+  installPacked,
+} from "../../../scripts/package-install.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-const { name, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const Manifest = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+  private: Schema.optional(Schema.Boolean),
+  dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  peerDependencies: Schema.Record(Schema.String, Schema.String),
+  exports: Schema.Record(
+    Schema.String,
+    Schema.Struct({ types: Schema.String })
+  ),
+});
 
-const directory = await mkdtemp(join(tmpdir(), "clankerauth-admin-api-install-"));
+const decodeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Manifest)
+);
+
+/** @param {string} directory The package's directory. */
+const readManifest = async (directory) =>
+  decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
+
+const { name, version } = await readManifest(root);
+
+const directory = await mkdtemp(
+  path.join(tmpdir(), "clankerauth-admin-api-install-")
+);
 
 try {
-  await installPacked(directory, root, ["effect", "@gjermundgaraba/effect-actions"]);
-  const installed = join(directory, "node_modules", name);
-  const manifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
+  await installPacked(directory, root, [
+    "effect",
+    "@gjermundgaraba/effect-actions",
+  ]);
+  const installed = path.join(directory, "node_modules", name);
+
+  const manifest = await readManifest(installed);
+
   assert.equal(manifest.version, version);
   assert.equal(manifest.private, undefined);
   assert.deepEqual(
     manifest.dependencies ?? {},
     {},
-    "effect and effect-actions must be peers: a second copy would split their types and services",
+    "effect and effect-actions must be peers: a second copy would split their types and services"
   );
-  assert.ok(manifest.peerDependencies.effect);
-  assert.ok(manifest.peerDependencies["@gjermundgaraba/effect-actions"]);
 
-  for (const [entry, target] of Object.entries(manifest.exports))
-    assert.ok(
-      (await readFile(join(installed, target.types), "utf8")).length > 0,
-      `Entry point ships no declarations: ${entry}`,
-    );
+  for (const peer of ["effect", "@gjermundgaraba/effect-actions"]) {
+    const range = manifest.peerDependencies[peer];
+    assert.ok(range !== undefined && range !== "", `${peer} must be a peer`);
+  }
+
+  await assertDeclarations(installed, manifest.exports);
 
   await writeFile(
-    join(directory, "consumer.ts"),
+    path.join(directory, "consumer.ts"),
     `
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
@@ -49,12 +78,12 @@ const created: Effect.Effect<boolean, unknown, HttpClient.HttpClient> = Effect.m
 const missing: ResourceNotFound["_tag"] = "ResourceNotFound";
 void created;
 void missing;
-`,
+`
   );
   await execute(
     process.execPath,
     [
-      join(root, "node_modules/typescript/bin/tsc"),
+      path.join(root, "node_modules/typescript/bin/tsc"),
       "--noEmit",
       "--strict",
       "--skipLibCheck",
@@ -64,15 +93,15 @@ void missing;
       "NodeNext",
       "--moduleResolution",
       "NodeNext",
-      join(directory, "consumer.ts"),
+      path.join(directory, "consumer.ts"),
     ],
-    { cwd: directory },
+    { cwd: directory }
   );
 
   await writeFile(
-    join(directory, "load.mjs"),
+    path.join(directory, "load.mjs"),
     `import { Administration, OwnerHttp } from "${name}";\n` +
-      `if (!Administration.some((action) => action.name === "putResource") || !OwnerHttp) process.exit(1);\n`,
+      `if (!Administration.some((action) => action.name === "putResource") || !OwnerHttp) process.exit(1);\n`
   );
   await execute(process.execPath, ["load.mjs"], { cwd: directory });
 

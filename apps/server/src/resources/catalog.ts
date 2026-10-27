@@ -1,14 +1,18 @@
-import { Context, Effect, Layer, Schema } from "effect";
 import {
   administrationIdentifier,
   ClientAccess,
-  type InternalServerError,
-  type Resource,
-  type ResourceSummary,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Database, persisted, type Sql, type SqliteRow } from "../platform/sqlite.ts";
+import type {
+  InternalServerError,
+  Resource,
+  ResourceSummary,
+} from "@gjermundgaraba/clankerauth-admin-api";
+import { Context, Effect, Layer, Schema } from "effect";
+
 import { invalidInput } from "../issuer/errors.ts";
 import { Settings } from "../issuer/settings.ts";
+import { Database, persisted } from "../platform/sqlite.ts";
+import type { Sql, SqliteRow } from "../platform/sqlite.ts";
 
 export const exactlyOneResource = "Exactly one configured resource is required";
 
@@ -18,7 +22,9 @@ export type ResourceValue = typeof Resource.Type;
 
 type CatalogResource = typeof ResourceSummary.Type;
 
-const decodeScopes = persisted(Schema.fromJsonString(Schema.Array(Schema.String)));
+const decodeScopes = persisted(
+  Schema.fromJsonString(Schema.Array(Schema.String))
+);
 
 const ResourceRow = Schema.Struct({
   identifier: Schema.String,
@@ -30,61 +36,71 @@ const decodeResourceRow = persisted(ResourceRow);
 
 const accessRows = persisted(Schema.Array(ClientAccess));
 
-export const scopesOf = (catalog: readonly ResourceValue[], identifiers: readonly string[]) => [
+export const scopesOf = (
+  catalog: readonly ResourceValue[],
+  identifiers: readonly string[]
+) => [
   ...new Set([
     ...protocolScopes,
     ...identifiers.flatMap(
-      (id) => catalog.find((resource) => resource.identifier === id)?.scopes ?? [],
+      (id) =>
+        catalog.find((resource) => resource.identifier === id)?.scopes ?? []
     ),
   ]),
 ];
 
-export const validateSelection = Effect.fn("ResourceCatalog.validateSelection")(function* (
-  catalog: readonly ResourceValue[],
-  identifiers: readonly string[],
-) {
-  const unknown = identifiers.findIndex(
-    (id) => !catalog.some((resource) => resource.identifier === id),
-  );
+export const validateSelection = Effect.fn("ResourceCatalog.validateSelection")(
+  function* (
+    catalog: readonly ResourceValue[],
+    identifiers: readonly string[]
+  ) {
+    const unknown = identifiers.findIndex(
+      (id) => !catalog.some((resource) => resource.identifier === id)
+    );
 
-  if (unknown !== -1) return yield* invalidInput(["resources", unknown], "Unknown Resource");
-});
+    if (unknown !== -1) {
+      return yield* invalidInput(["resources", unknown], "Unknown Resource");
+    }
+  }
+);
 
-export const accessForClient = Effect.fn("ResourceCatalog.accessForClient")(function* (
-  clientId: string,
-  query: Sql,
-) {
-  return yield* accessRows(
-    yield* query`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE clientId = ${clientId} ORDER BY resourceId`,
-  );
-});
+export const accessForClient = Effect.fn("ResourceCatalog.accessForClient")(
+  function* (clientId: string, query: Sql) {
+    return yield* accessRows(
+      yield* query`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource WHERE clientId = ${clientId} ORDER BY resourceId`
+    );
+  }
+);
 
 export class ResourceCatalog extends Context.Service<
   ResourceCatalog,
   {
     /** Every resource, administration's built in among them. */
-    readonly list: () => Effect.Effect<CatalogResource[], InternalServerError>;
+    readonly list: Effect.Effect<CatalogResource[], InternalServerError>;
     readonly get: (
-      identifier: string,
+      identifier: string
     ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
     /** A resource an application serves: any but administration's. */
     readonly application: (
-      identifier: string,
+      identifier: string
     ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
     /** Every managed client's resource links; automatic clients have none. */
-    readonly access: () => Effect.Effect<
+    readonly access: Effect.Effect<
       ReadonlyArray<typeof ClientAccess.Type>,
       InternalServerError
     >;
     /** An automatic client may ask for any resource; a managed one only for its own. */
     readonly hasAccess: (
       clientId: string,
-      identifier: string,
+      identifier: string
     ) => Effect.Effect<boolean, InternalServerError>;
     /** The scopes `identifiers` define, refusing an unknown one as invalid input. */
     readonly scopesFor: (
-      identifiers: readonly string[],
-    ) => Effect.Effect<string[], InternalServerError | ReturnType<typeof invalidInput>>;
+      identifiers: readonly string[]
+    ) => Effect.Effect<
+      string[],
+      InternalServerError | ReturnType<typeof invalidInput>
+    >;
   }
 >()("clankerauth/ResourceCatalog") {
   static readonly layer = Layer.effect(
@@ -93,7 +109,9 @@ export class ResourceCatalog extends Context.Service<
       const { sql } = yield* Database;
       const builtIn = administrationIdentifier((yield* Settings).baseURL);
 
-      const decodeResource = Effect.fn("ResourceCatalog.decode")(function* (value: SqliteRow) {
+      const decodeResource = Effect.fn("ResourceCatalog.decode")(function* (
+        value: SqliteRow
+      ) {
         const row = yield* decodeResourceRow(value);
         const scopes = yield* decodeScopes(row.allowedScopes);
 
@@ -105,14 +123,16 @@ export class ResourceCatalog extends Context.Service<
         };
       });
 
-      const list = Effect.fn("ResourceCatalog.list")(function* () {
+      const list = Effect.gen(function* () {
         const rows =
           yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource ORDER BY createdAt, identifier`;
 
         return yield* Effect.forEach(rows, decodeResource);
-      });
+      }).pipe(Effect.withSpan("ResourceCatalog.list"));
 
-      const get = Effect.fn("ResourceCatalog.get")(function* (identifier: string) {
+      const get = Effect.fn("ResourceCatalog.get")(function* (
+        identifier: string
+      ) {
         const rows =
           yield* sql`SELECT identifier, name, allowedScopes FROM oauthResource WHERE identifier = ${identifier}`;
 
@@ -123,15 +143,17 @@ export class ResourceCatalog extends Context.Service<
         list,
         get,
         application: (identifier) =>
-          Effect.map(get(identifier), (resource) => (resource?.builtIn ? undefined : resource)),
-        access: Effect.fn("ResourceCatalog.access")(function* () {
+          Effect.map(get(identifier), (resource) =>
+            resource?.builtIn === true ? undefined : resource
+          ),
+        access: Effect.gen(function* () {
           return yield* accessRows(
-            yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId`,
+            yield* sql`SELECT clientId AS client_id, resourceId AS resource FROM oauthClientResource ORDER BY clientId, resourceId`
           );
-        }),
+        }).pipe(Effect.withSpan("ResourceCatalog.access")),
         hasAccess: Effect.fn("ResourceCatalog.hasAccess")(function* (
           clientId: string,
-          identifier: string,
+          identifier: string
         ) {
           const rows =
             yield* sql`SELECT 1 FROM oauthClient c WHERE c.clientId = ${clientId} AND (c.userId IS NULL
@@ -140,14 +162,14 @@ export class ResourceCatalog extends Context.Service<
           return rows.length > 0;
         }),
         scopesFor: Effect.fn("ResourceCatalog.scopesFor")(function* (
-          identifiers: readonly string[],
+          identifiers: readonly string[]
         ) {
-          const catalog = yield* list();
+          const catalog = yield* list;
           yield* validateSelection(catalog, identifiers);
 
           return scopesOf(catalog, identifiers);
         }),
       };
-    }),
+    })
   );
 }

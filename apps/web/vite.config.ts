@@ -11,12 +11,20 @@ export default defineConfig(({ command, mode }) => {
       include: ["src/**/*.test.ts"],
       setupFiles: ["./src/vitest-setup.ts"],
       server: {
-        deps: { inline: ["foldkit", "@foldkit/ui", "@gjermundgaraba-designs/pixel-paper"] },
+        deps: {
+          inline: [
+            "foldkit",
+            "@foldkit/ui",
+            "@gjermundgaraba-designs/pixel-paper",
+          ],
+        },
       },
     },
   };
 
-  if (command !== "serve") return config;
+  if (command !== "serve") {
+    return config;
+  }
 
   return {
     ...config,

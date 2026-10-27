@@ -1,17 +1,20 @@
 import type { Clipboard } from "@effect/platform-browser";
+import { SkipLink, Tips } from "@gjermundgaraba-designs/pixel-paper";
 import { Effect, Option, Schema, String } from "effect";
-import { Command, Subscription, type Runtime } from "foldkit";
+import { Command, Subscription } from "foldkit";
+import type { Runtime } from "foldkit";
 import { UrlRequest, load, pushUrl, replaceUrl } from "foldkit/navigation";
 import { modifyFields } from "foldkit/struct";
 import * as Update from "foldkit/update";
-import { type Url, toString as urlToString } from "foldkit/url";
-import { SkipLink, Tips } from "@gjermundgaraba-designs/pixel-paper";
+import { toString as urlToString } from "foldkit/url";
+import type { Url } from "foldkit/url";
 
 import { isSignedIn, issuer, toOwnerSentence } from "./api.ts";
-import * as Dashboard from "./page/dashboard/index.ts";
 import { Message } from "./message.ts";
-import { Access, type Model, Page, routeOf } from "./model.ts";
+import { Access, Page, routeOf } from "./model.ts";
+import type { Model } from "./model.ts";
 import * as Consent from "./page/consent.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";
 import {
@@ -35,26 +38,28 @@ export const CheckAccess = Command.define("CheckAccess", {
       required
         ? Effect.succeed(Access.SetupRequired())
         : Effect.map(isSignedIn, (hasSession) =>
-            hasSession ? Access.SignedIn() : Access.SignedOut(),
-          ),
+            hasSession ? Access.SignedIn() : Access.SignedOut()
+          )
     ),
     Effect.match({
       onFailure: (reason) => Message.FailedCheckAccess({ reason }),
       onSuccess: (access) => Message.SucceededCheckAccess({ access }),
-    }),
+    })
   ),
 });
 
 export const NavigateInternal = Command.define("NavigateInternal", {
   args: { url: Schema.String },
   messages: [Message.CompletedNavigateInternal],
-  execute: ({ url }) => pushUrl(url).pipe(Effect.as(Message.CompletedNavigateInternal())),
+  execute: ({ url }) =>
+    pushUrl(url).pipe(Effect.as(Message.CompletedNavigateInternal())),
 });
 
 export const ReplaceUrl = Command.define("ReplaceUrl", {
   args: { url: Schema.String },
   messages: [Message.CompletedReplaceUrl],
-  execute: ({ url }) => replaceUrl(url).pipe(Effect.as(Message.CompletedReplaceUrl())),
+  execute: ({ url }) =>
+    replaceUrl(url).pipe(Effect.as(Message.CompletedReplaceUrl())),
 });
 
 export const LoadUrl = Command.define("LoadUrl", {
@@ -66,16 +71,20 @@ export const LoadUrl = Command.define("LoadUrl", {
 // why: the browser is already at the address, and assigning it again only jumps to its fragment
 export const ReloadPage = Command.define("ReloadPage", {
   messages: [Message.CompletedReloadPage],
-  execute: Effect.sync(() => location.reload()).pipe(Effect.as(Message.CompletedReloadPage())),
+  execute: Effect.sync(() => {
+    location.reload();
+  }).pipe(Effect.as(Message.CompletedReloadPage())),
 });
 
 // PAGES
 
 const searchOf = (url: Url): string => Option.getOrElse(url.search, () => "");
 
-const toSetupMessage = (message: Setup.Message): Message => Message.GotSetupMessage({ message });
+const toSetupMessage = (message: Setup.Message): Message =>
+  Message.GotSetupMessage({ message });
 
-const toLoginMessage = (message: Login.Message): Message => Message.GotLoginMessage({ message });
+const toLoginMessage = (message: Login.Message): Message =>
+  Message.GotLoginMessage({ message });
 
 const toConsentMessage = (message: Consent.Message): Message =>
   Message.GotConsentMessage({ message });
@@ -83,14 +92,22 @@ const toConsentMessage = (message: Consent.Message): Message =>
 const toDashboardMessage = (message: Dashboard.Message): Message =>
   Message.GotDashboardMessage({ message });
 
-const withPage = (model: Model, page: Page): Model => modifyFields(model, { page: () => page });
+const withPage = (model: Model, page: Page): Model =>
+  modifyFields(model, { page: () => page });
 
 const setupPage = (model: Model): UpdateReturn => ({
   model: withPage(model, Page.Setup({ setup: Setup.init() })),
 });
 
-const loginPage = (model: Model, search: string, destination: string): UpdateReturn => ({
-  model: withPage(model, Page.Login({ login: Login.init(search, destination) })),
+const loginPage = (
+  model: Model,
+  search: string,
+  destination: string
+): UpdateReturn => ({
+  model: withPage(
+    model,
+    Page.Login({ login: Login.init(search, destination) })
+  ),
 });
 
 const signedInLoginPage = (model: Model, search: string): UpdateReturn => {
@@ -113,7 +130,8 @@ const consentPage = (model: Model, search: string): UpdateReturn =>
 
 const dashboardPage = (model: Model): UpdateReturn =>
   Update.foldChildInit(Dashboard.init(), {
-    toParentModel: (dashboard) => withPage(model, Page.Dashboard({ dashboard })),
+    toParentModel: (dashboard) =>
+      withPage(model, Page.Dashboard({ dashboard })),
     toParentMessage: toDashboardMessage,
   });
 
@@ -133,7 +151,9 @@ const pageFor = (model: Model, access: Access): UpdateReturn => {
 
   return Access.match<UpdateReturn>(access, {
     SetupRequired: () =>
-      AppRoute.guards.Setup(route) ? setupPage(model) : redirected(setupPage(model), setupRouter()),
+      AppRoute.guards.Setup(route)
+        ? setupPage(model)
+        : redirected(setupPage(model), setupRouter()),
     SignedIn: () =>
       AppRoute.match<UpdateReturn>(route, {
         Clients: () => dashboardPage(model),
@@ -150,7 +170,8 @@ const pageFor = (model: Model, access: Access): UpdateReturn => {
         Resources: () => loginPage(model, search, model.url.pathname),
         Keys: () => loginPage(model, search, model.url.pathname),
         Login: () => loginPage(model, search, clientsRouter()),
-        Setup: () => redirected(loginPage(model, "", clientsRouter()), loginRouter()),
+        Setup: () =>
+          redirected(loginPage(model, "", clientsRouter()), loginRouter()),
         Consent: () => consentPage(model, search),
         NotFound: () => notFoundPage(model),
       }),
@@ -170,9 +191,12 @@ const isServedBy = (page: Page, route: AppRoute): boolean =>
 
 // INIT
 
-export const init: Runtime.RoutingApplicationInit<Model, Message, void, Clipboard.Clipboard> = (
-  url,
-) => ({
+export const init: Runtime.RoutingApplicationInit<
+  Model,
+  Message,
+  void,
+  Clipboard.Clipboard
+> = (url) => ({
   model: {
     url,
     page: Page.Starting(),
@@ -186,7 +210,8 @@ export const init: Runtime.RoutingApplicationInit<Model, Message, void, Clipboar
 const foldSetupOutMessage = Setup.OutMessage.match<
   Update.Step<Model, Message, Clipboard.Clipboard>
 >({
-  CreatedOwner: () => (stepModel) => redirected(dashboardPage(stepModel), clientsRouter()),
+  CreatedOwner: () => (stepModel) =>
+    redirected(dashboardPage(stepModel), clientsRouter()),
   FoundOwner: () => (stepModel) =>
     redirected(loginPage(stepModel, "", clientsRouter()), loginRouter()),
 });
@@ -194,10 +219,13 @@ const foldSetupOutMessage = Setup.OutMessage.match<
 const foldSetup = Update.foldChild({
   update: Setup.update,
   read: (model: Model) =>
-    Page.matchOrElse(model.page, { Setup: ({ setup }) => Option.some(setup) }, () =>
-      Option.none<Setup.Model>(),
+    Page.matchOrElse(
+      model.page,
+      { Setup: ({ setup }) => Option.some(setup) },
+      () => Option.none<Setup.Model>()
     ),
-  write: (model, nextSetup) => withPage(model, Page.Setup({ setup: nextSetup })),
+  write: (model, nextSetup) =>
+    withPage(model, Page.Setup({ setup: nextSetup })),
   toParentMessage: toSetupMessage,
   foldOutMessage: foldSetupOutMessage,
 });
@@ -205,30 +233,39 @@ const foldSetup = Update.foldChild({
 const foldLogin = Update.foldChild({
   update: Login.update,
   read: (model: Model) =>
-    Page.matchOrElse(model.page, { Login: ({ login }) => Option.some(login) }, () =>
-      Option.none<Login.Model>(),
+    Page.matchOrElse(
+      model.page,
+      { Login: ({ login }) => Option.some(login) },
+      () => Option.none<Login.Model>()
     ),
-  write: (model, nextLogin) => withPage(model, Page.Login({ login: nextLogin })),
+  write: (model, nextLogin) =>
+    withPage(model, Page.Login({ login: nextLogin })),
   toParentMessage: toLoginMessage,
 });
 
 const foldConsent = Update.foldChild({
   update: Consent.update,
   read: (model: Model) =>
-    Page.matchOrElse(model.page, { Consent: ({ consent }) => Option.some(consent) }, () =>
-      Option.none<Consent.Model>(),
+    Page.matchOrElse(
+      model.page,
+      { Consent: ({ consent }) => Option.some(consent) },
+      () => Option.none<Consent.Model>()
     ),
-  write: (model, nextConsent) => withPage(model, Page.Consent({ consent: nextConsent })),
+  write: (model, nextConsent) =>
+    withPage(model, Page.Consent({ consent: nextConsent })),
   toParentMessage: toConsentMessage,
 });
 
 const foldDashboard = Update.foldChild({
   update: Dashboard.update,
   read: (model: Model) =>
-    Page.matchOrElse(model.page, { Dashboard: ({ dashboard }) => Option.some(dashboard) }, () =>
-      Option.none<Dashboard.Model>(),
+    Page.matchOrElse(
+      model.page,
+      { Dashboard: ({ dashboard }) => Option.some(dashboard) },
+      () => Option.none<Dashboard.Model>()
     ),
-  write: (model, nextDashboard) => withPage(model, Page.Dashboard({ dashboard: nextDashboard })),
+  write: (model, nextDashboard) =>
+    withPage(model, Page.Dashboard({ dashboard: nextDashboard })),
   toParentMessage: toDashboardMessage,
 });
 
@@ -242,7 +279,8 @@ const foldTips = Update.foldChild({
 const isSameSearch = Option.makeEquivalence(String.Equivalence);
 
 const fragmentOf = (model: Model, url: Url): Option.Option<string> =>
-  url.pathname === model.url.pathname && isSameSearch(url.search, model.url.search)
+  url.pathname === model.url.pathname &&
+  isSameSearch(url.search, model.url.search)
     ? url.hash
     : Option.none();
 
@@ -250,7 +288,9 @@ const internalLinkClicked = (model: Model, url: Url): UpdateReturn =>
   Option.match(fragmentOf(model, url), {
     onSome: (fragment) => ({
       model,
-      commands: [SkipLink.ScrollToFragment({ maybeFragment: Option.some(fragment) })],
+      commands: [
+        SkipLink.ScrollToFragment({ maybeFragment: Option.some(fragment) }),
+      ],
     }),
     onNone: () =>
       isServedBy(model.page, urlToAppRoute(url))
@@ -275,7 +315,9 @@ const urlChanged = (model: Model, url: Url): UpdateReturn =>
 export const update = (model: Model, message: Message) =>
   Message.match<UpdateReturn>(message, {
     SucceededCheckAccess: ({ access }) => pageFor(model, access),
-    FailedCheckAccess: ({ reason }) => ({ model: withPage(model, Page.Failed({ reason })) }),
+    FailedCheckAccess: ({ reason }) => ({
+      model: withPage(model, Page.Failed({ reason })),
+    }),
     ClickedRetryAccess: () => ({
       model: withPage(model, Page.Starting()),
       commands: [CheckAccess()],
@@ -287,16 +329,23 @@ export const update = (model: Model, message: Message) =>
     CompletedLoadUrl: () => ({ model }),
     CompletedReloadPage: () => ({ model }),
     CompletedScrollToFragment: () => ({ model }),
-    GotSetupMessage: ({ message }) => foldSetup(model, message),
-    GotLoginMessage: ({ message }) => foldLogin(model, message),
-    GotConsentMessage: ({ message }) => foldConsent(model, message),
-    GotDashboardMessage: ({ message }) => foldDashboard(model, message),
-    GotTipsMessage: ({ message }) => foldTips(model, message),
+    GotSetupMessage: ({ message: setupMessage }) =>
+      foldSetup(model, setupMessage),
+    GotLoginMessage: ({ message: loginMessage }) =>
+      foldLogin(model, loginMessage),
+    GotConsentMessage: ({ message: consentMessage }) =>
+      foldConsent(model, consentMessage),
+    GotDashboardMessage: ({ message: dashboardMessage }) =>
+      foldDashboard(model, dashboardMessage),
+    GotTipsMessage: ({ message: tipsMessage }) => foldTips(model, tipsMessage),
   });
 
 // SUBSCRIPTION
 
-export const subscriptions = Subscription.lift(Tips.subscriptions("tip"))<Model, Message>({
+export const subscriptions = Subscription.lift(Tips.subscriptions("tip"))<
+  Model,
+  Message
+>({
   read: (model) => Option.some(model.tips),
   toParentMessage: (message) => Message.GotTipsMessage({ message }),
 });

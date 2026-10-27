@@ -1,11 +1,17 @@
+import {
+  ConfirmDialog,
+  CopyButton,
+  Dialog,
+} from "@gjermundgaraba-designs/pixel-paper";
 import { Option, Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
-import { ConfirmDialog, CopyButton, Dialog } from "@gjermundgaraba-designs/pixel-paper";
 
-import { Change, type Confirmation, Credential, confirmationOf } from "./change.ts";
+import { Change, Credential, confirmationOf } from "./change.ts";
+import type { Confirmation } from "./change.ts";
 import * as Form from "./form.ts";
-import { type Listing, listingQuery } from "./listing.ts";
+import { listingQuery } from "./listing.ts";
+import type { Listing } from "./listing.ts";
 
 // MODEL
 
@@ -31,7 +37,11 @@ export const Activity = defineTaggedUnion({
 export type Activity = typeof Activity.Type;
 
 /** What went wrong with a change or the sign-out, shown where it was asked for. */
-export const Refusal = Schema.Struct({ place: Place, title: Schema.String, reason: Schema.String });
+export const Refusal = Schema.Struct({
+  place: Place,
+  title: Schema.String,
+  reason: Schema.String,
+});
 
 export type Refusal = typeof Refusal.Type;
 
@@ -56,10 +66,12 @@ export type Model = typeof Model.Type;
 export const listingOf = (model: Model): AsyncData.AsyncData<Listing, string> =>
   listingQuery.read(model.listing);
 
-export const isSaving = (model: Model): boolean => Activity.guards.Saving(model.activity);
+export const isSaving = (model: Model): boolean =>
+  Activity.guards.Saving(model.activity);
 
 export const isHeld = (model: Model): boolean =>
-  !Activity.guards.Idle(model.activity) || !AsyncData.isSuccess(listingOf(model));
+  !Activity.guards.Idle(model.activity) ||
+  !AsyncData.isSuccess(listingOf(model));
 
 export const isDialogOpen = (model: Model): boolean =>
   Dialog.isOpen(model.editor) || ConfirmDialog.isOpen(model.confirm);
@@ -67,5 +79,7 @@ export const isDialogOpen = (model: Model): boolean =>
 export const refusalAt = (model: Model, place: Place): Option.Option<Refusal> =>
   Option.filter(model.maybeRefusal, (refusal) => refusal.place === place);
 
-export const pendingConfirmation = (model: Model): Option.Option<Confirmation> =>
+export const pendingConfirmation = (
+  model: Model
+): Option.Option<Confirmation> =>
   Option.flatMap(model.maybePending, confirmationOf);

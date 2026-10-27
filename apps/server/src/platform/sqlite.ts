@@ -1,10 +1,11 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
 import { NodeSqliteDialect } from "@better-auth/kysely-adapter/node-sqlite-dialect";
+import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { Kysely, sql as query } from "kysely";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 
 /** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
@@ -12,47 +13,70 @@ export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
 /** Opaque Better Auth table row; decode columns with Schema before use. */
 export type SqliteRow = Record<string, SqliteCell>;
 
+/** What a query hands a decoder: a cell, a row or the rows, read as stored. */
+export type Persisted =
+  | SqliteCell
+  | SqliteRow
+  | readonly SqliteRow[]
+  | undefined;
+
 /** Opaque Better Auth table map keyed by table name. */
 export type DatabaseSchema = Record<string, SqliteRow>;
 
 export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
   const decode = Schema.decodeUnknownEffect(schema);
 
-  // eslint-disable-next-line anti-slop/no-unknown-parameters -- Persisted-row boundary: this is where the schema runs.
-  return (value: unknown): Effect.Effect<T, InternalServerError, RD> =>
+  return (value: Persisted): Effect.Effect<T, InternalServerError, RD> =>
     Effect.mapError(decode(value), InternalServerError.of);
 };
 
-export function makeSql(database: Kysely<DatabaseSchema>) {
-  return <Row = SqliteRow>(
+export const makeSql =
+  (database: Kysely<DatabaseSchema>) =>
+  <Row = SqliteRow>(
     strings: TemplateStringsArray,
     ...parameters: readonly unknown[]
   ): Effect.Effect<readonly Row[], InternalServerError> =>
     Effect.tryPromise({
-      try: async () => (await query<Row>(strings, ...parameters).execute(database)).rows,
+      try: async () => {
+        const { rows } = await query<Row>(strings, ...parameters).execute(
+          database
+        );
+
+        return rows;
+      },
       catch: InternalServerError.of,
     });
-}
 
 export type Sql = ReturnType<typeof makeSql>;
 
-export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>(
+export const transaction = Effect.fn("Database.transaction")(function* <
+  A,
+  E,
+  R,
+>(
   database: Kysely<DatabaseSchema>,
-  operation: (sql: Sql) => Effect.Effect<A, E, R>,
+  operation: (sql: Sql) => Effect.Effect<A, E, R>
 ) {
   const trx = yield* Effect.tryPromise({
-    try: () => database.startTransaction().execute(),
+    try: async () => await database.startTransaction().execute(),
     catch: InternalServerError.of,
   });
 
   const exit = yield* Effect.exit(operation(makeSql(trx)));
 
   const settle = Effect.ignore(
-    Effect.tryPromise({ try: () => trx.rollback().execute(), catch: InternalServerError.of }),
+    Effect.tryPromise({
+      try: async () => {
+        await trx.rollback().execute();
+      },
+      catch: InternalServerError.of,
+    })
   );
 
   const commit = Effect.tryPromise({
-    try: () => trx.commit().execute(),
+    try: async () => {
+      await trx.commit().execute();
+    },
     catch: InternalServerError.of,
   }).pipe(Effect.tapError(() => settle));
 
@@ -61,12 +85,12 @@ export const transaction = Effect.fn("Database.transaction")(function* <A, E, R>
   return yield* exit;
 }, Effect.uninterruptible);
 
-export async function openDatabase(filename: string) {
+export const openDatabase = async (filename: string) => {
   const database = new DatabaseSync(filename);
 
   try {
     database.exec(
-      "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+      "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;"
     );
 
     const kysely = new Kysely<DatabaseSchema>({
@@ -76,12 +100,18 @@ export async function openDatabase(filename: string) {
     // why: initializing the dialect makes Kysely own connection cleanup before any query
     await query`SELECT 1`.execute(kysely);
 
-    return { kysely, sql: makeSql(kysely), close: () => kysely.destroy() };
+    return {
+      kysely,
+      sql: makeSql(kysely),
+      close: async () => {
+        await kysely.destroy();
+      },
+    };
   } catch (error) {
     database.close();
     throw error;
   }
-}
+};
 
 export class Database extends Context.Service<
   Database,
@@ -90,7 +120,7 @@ export class Database extends Context.Service<
     readonly kysely: Kysely<DatabaseSchema>;
     readonly sql: Sql;
     readonly transaction: <A, E, R>(
-      operation: (sql: Sql) => Effect.Effect<A, E, R>,
+      operation: (sql: Sql) => Effect.Effect<A, E, R>
     ) => Effect.Effect<A, E | InternalServerError, R>;
   }
 >()("clankerauth/Database") {
@@ -98,11 +128,16 @@ export class Database extends Context.Service<
     Layer.effect(
       Database,
       Effect.gen(function* () {
-        yield* Effect.try(() => mkdirSync(dirname(filename), { recursive: true, mode: 0o700 }));
+        yield* Effect.try(() =>
+          mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 })
+        );
 
         const open = yield* Effect.acquireRelease(
-          Effect.tryPromise(() => openDatabase(filename)),
-          (database) => Effect.promise(() => database.close()),
+          Effect.tryPromise(async () => await openDatabase(filename)),
+          (database) =>
+            Effect.promise(async () => {
+              await database.close();
+            })
         );
 
         return {
@@ -110,6 +145,6 @@ export class Database extends Context.Service<
           sql: open.sql,
           transaction: (operation) => transaction(open.kysely, operation),
         };
-      }),
+      })
     );
 }

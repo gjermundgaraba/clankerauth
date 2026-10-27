@@ -1,3 +1,10 @@
+import {
+  Card,
+  Field,
+  Focus,
+  Notice,
+  PasswordField,
+} from "@gjermundgaraba-designs/pixel-paper";
 import { passwordRule } from "@gjermundgaraba/clankerauth-admin-api";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
@@ -8,7 +15,6 @@ import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 import { defineView } from "foldkit/submodel";
 import type * as Update from "foldkit/update";
-import { Card, Field, Focus, Notice, PasswordField } from "@gjermundgaraba-designs/pixel-paper";
 
 import { issuer, toOwnerSentence } from "../api.ts";
 import { wallFormView } from "./wall.ts";
@@ -90,31 +96,36 @@ const INPUT_FIELDS = new Map<PropertyKey, SetupField>([
 const rejectedFieldOf = (error: Action.InvalidInput) =>
   Array.findFirst(error.issues, ({ path, message }) =>
     Option.map(
-      Option.flatMap(Array.head(path), (key) => Option.fromNullishOr(INPUT_FIELDS.get(key))),
-      (field) => Message.RejectedSetupInput({ field, sentence: message }),
-    ),
+      Option.flatMap(Array.head(path), (key) =>
+        Option.fromNullishOr(INPUT_FIELDS.get(key))
+      ),
+      (field) => Message.RejectedSetupInput({ field, sentence: message })
+    )
   );
 
 export const SetupOwner = Command.define("SetupOwner", {
   args: { email: Schema.String, password: Schema.String },
-  messages: [Message.SucceededSetupOwner, Message.RejectedSetupInput, Message.FailedSetupOwner],
+  messages: [
+    Message.SucceededSetupOwner,
+    Message.RejectedSetupInput,
+    Message.FailedSetupOwner,
+  ],
   execute: ({ email, password }) =>
     issuer.setupOwner({ email, password }).pipe(
       Effect.as(Message.SucceededSetupOwner({ outcome: "Created" })),
-      Effect.catchTag("OwnerExists", () =>
-        Effect.succeed(Message.SucceededSetupOwner({ outcome: "AlreadyOwned" })),
-      ),
-      Effect.catchTag("InvalidInput", (error) =>
-        Option.match(rejectedFieldOf(error), {
-          onNone: () => Effect.fail(error),
-          onSome: Effect.succeed,
-        }),
-      ),
+      Effect.catchTags({
+        OwnerExists: () =>
+          Effect.succeed(
+            Message.SucceededSetupOwner({ outcome: "AlreadyOwned" })
+          ),
+        InvalidInput: (error) =>
+          Effect.fromOption(rejectedFieldOf(error), () => error),
+      }),
       toOwnerSentence,
       Effect.match({
         onFailure: (reason) => Message.FailedSetupOwner({ reason }),
         onSuccess: (message) => message,
-      }),
+      })
     ),
 });
 
@@ -153,41 +164,49 @@ const submitted = (model: Model): Update.Return<Model, Message> =>
     : invalid(model, "Confirmation", "Passwords do not match.");
 
 export const update = (model: Model, message: Message) =>
-  Message.match<Update.ReturnWithOutMessage<Model, Message, OutMessage>>(message, {
-    UpdatedEmail: ({ value }) => ({ model: modifyFields(model, { email: () => value }) }),
-    UpdatedPassword: ({ value }) => ({ model: modifyFields(model, { password: () => value }) }),
-    UpdatedConfirmation: ({ value }) => ({
-      model: modifyFields(model, { confirmation: () => value }),
-    }),
-    ToggledPasswordShown: () => ({
-      model: modifyFields(model, { isPasswordShown: Boolean.not }),
-    }),
-    ToggledConfirmationShown: () => ({
-      model: modifyFields(model, { isConfirmationShown: Boolean.not }),
-    }),
-    SubmittedSetup: () => (model.isCreating ? { model } : submitted(model)),
-    SucceededSetupOwner: ({ outcome }) => ({
-      model,
-      outMessage: Match.value(outcome).pipe(
-        Match.withReturnType<OutMessage>(),
-        Match.when("Created", () => OutMessage.CreatedOwner()),
-        Match.when("AlreadyOwned", () => OutMessage.FoundOwner()),
-        Match.exhaustive,
-      ),
-    }),
-    RejectedSetupInput: ({ field, sentence }) => invalid(model, field, sentence),
-    FailedSetupOwner: ({ reason }) => ({
-      model: modifyFields(model, {
-        isCreating: () => false,
-        maybeProblem: () => Option.some(Problem.Refused({ reason })),
+  Message.match<Update.ReturnWithOutMessage<Model, Message, OutMessage>>(
+    message,
+    {
+      UpdatedEmail: ({ value }) => ({
+        model: modifyFields(model, { email: () => value }),
       }),
-    }),
-    CompletedFocus: () => ({ model }),
-  });
+      UpdatedPassword: ({ value }) => ({
+        model: modifyFields(model, { password: () => value }),
+      }),
+      UpdatedConfirmation: ({ value }) => ({
+        model: modifyFields(model, { confirmation: () => value }),
+      }),
+      ToggledPasswordShown: () => ({
+        model: modifyFields(model, { isPasswordShown: Boolean.not }),
+      }),
+      ToggledConfirmationShown: () => ({
+        model: modifyFields(model, { isConfirmationShown: Boolean.not }),
+      }),
+      SubmittedSetup: () => (model.isCreating ? { model } : submitted(model)),
+      SucceededSetupOwner: ({ outcome }) => ({
+        model,
+        outMessage: Match.value(outcome).pipe(
+          Match.withReturnType<OutMessage>(),
+          Match.when("Created", () => OutMessage.CreatedOwner()),
+          Match.when("AlreadyOwned", () => OutMessage.FoundOwner()),
+          Match.exhaustive
+        ),
+      }),
+      RejectedSetupInput: ({ field, sentence }) =>
+        invalid(model, field, sentence),
+      FailedSetupOwner: ({ reason }) => ({
+        model: modifyFields(model, {
+          isCreating: () => false,
+          maybeProblem: () => Option.some(Problem.Refused({ reason })),
+        }),
+      }),
+      CompletedFocus: () => ({ model }),
+    }
+  );
 
 // VIEW
 
-const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+const refusalView = (model: Model, h: HtmlBuilder<Message>): readonly Html[] =>
   Option.match(model.maybeProblem, {
     onNone: () => [],
     onSome: (problem) =>
@@ -195,25 +214,31 @@ const refusalView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html>
         problem,
         {
           Refused: ({ reason }) => [
-            Notice.view({ tone: "Error", title: "Not created", body: [reason] }, h),
+            Notice.view(
+              { tone: "Error", title: "Not created", body: [reason] },
+              h
+            ),
           ],
         },
-        () => [],
+        () => []
       ),
   });
 
-const invalidSentenceOf = (model: Model, field: SetupField): string | undefined =>
+const invalidSentenceOf = (
+  model: Model,
+  field: SetupField
+): string | undefined =>
   Option.getOrUndefined(
     Option.flatMap(model.maybeProblem, (problem) =>
       Problem.matchOrElse(
         problem,
         {
-          Invalid: (invalid) =>
-            invalid.field === field ? Option.some(invalid.sentence) : Option.none(),
+          Invalid: ({ field: invalidField, sentence }) =>
+            invalidField === field ? Option.some(sentence) : Option.none(),
         },
-        () => Option.none(),
-      ),
-    ),
+        () => Option.none()
+      )
+    )
   );
 
 export const view = defineView<Model, Message>((model, h): Html =>
@@ -231,7 +256,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
           [h.Class("note-line")],
           [
             "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
-          ],
+          ]
         ),
         ...refusalView(model, h),
         Field.view(
@@ -244,9 +269,12 @@ export const view = defineView<Model, Message>((model, h): Html =>
             isBoxed: true,
             isRequired: true,
             error: invalidSentenceOf(model, "Email"),
-            inputAttributes: [h.Autocomplete("username"), h.Placeholder("owner@example.internal")],
+            inputAttributes: [
+              h.Autocomplete("username"),
+              h.Placeholder("owner@example.internal"),
+            ],
           },
-          h,
+          h
         ),
         PasswordField.view(
           {
@@ -261,7 +289,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
             help: `${passwordRule}. Save your password somewhere safe.`,
             autocomplete: "new-password",
           },
-          h,
+          h
         ),
         PasswordField.view(
           {
@@ -276,10 +304,10 @@ export const view = defineView<Model, Message>((model, h): Html =>
             error: invalidSentenceOf(model, "Confirmation"),
             autocomplete: "new-password",
           },
-          h,
+          h
         ),
       ],
     },
-    h,
-  ),
+    h
+  )
 );

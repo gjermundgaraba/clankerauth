@@ -22,7 +22,10 @@ export type DashboardRoute = typeof DashboardRoute.Type;
 
 export const clientsRouter = pipe(Route.root, Route.mapTo(AppRoute.Clients));
 
-export const resourcesRouter = pipe(literal("resources"), Route.mapTo(AppRoute.Resources));
+export const resourcesRouter = pipe(
+  literal("resources"),
+  Route.mapTo(AppRoute.Resources)
+);
 
 export const keysRouter = pipe(literal("keys"), Route.mapTo(AppRoute.Keys));
 
@@ -38,9 +41,12 @@ const routeParser = Route.oneOf(
   loginRouter,
   setupRouter,
   consentRouter,
-  clientsRouter,
+  clientsRouter
 );
 
-export const urlToAppRoute = Route.parseUrlWithFallback(routeParser, AppRoute.NotFound);
+export const urlToAppRoute = Route.parseUrlWithFallback(
+  routeParser,
+  AppRoute.NotFound
+);
 
 export const isDashboardRoute = AppRoute.isAnyOf(dashboardScreens);

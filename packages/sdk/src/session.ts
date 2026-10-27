@@ -1,3 +1,4 @@
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 /**
  * The identity a browser page needs, without any verification code. This entry point is
  * browser-safe: it declares the identity a protected contract states, the `whoami` contract
@@ -5,7 +6,7 @@
  * server answers `Whoami` with its resource's `session`.
  */
 import { Context, Schema } from "effect";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
+
 import type { Principal as Verified } from "./verify.ts";
 
 /**
@@ -28,9 +29,10 @@ export interface Caller extends Omit<Verified, "actor"> {
  * Remotely, the resource's provider gives it per request, from the verified credential; on
  * a trusted local surface, the host gives it the process, `Notes.local(subject)`.
  */
-export class CurrentPrincipal extends Context.Service<CurrentPrincipal, Caller>()(
-  "@clankerauth/CurrentPrincipal",
-) {}
+export class CurrentPrincipal extends Context.Service<
+  CurrentPrincipal,
+  Caller
+>()("@clankerauth/CurrentPrincipal") {}
 
 /** The verified credential behind a request, as the resource server read it. */
 export const Principal = Schema.Struct({
@@ -47,7 +49,8 @@ export type Principal = typeof Principal.Type;
  * of MCP.
  */
 export const Whoami = Action.make("whoami", {
-  description: "The verified subject, issuer and scopes behind this request's credential.",
+  description:
+    "The verified subject, issuer and scopes behind this request's credential.",
   readOnly: true,
   caller: CurrentPrincipal,
   success: Principal,

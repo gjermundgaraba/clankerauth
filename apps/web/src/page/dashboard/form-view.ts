@@ -1,10 +1,5 @@
-import { ClientAuthMethod, type ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
-import { Array, Option, Record, Schema } from "effect";
-import type { Html, HtmlBuilder } from "foldkit/html";
-import { defineView } from "foldkit/submodel";
 import {
   Choice,
-  type Dialog,
   Field,
   Fieldset,
   PropsList,
@@ -13,6 +8,12 @@ import {
   Stack,
   TextareaField,
 } from "@gjermundgaraba-designs/pixel-paper";
+import type { Dialog } from "@gjermundgaraba-designs/pixel-paper";
+import { ClientAuthMethod } from "@gjermundgaraba/clankerauth-admin-api";
+import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
+import { Array, Option, Record, Schema } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
+import { defineView } from "foldkit/submodel";
 
 import { ClientMode, KeyMode, Message, Model, ResourceMode } from "./form.ts";
 import { noteView } from "./parts.ts";
@@ -28,7 +29,7 @@ type ClientForm = typeof Model.Client.Type;
 /** What the open form needs from the dashboard: what may be granted, and the attributes of the
  *  control that takes focus when the dialog opens. */
 export type ViewInputs = Readonly<{
-  resources: ReadonlyArray<ResourceView>;
+  resources: readonly ResourceView[];
   initialFocus: Dialog.RenderInfo["initialFocus"];
 }>;
 
@@ -51,28 +52,38 @@ export const labelsOf = (form: Model): FormLabels =>
       }),
     Client: ({ mode }) =>
       ClientMode.match(mode, {
-        Register: () => ({ title: "Register client", submit: "register client" }),
+        Register: () => ({
+          title: "Register client",
+          submit: "register client",
+        }),
         Edit: () => ({ title: "Edit client", submit: "save client" }),
         Access: () => ({ title: "Allowed resources", submit: "save access" }),
       }),
   });
 
-const AUTH_METHOD_LABELS: Readonly<Record<typeof ClientAuthMethod.Type, string>> = {
+const AUTH_METHOD_LABELS: Readonly<
+  Record<typeof ClientAuthMethod.Type, string>
+> = {
   none: "Public client (PKCE only)",
   client_secret_basic: "Confidential client · HTTP Basic secret",
   client_secret_post: "Confidential client · secret in request body",
 };
 
-const SCOPE_HELP = "Optional. Separate scopes with spaces. offline_access is reserved.";
+const SCOPE_HELP =
+  "Optional. Separate scopes with spaces. offline_access is reserved.";
 
 const REDIRECT_URI_ROWS = 3;
 
 // FIELDS
 
 const nameField = (
-  config: Readonly<{ value: string; onInput: (value: string) => Message; label: string }>,
+  config: Readonly<{
+    value: string;
+    onInput: (value: string) => Message;
+    label: string;
+  }>,
   inputs: ViewInputs,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html =>
   Field.view(
     {
@@ -83,14 +94,14 @@ const nameField = (
       isRequired: true,
       inputAttributes: inputs.initialFocus,
     },
-    h,
+    h
   );
 
 const resourceFields = (
   { mode, draft }: ResourceForm,
   inputs: ViewInputs,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => {
+  h: HtmlBuilder<Message>
+): readonly Html[] => {
   const isAdding = ResourceMode.guards.Add(mode);
 
   return [
@@ -101,7 +112,7 @@ const resourceFields = (
         onInput: (value) => Message.UpdatedResourceName({ value }),
       },
       inputs,
-      h,
+      h
     ),
     isAdding
       ? Field.view(
@@ -116,11 +127,15 @@ const resourceFields = (
             help: "The identifier is the token audience and cannot be changed later. Use the canonical form a client sends back, such as the application’s origin root with its trailing slash.",
             inputAttributes: [h.Placeholder("https://notes.internal/")],
           },
-          h,
+          h
         )
       : PropsList.view(
-          { items: [{ label: "identifier", value: [draft.identifier], isCode: true }] },
-          h,
+          {
+            items: [
+              { label: "identifier", value: [draft.identifier], isCode: true },
+            ],
+          },
+          h
         ),
     Field.view(
       {
@@ -134,16 +149,16 @@ const resourceFields = (
           : "Added scopes need new consent. Removed scopes are no longer issued, but approvals are kept and work again if the scope is restored.",
         inputAttributes: [h.Placeholder("notes:read notes:write")],
       },
-      h,
+      h
     ),
   ];
 };
 
 const grantsView = (
   grants: KeyForm["draft"]["grants"],
-  resources: ReadonlyArray<ResourceView>,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> =>
+  resources: readonly ResourceView[],
+  h: HtmlBuilder<Message>
+): readonly Html[] =>
   Array.match(resources, {
     onEmpty: () => [noteView("Add a Resource to grant access.", h)],
     onNonEmpty: (grantable) =>
@@ -164,35 +179,44 @@ const grantsView = (
                         body: [h.code([], [scope])],
                         select: {
                           id: `form-grant-${identifier}-${scope}`,
-                          isChecked: Option.exists(Record.get(grants, identifier), (granted) =>
-                            Array.contains(granted, scope),
+                          isChecked: Option.exists(
+                            Record.get(grants, identifier),
+                            (granted) => Array.contains(granted, scope)
                           ),
                           onToggle: (isChecked) =>
-                            Message.ToggledKeyGrant({ resource: identifier, scope, isChecked }),
+                            Message.ToggledKeyGrant({
+                              resource: identifier,
+                              scope,
+                              isChecked,
+                            }),
                         },
                       },
-                      h,
-                    ),
+                      h
+                    )
                   ),
                 },
-                h,
+                h
               ),
             ],
           },
-          h,
-        ),
+          h
+        )
       ),
   });
 
 const keyFields = (
   { mode, draft }: KeyForm,
   inputs: ViewInputs,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => {
+  h: HtmlBuilder<Message>
+): readonly Html[] => {
   const name = nameField(
-    { label: "Name", value: draft.name, onInput: (value) => Message.UpdatedKeyName({ value }) },
+    {
+      label: "Name",
+      value: draft.name,
+      onInput: (value) => Message.UpdatedKeyName({ value }),
+    },
     inputs,
-    h,
+    h
   );
 
   return KeyMode.match(mode, {
@@ -208,7 +232,7 @@ const keyFields = (
           onInput: (value) => Message.UpdatedKeyExpiry({ value }),
           help: "Blank means valid until revoked. The key is shown once and works within about a minute.",
         },
-        h,
+        h
       ),
     ],
     Rename: () => [name],
@@ -216,19 +240,23 @@ const keyFields = (
       ...grantsView(draft.grants, inputs.resources, h),
       noteView(
         "Saving replaces all grants, including any not currently available, with the selected scopes.",
-        h,
+        h
       ),
     ],
   });
 };
 
 const resourceChoicesView = (
-  selected: ReadonlyArray<string>,
-  resources: ReadonlyArray<ResourceView>,
-  h: HtmlBuilder<Message>,
+  selected: readonly string[],
+  resources: readonly ResourceView[],
+  h: HtmlBuilder<Message>
 ): Html =>
   Array.match(resources, {
-    onEmpty: () => noteView("There are no Resources yet; add one to give this Client access.", h),
+    onEmpty: () =>
+      noteView(
+        "There are no Resources yet; add one to give this Client access.",
+        h
+      ),
     onNonEmpty: (choices) =>
       Fieldset.view(
         {
@@ -247,18 +275,21 @@ const resourceChoicesView = (
                         id: `form-resource-${identifier}`,
                         isChecked: Array.contains(selected, identifier),
                         onToggle: (isChecked) =>
-                          Message.ToggledClientResource({ resource: identifier, isChecked }),
+                          Message.ToggledClientResource({
+                            resource: identifier,
+                            isChecked,
+                          }),
                       },
                     },
-                    h,
-                  ),
+                    h
+                  )
                 ),
               },
-              h,
+              h
             ),
           ],
         },
-        h,
+        h
       ),
   });
 
@@ -268,19 +299,26 @@ const redirectUrisField = (value: string, h: HtmlBuilder<Message>): Html =>
       id: "form-redirect-uris",
       label: "Redirect URIs",
       value,
-      onInput: (nextValue) => Message.UpdatedClientRedirectUris({ value: nextValue }),
+      onInput: (nextValue) =>
+        Message.UpdatedClientRedirectUris({ value: nextValue }),
       help: "One per line.",
       isRequired: true,
       isMono: true,
       rows: REDIRECT_URI_ROWS,
-      textareaAttributes: [h.Placeholder("https://app.internal/callback"), h.Spellcheck(false)],
+      textareaAttributes: [
+        h.Placeholder("https://app.internal/callback"),
+        h.Spellcheck(false),
+      ],
     },
-    h,
+    h
   );
 
 const decodeAuthMethod = Schema.decodeUnknownOption(ClientAuthMethod);
 
-const authMethodField = (method: typeof ClientAuthMethod.Type, h: HtmlBuilder<Message>): Html =>
+const authMethodField = (
+  method: typeof ClientAuthMethod.Type,
+  h: HtmlBuilder<Message>
+): Html =>
   SelectField.view(
     {
       id: "form-auth-method",
@@ -296,7 +334,7 @@ const authMethodField = (method: typeof ClientAuthMethod.Type, h: HtmlBuilder<Me
       })),
       help: "S256 PKCE is always required. It cannot be changed after registration.",
     },
-    h,
+    h
   );
 
 const nativeChoice = (isNative: boolean, h: HtmlBuilder<Message>): Html =>
@@ -308,14 +346,14 @@ const nativeChoice = (isNative: boolean, h: HtmlBuilder<Message>): Html =>
       isChecked: isNative,
       onToggle: (isChecked) => Message.ToggledClientNative({ isChecked }),
     },
-    h,
+    h
   );
 
 const clientFields = (
   { mode, draft }: ClientForm,
   inputs: ViewInputs,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => {
+  h: HtmlBuilder<Message>
+): readonly Html[] => {
   const name = nameField(
     {
       label: "Client name",
@@ -323,7 +361,7 @@ const clientFields = (
       onInput: (value) => Message.UpdatedClientName({ value }),
     },
     inputs,
-    h,
+    h
   );
 
   return ClientMode.match(mode, {
@@ -333,7 +371,10 @@ const clientFields = (
       resourceChoicesView(draft.resources, inputs.resources, h),
       nativeChoice(draft.isNative, h),
       authMethodField(draft.authMethod, h),
-      noteView("Clients you register here are first party and skip the consent screen.", h),
+      noteView(
+        "Clients you register here are first party and skip the consent screen.",
+        h
+      ),
     ],
     Edit: () => [
       name,
@@ -345,7 +386,7 @@ const clientFields = (
       resourceChoicesView(draft.resources, inputs.resources, h),
       noteView(
         "This Client skips consent for the Resources ticked here. Unticking one revokes its authorization for it.",
-        h,
+        h
       ),
     ],
   });
@@ -353,15 +394,16 @@ const clientFields = (
 
 // VIEW
 
-export const view = defineView<Model, Message, ViewInputs>((form, inputs, h): Html =>
-  Stack.view(
-    {
-      body: Model.match(form, {
-        Resource: (resourceForm) => resourceFields(resourceForm, inputs, h),
-        Key: (keyForm) => keyFields(keyForm, inputs, h),
-        Client: (clientForm) => clientFields(clientForm, inputs, h),
-      }),
-    },
-    h,
-  ),
+export const view = defineView<Model, Message, ViewInputs>(
+  (form, inputs, h): Html =>
+    Stack.view(
+      {
+        body: Model.match(form, {
+          Resource: (resourceForm) => resourceFields(resourceForm, inputs, h),
+          Key: (keyForm) => keyFields(keyForm, inputs, h),
+          Client: (clientForm) => clientFields(clientForm, inputs, h),
+        }),
+      },
+      h
+    )
 );

@@ -1,11 +1,3 @@
-import { Array, Effect, Option, Schema, String, pipe } from "effect";
-import { Command } from "foldkit";
-import type { Html, HtmlBuilder } from "foldkit/html";
-import { defineMessageUnion } from "foldkit/message";
-import { defineTaggedUnion } from "foldkit/schema";
-import { modifyFields } from "foldkit/struct";
-import { defineView } from "foldkit/submodel";
-import type * as Update from "foldkit/update";
 import {
   Button,
   CodeSurface,
@@ -17,10 +9,18 @@ import {
   PropsList,
   Rows,
 } from "@gjermundgaraba-designs/pixel-paper";
+import { Array, Effect, Option, Schema, String, pipe } from "effect";
+import { Command } from "foldkit";
+import type { Html, HtmlBuilder } from "foldkit/html";
+import { defineMessageUnion } from "foldkit/message";
+import { defineTaggedUnion } from "foldkit/schema";
+import { modifyFields } from "foldkit/struct";
+import { defineView } from "foldkit/submodel";
+import type * as Update from "foldkit/update";
 
 import { decideConsent, publicClientName } from "../api.ts";
-import { wallCardView } from "./wall.ts";
 import { codesView } from "./codes.ts";
+import { wallCardView } from "./wall.ts";
 
 // MODEL
 
@@ -82,8 +82,9 @@ export const FetchClientName = Command.define("FetchClientName", {
     publicClientName(clientId).pipe(
       Effect.match({
         onFailure: (reason) => Message.FailedFetchClientName({ reason }),
-        onSuccess: (maybeName) => Message.SucceededFetchClientName({ maybeName }),
-      }),
+        onSuccess: (maybeName) =>
+          Message.SucceededFetchClientName({ maybeName }),
+      })
     ),
 });
 
@@ -95,13 +96,14 @@ export const DecideConsent = Command.define("DecideConsent", {
       Effect.match({
         onFailure: (reason) => Message.FailedDecideConsent({ reason }),
         onSuccess: () => Message.SucceededDecideConsent(),
-      }),
+      })
     ),
 });
 
 // INIT
 
-const INCOMPLETE = "Start authorization from your application; this consent link is incomplete.";
+const INCOMPLETE =
+  "Start authorization from your application; this consent link is incomplete.";
 
 const requestOf = (search: string): Option.Option<ConsentRequest> => {
   const query = new URLSearchParams(search);
@@ -112,11 +114,15 @@ const requestOf = (search: string): Option.Option<ConsentRequest> => {
     Option.filter(() => query.has("sig")),
     Option.map((clientId) => ({
       clientId,
-      scopes: pipe(query.get("scope") ?? "", String.split(" "), Array.filter(String.isNonEmpty)),
+      scopes: pipe(
+        query.get("scope") ?? "",
+        String.split(" "),
+        Array.filter(String.isNonEmpty)
+      ),
       resources: query.getAll("resource"),
       maybeRedirect: Option.fromNullishOr(query.get("redirect_uri")),
       maybeClaims: Option.fromNullishOr(query.get("claims")),
-    })),
+    }))
   );
 };
 
@@ -133,13 +139,16 @@ export const init = (search: string): UpdateReturn =>
 
 const NOTHING_GRANTED = "Tick at least one permission, or deny the request.";
 
-const whileAsking = (model: Model, step: (asking: Asking) => UpdateReturn): UpdateReturn =>
+const whileAsking = (
+  model: Model,
+  step: (asking: Asking) => UpdateReturn
+): UpdateReturn =>
   Model.matchOrElse(model, { Asking: step }, () => ({ model }));
 
 const decided = (
   asking: Asking,
   decision: Exclude<Decision, "Undecided">,
-  maybeScope: Option.Option<string>,
+  maybeScope: Option.Option<string>
 ): UpdateReturn => ({
   model: modifyFields(asking, {
     decision: () => decision,
@@ -155,13 +164,19 @@ const allowed = (asking: Asking): UpdateReturn =>
       Array.match(asking.request.scopes, {
         onEmpty: () => decided(asking, "Allowing", Option.none()),
         onNonEmpty: () => ({
-          model: modifyFields(asking, { maybeRefusal: () => Option.some(NOTHING_GRANTED) }),
+          model: modifyFields(asking, {
+            maybeRefusal: () => Option.some(NOTHING_GRANTED),
+          }),
         }),
       }),
-    onNonEmpty: (granted) => decided(asking, "Allowing", Option.some(Array.join(granted, " "))),
+    onNonEmpty: (granted) =>
+      decided(asking, "Allowing", Option.some(Array.join(granted, " "))),
   });
 
-const whenUndecided = (asking: Asking, step: (asking: Asking) => UpdateReturn): UpdateReturn =>
+const whenUndecided = (
+  asking: Asking,
+  step: (asking: Asking) => UpdateReturn
+): UpdateReturn =>
   asking.decision === "Undecided" ? step(asking) : { model: asking };
 
 export const update = (model: Model, message: Message) =>
@@ -181,15 +196,19 @@ export const update = (model: Model, message: Message) =>
             }),
           }),
         },
-        () => ({ model }),
+        () => ({ model })
       ),
-    FailedFetchClientName: ({ reason }) => ({ model: Model.Stopped({ reason }) }),
+    FailedFetchClientName: ({ reason }) => ({
+      model: Model.Stopped({ reason }),
+    }),
     ToggledScope: ({ scope, isChecked }) =>
       whileAsking(model, (asking) => ({
         model: modifyFields(asking, {
           granted: (granted) =>
             Array.filter(asking.request.scopes, (requested) =>
-              requested === scope ? isChecked : Array.contains(granted, requested),
+              requested === scope
+                ? isChecked
+                : Array.contains(granted, requested)
             ),
         }),
       })),
@@ -197,10 +216,13 @@ export const update = (model: Model, message: Message) =>
       whileAsking(model, (asking) => ({
         model: modifyFields(asking, { isClaimsOpen: () => isOpen }),
       })),
-    ClickedAllow: () => whileAsking(model, (asking) => whenUndecided(asking, allowed)),
+    ClickedAllow: () =>
+      whileAsking(model, (asking) => whenUndecided(asking, allowed)),
     ClickedDeny: () =>
       whileAsking(model, (asking) =>
-        whenUndecided(asking, (undecided) => decided(undecided, "Denying", Option.none())),
+        whenUndecided(asking, (undecided) =>
+          decided(undecided, "Denying", Option.none())
+        )
       ),
     SucceededDecideConsent: () => ({ model }),
     FailedDecideConsent: ({ reason }) =>
@@ -222,7 +244,7 @@ const metadataHostOf = (clientId: string): Option.Option<string> =>
     Option.liftPredicate((id) => URL.canParse(id)),
     Option.map((id) => new URL(id)),
     Option.filter(({ protocol }) => protocol === "https:"),
-    Option.map(({ hostname }) => hostname),
+    Option.map(({ hostname }) => hostname)
   );
 
 const stoppedView = (reason: string, h: HtmlBuilder<Message>): Html =>
@@ -231,9 +253,14 @@ const stoppedView = (reason: string, h: HtmlBuilder<Message>): Html =>
     {
       title: "Allow access",
       meta: "not available",
-      body: [Outcome.view({ tone: "Error", title: "Unable to continue", body: [reason] }, h)],
+      body: [
+        Outcome.view(
+          { tone: "Error", title: "Unable to continue", body: [reason] },
+          h
+        ),
+      ],
     },
-    h,
+    h
   );
 
 const loadingView = (h: HtmlBuilder<Message>): Html =>
@@ -241,14 +268,20 @@ const loadingView = (h: HtmlBuilder<Message>): Html =>
     HEADING,
     {
       title: "Allow access",
-      body: [Loading.view({ isLoading: true, label: "reading the request" }, h)],
+      body: [
+        Loading.view({ isLoading: true, label: "reading the request" }, h),
+      ],
     },
-    h,
+    h
   );
 
 const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
   Array.match(asking.request.scopes, {
-    onEmpty: () => h.p([h.Class("note-line")], ["No permissions requested beyond signing in."]),
+    onEmpty: () =>
+      h.p(
+        [h.Class("note-line")],
+        ["No permissions requested beyond signing in."]
+      ),
     onNonEmpty: (scopes) =>
       Rows.view(
         {
@@ -261,18 +294,22 @@ const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
                 select: {
                   id: `consent-scope-${scope}`,
                   isChecked: Array.contains(asking.granted, scope),
-                  onToggle: (isChecked) => Message.ToggledScope({ scope, isChecked }),
+                  onToggle: (isChecked) =>
+                    Message.ToggledScope({ scope, isChecked }),
                 },
               },
-              h,
-            ),
+              h
+            )
           ),
         },
-        h,
+        h
       ),
   });
 
-const decisionActionsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
+const decisionActionsView = (
+  asking: Asking,
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
   Button.view(
     {
       label: "deny",
@@ -280,7 +317,7 @@ const decisionActionsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyA
       isBusy: asking.decision === "Denying",
       isDisabled: asking.decision === "Allowing",
     },
-    h,
+    h
   ),
   Button.view(
     {
@@ -291,21 +328,24 @@ const decisionActionsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyA
       isBusy: asking.decision === "Allowing",
       isDisabled: asking.decision === "Denying",
     },
-    h,
+    h
   ),
 ];
 
 const requestDetailsView = (
   { clientId, maybeRedirect, resources }: ConsentRequest,
   name: string,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => [
-  Identity.view({ label: name, isLarge: true, meta: [h.code([], [clientId])] }, h),
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
+  Identity.view(
+    { label: name, isLarge: true, meta: [h.code([], [clientId])] },
+    h
+  ),
   h.p([], [h.strong([], [name]), " wants to act on your behalf."]),
   ...Option.toArray(
     Option.map(metadataHostOf(clientId), (host) =>
-      h.p([], ["Client metadata host: ", h.strong([], [host])]),
-    ),
+      h.p([], ["Client metadata host: ", h.strong([], [host])])
+    )
   ),
   PropsList.view(
     {
@@ -318,18 +358,23 @@ const requestDetailsView = (
             onSome: (redirect) => [h.code([], [redirect])],
           }),
         },
-        { label: "only for", value: codesView(resources, "None in this request", h) },
+        {
+          label: "only for",
+          value: codesView(resources, "None in this request", h),
+        },
       ],
     },
-    h,
+    h
   ),
   h.p(
     [h.Class("note-line")],
-    ["The client supplies its display name. Review the identifier and callback before approving."],
+    [
+      "The client supplies its display name. Review the identifier and callback before approving.",
+    ]
   ),
 ];
 
-const claimsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+const claimsView = (asking: Asking, h: HtmlBuilder<Message>): readonly Html[] =>
   Option.toArray(
     Option.map(asking.request.maybeClaims, (claims) =>
       Disclosure.view(
@@ -338,18 +383,23 @@ const claimsView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyArray<Html
           label: "additional identity claims",
           isOpen: asking.isClaimsOpen,
           onToggle: (isOpen) => Message.ToggledClaims({ isOpen }),
-          body: [CodeSurface.view({ label: "Requested claims", body: [claims] }, h)],
+          body: [
+            CodeSurface.view({ label: "Requested claims", body: [claims] }, h),
+          ],
         },
-        h,
-      ),
-    ),
+        h
+      )
+    )
   );
 
-const refusalView = (asking: Asking, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+const refusalView = (
+  asking: Asking,
+  h: HtmlBuilder<Message>
+): readonly Html[] =>
   Option.toArray(
     Option.map(asking.maybeRefusal, (reason) =>
-      Notice.view({ tone: "Error", title: "Not answered", body: [reason] }, h),
-    ),
+      Notice.view({ tone: "Error", title: "Not answered", body: [reason] }, h)
+    )
   );
 
 const askingView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
@@ -364,20 +414,20 @@ const askingView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
         ...requestDetailsView(
           asking.request,
           Option.getOrElse(asking.maybeName, () => asking.request.clientId),
-          h,
+          h
         ),
         scopesView(asking, h),
         h.p(
           [h.Class("note-line")],
           [
             "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
-          ],
+          ]
         ),
         ...claimsView(asking, h),
         ...refusalView(asking, h),
       ],
     },
-    h,
+    h
   );
 
 export const view = defineView<Model, Message>((model, h): Html =>
@@ -385,5 +435,5 @@ export const view = defineView<Model, Message>((model, h): Html =>
     Stopped: ({ reason }) => stoppedView(reason, h),
     Loading: () => loadingView(h),
     Asking: (asking) => askingView(asking, h),
-  }),
+  })
 );

@@ -10,23 +10,28 @@ import { Message } from "./message.ts";
 
 // SAVE
 
-const clientSecretOf = (credentials: typeof ClientCredentials.Type): Option.Option<Credential> =>
+const clientSecretOf = (
+  credentials: typeof ClientCredentials.Type
+): Option.Option<Credential> =>
   Option.map(Option.fromNullishOr(credentials.client_secret), (secret) =>
     Credential.ClientSecret({
       clientId: credentials.client_id,
       name: credentials.client_name ?? credentials.client_id,
       secret,
-    }),
+    })
   );
 
 const nothingShown = Effect.as(Option.none<Credential>());
 
-const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, string> =>
+const saveChange = (
+  change: Change
+): Effect.Effect<Option.Option<Credential>, string> =>
   toOwnerSentence<Option.Option<Credential>, unknown>(
     Change.match(change, {
       PutResource: ({ identifier, name, scopes }) =>
         issuer.putResource({ identifier, name, scopes }).pipe(nothingShown),
-      DeleteResource: ({ identifier }) => issuer.deleteResource({ identifier }).pipe(nothingShown),
+      DeleteResource: ({ identifier }) =>
+        issuer.deleteResource({ identifier }).pipe(nothingShown),
       // why: a `datetime-local` value has no zone, so `new Date` reads it in the browser's zone
       CreateKey: ({ name, permissions, maybeExpiry }) =>
         Effect.suspend(() =>
@@ -34,21 +39,31 @@ const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, st
             name,
             permissions,
             expiresAt: Option.getOrNull(
-              Option.map(maybeExpiry, (expiry) => DateTime.fromDateUnsafe(new Date(expiry))),
+              Option.map(maybeExpiry, (expiry) =>
+                DateTime.fromDateUnsafe(new Date(expiry))
+              )
             ),
-          }),
+          })
         ).pipe(
           Effect.map(({ keyId, name: keyName, key }) =>
-            Option.some(Credential.ApiKey({ keyId, name: keyName, key })),
-          ),
+            Option.some(Credential.ApiKey({ keyId, name: keyName, key }))
+          )
         ),
-      RenameKey: ({ keyId, name }) => issuer.updateApiKey({ keyId, name }).pipe(nothingShown),
+      RenameKey: ({ keyId, name }) =>
+        issuer.updateApiKey({ keyId, name }).pipe(nothingShown),
       SetKeyGrants: ({ keyId, permissions }) =>
         issuer.updateApiKey({ keyId, permissions }).pipe(nothingShown),
       SetKeyEnabled: ({ keyId, isEnabled }) =>
         issuer.updateApiKey({ keyId, enabled: isEnabled }).pipe(nothingShown),
-      DeleteKey: ({ keyId }) => issuer.deleteApiKey({ keyId }).pipe(nothingShown),
-      RegisterClient: ({ name, redirectUris, resources, applicationType, authMethod }) =>
+      DeleteKey: ({ keyId }) =>
+        issuer.deleteApiKey({ keyId }).pipe(nothingShown),
+      RegisterClient: ({
+        name,
+        redirectUris,
+        resources,
+        applicationType,
+        authMethod,
+      }) =>
         issuer
           .createClient({
             client_name: name,
@@ -68,19 +83,26 @@ const saveChange = (change: Change): Effect.Effect<Option.Option<Credential>, st
           })
           .pipe(nothingShown),
       SetClientAccess: ({ clientId, resources }) =>
-        issuer.setClientAccess({ client_id: clientId, resources }).pipe(nothingShown),
+        issuer
+          .setClientAccess({ client_id: clientId, resources })
+          .pipe(nothingShown),
       RevokeClient: ({ clientId, maybeResource }) =>
         Option.match(maybeResource, {
           onNone: () => issuer.revokeClient({ client_id: clientId }),
-          onSome: (resource) => issuer.revokeClient({ client_id: clientId, resource }),
+          onSome: (resource) =>
+            issuer.revokeClient({ client_id: clientId, resource }),
         }).pipe(nothingShown),
       BlockClient: ({ clientId, isBlocked }) =>
-        issuer.blockClient({ client_id: clientId, blocked: isBlocked }).pipe(nothingShown),
+        issuer
+          .blockClient({ client_id: clientId, blocked: isBlocked })
+          .pipe(nothingShown),
       RotateSecret: ({ clientId }) =>
-        issuer.rotateClientSecret({ client_id: clientId }).pipe(Effect.map(clientSecretOf)),
+        issuer
+          .rotateClientSecret({ client_id: clientId })
+          .pipe(Effect.map(clientSecretOf)),
       DeleteClient: ({ clientId }) =>
         issuer.deleteClient({ client_id: clientId }).pipe(nothingShown),
-    }),
+    })
   );
 
 // COMMAND
@@ -94,7 +116,8 @@ export const SaveChange = Command.define("SaveChange", {
     saveChange(change).pipe(
       Effect.match({
         onFailure: (reason) => Message.FailedSaveChange({ reason }),
-        onSuccess: (maybeCredential) => Message.SucceededSaveChange({ change, maybeCredential }),
+        onSuccess: (maybeCredential) =>
+          Message.SucceededSaveChange({ change, maybeCredential }),
       }),
       Effect.timeoutOrElse({
         duration: SAVE_TIMEOUT,
@@ -103,9 +126,9 @@ export const SaveChange = Command.define("SaveChange", {
             Message.FailedSaveChange({
               reason:
                 "The issuer did not answer in time. Check whether the change was made before trying again.",
-            }),
+            })
           ),
-      }),
+      })
     ),
 });
 
@@ -116,6 +139,6 @@ export const SignOut = Command.define("SignOut", {
     Effect.match({
       onFailure: (reason) => Message.FailedSignOut({ reason }),
       onSuccess: () => Message.SucceededSignOut(),
-    }),
+    })
   ),
 });

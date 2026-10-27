@@ -22,15 +22,15 @@ vp add @gjermundgaraba/effect-actions@^0.20.0
 
 ## Entry points
 
-| Import                             | Needs effect-actions | Browser safe | What it holds                                                                                                             |
-| ---------------------------------- | -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `…/clankerauth-sdk`                | no                   | no           | `Verifier`, `RequestPolicy`                                                                                               |
-| `…/clankerauth-sdk/errors`         | no                   | **yes**      | the verifier's errors; `ProviderUnavailable` is the one a descriptor declares                                             |
-| `…/clankerauth-sdk/session`        | yes                  | **yes**      | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl`, `signOutPath`, `returnToParameter` |
-| `…/clankerauth-sdk/effect-actions` | yes                  | no           | `Resource`                                                                                                                |
-| `…/clankerauth-sdk/key-list`       | no                   | no           | the key list format and `keyPrefix`, for issuers and fakes                                                                |
-| `…/clankerauth-sdk/credentials`    | no                   | no           | `token` and `authorizing`, a program's bearer token for an application; the owner's sign-ins the CLI keeps (Node only)    |
-| `…/clankerauth-sdk/testing`        | no                   | no           | `startFakeIssuer`, for tests (Node only)                                                                                  |
+| Import | Needs effect-actions | Browser safe | What it holds |
+| --- | --- | --- | --- |
+| `…/clankerauth-sdk` | no | no | `Verifier`, `RequestPolicy` |
+| `…/clankerauth-sdk/errors` | no | **yes** | the verifier's errors; `ProviderUnavailable` is the one a descriptor declares |
+| `…/clankerauth-sdk/session` | yes | **yes** | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl`, `signOutPath`, `returnToParameter` |
+| `…/clankerauth-sdk/effect-actions` | yes | no | `Resource` |
+| `…/clankerauth-sdk/key-list` | no | no | the key list format and `keyPrefix`, for issuers and fakes |
+| `…/clankerauth-sdk/credentials` | no | no | `token` and `authorizing`, a program's bearer token for an application; the owner's sign-ins the CLI keeps (Node only) |
+| `…/clankerauth-sdk/testing` | no | no | `startFakeIssuer`, for tests (Node only) |
 
 The package is free of side effects, so a bundler drops what a page does not use. Errors are **not** re-exported from the root: a shared contract imports them from `/errors`, and nothing about that import pulls token verification into a browser bundle.
 
@@ -39,9 +39,9 @@ The package is free of side effects, so a bundler drops what a page does not use
 A program calling an application behind clankerauth, such as the application's own CLI, takes its bearer token from `token` of `/credentials`, or has `authorizing` send it with each request. The owner signs in once with `clankerauth login https://notes.internal`, which reads the resource, its issuer and its scopes from the application's `/.well-known/oauth-protected-resource`; `token` then refreshes that sign-in as it expires. A token the environment gives, an access token or an API key, is returned instead when it is set, so the same program runs unattended. The program names the variable with `token`; nothing is read from the environment without it. To administer an issuer, the convention is `CLANKERAUTH_TOKEN` holding an administration key, an API key granted on the issuer's origin root, which the `clankerauth` command reads too.
 
 ```ts
+import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
 import { Config, Effect } from "effect";
 import { HttpClient } from "effect/http";
-import * as Credentials from "@gjermundgaraba/clankerauth-sdk/credentials";
 
 const notes = Credentials.authorizing({
   url: "https://notes.internal",
@@ -66,9 +66,9 @@ A program that signs its user in itself, as the CLI's `login` does, calls `signI
 Core consumers do not need effect-actions or `skipLibCheck`.
 
 ```ts
+import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/http";
-import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 
 // Once, at module scope: what every verification has read.
 const store = Verifier.store();
@@ -82,7 +82,7 @@ const verify = (token: string) =>
     requiredScopes: ["notes:read"],
   }).pipe(
     Effect.flatMap((verifier) => verifier.verifyToken(token)),
-    Effect.provide(FetchHttpClient.layer),
+    Effect.provide(FetchHttpClient.layer)
   );
 ```
 
@@ -101,11 +101,14 @@ The public URL is where the listener that publishes discovery is reached, becaus
 Contracts state who may call them, `caller: CurrentPrincipal`, and a binding names how a caller proves it: an effect-actions authentication descriptor, declared once beside the contracts, where a browser client imports it too. The descriptor also declares what its verifier fails with besides a refusal: `ProviderUnavailable`, the issuer being unreachable.
 
 ```ts
+import { ProviderUnavailable } from "@gjermundgaraba/clankerauth-sdk/errors";
+import {
+  CurrentPrincipal,
+  Whoami,
+} from "@gjermundgaraba/clankerauth-sdk/session";
 // contracts.ts: browser-safe.
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { ProviderUnavailable } from "@gjermundgaraba/clankerauth-sdk/errors";
-import { CurrentPrincipal, Whoami } from "@gjermundgaraba/clankerauth-sdk/session";
 
 // A bearer token proving a `CurrentPrincipal`. Its name is unique per process. Refusals are
 // effect-actions' built-in `Unauthenticated` and `Forbidden`, declared on every endpoint; the
@@ -115,18 +118,21 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, {
   error: ProviderUnavailable,
 });
 
-export const Http = ActionHttp.make([List, Write, Whoami], { authentication: Login });
+export const Http = ActionHttp.make([List, Write, Whoami], {
+  authentication: Login,
+});
 ```
 
 The server declares the resource once, at module level, from that descriptor, every scope it has and the one every credential must carry, `required`, one of `scopes` as the types check. It provides its `layer` and its `provider` once at application construction. `Resource.make` takes only a descriptor declaring `ProviderUnavailable`: one that does not is a type error there, naming `error: ProviderUnavailable`.
 
 ```ts
-import { Layer } from "effect";
-import { FetchHttpClient } from "effect/http";
 import { Verifier } from "@gjermundgaraba/clankerauth-sdk";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
+import { Layer } from "effect";
+import { FetchHttpClient } from "effect/http";
+
 import { Http, Login } from "./contracts.ts";
 
 // The application's resource: the descriptor's name is its service's, unique in the process.
@@ -139,7 +145,11 @@ export const NotesResource = Resource.make(Login, {
 // "Scope enforcement".
 const routes = Layer.mergeAll(
   ActionHttp.layer(Http, [app, NotesResource.session]),
-  ActionMcp.layerHttp(app, { name: "notes", version: "1.0.0", authentication: Login }),
+  ActionMcp.layerHttp(app, {
+    name: "notes",
+    version: "1.0.0",
+    authentication: Login,
+  })
 ).pipe(
   Layer.provide(NotesResource.provider),
   Layer.provide(
@@ -147,9 +157,9 @@ const routes = Layer.mergeAll(
       issuer: "https://clankerauth.internal/api/auth",
       publicUrl: new URL("https://notes.internal"),
       store: Verifier.store(),
-    }),
+    })
   ),
-  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(FetchHttpClient.layer)
 );
 ```
 
@@ -168,9 +178,9 @@ The supplied `HttpClient` must not retry credential exchanges or follow redirect
 The application decides which scope an action needs; the SDK verifies the credential and offers the check. Verification requires `required` of every credential, so an action that needs nothing more passes. Any other scope is the application's rule, stated as its implementation's authorizer with `requires(scope)`: it runs after the input is decoded and before every handler on every surface — HTTP, MCP, Toolkit, CLI — so no handler can forget it.
 
 ```ts
-import { Effect } from "effect";
-import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/session";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Effect } from "effect";
 
 const List = Action.make("list", {
   description: "List notes",
@@ -201,7 +211,7 @@ A trusted local surface, such as stdio MCP or a local command, has no remote cal
 ```ts
 const stdio = ActionMcp.runStdio(app, { name: "notes", version: "1.0.0" }).pipe(
   Effect.provide(NodeStdio.layer),
-  Effect.provideService(CurrentPrincipal, NotesResource.local("owner")),
+  Effect.provideService(CurrentPrincipal, NotesResource.local("owner"))
 );
 ```
 
@@ -220,14 +230,16 @@ The provider authenticates the request and the application's authorizer authoriz
 A route the application serves itself, beside its actions, such as a page frame, a file download or an OpenAPI document, is admitted as the actions are with `admitted`, router middleware provided around it:
 
 ```ts
+import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/session";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
-import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/session";
 
 const frame = HttpRouter.add(
   "GET",
   "/frame",
-  Effect.map(CurrentPrincipal, ({ subject }) => HttpServerResponse.text(subject)),
+  Effect.map(CurrentPrincipal, ({ subject }) =>
+    HttpServerResponse.text(subject)
+  )
 ).pipe(Layer.provide(NotesResource.admitted().layer));
 ```
 
@@ -240,7 +252,7 @@ A socket, a Node `upgrade` handler or a per-request endpoint, which holds a head
 ```ts
 // `notes` is the built resource: `yield* NotesResource.service`, under `NotesResource.layer`.
 const admission = await Effect.runPromise(
-  notes.admit(request.headers.authorization, "notes:write"),
+  notes.admit(request.headers.authorization, "notes:write")
 );
 
 if (!admission.ok) {
@@ -259,7 +271,7 @@ A connection that outlives its admission, such as a WebSocket, is held to the sa
 ```ts
 const session = Effect.raceFirst(
   serve(socket),
-  notes.watch(request.headers.authorization, "notes:write"),
+  notes.watch(request.headers.authorization, "notes:write")
 );
 ```
 
@@ -300,7 +312,11 @@ Both checks are raw string comparisons on the headers as sent. Nothing is parsed
 A browser page holds no credential of its own: put it behind a reverse proxy with the issuer's forward auth, described in the clankerauth README, and the proxy adds the `Authorization` header this package verifies. What the page does need is who it is signed in as, and a way out:
 
 ```ts
-import { Principal, Whoami, signOutUrl } from "@gjermundgaraba/clankerauth-sdk/session";
+import {
+  Principal,
+  Whoami,
+  signOutUrl,
+} from "@gjermundgaraba/clankerauth-sdk/session";
 
 // `Whoami` is the contract, bound beside your own actions; the server answers it with
 // its resource's `session`. `api` is `ActionHttp.fetchClient(Http)`.
@@ -325,7 +341,10 @@ const auth = await startFakeIssuer({
 auth.issuer; // configure the resource server with this
 const token = await auth.sign(); // every claim is overridable: auth.sign({ exp, aud, scope })
 const key = auth.apiKey(); // every configured scope on the configured resource
-const hosts = auth.apiKey({ [hostA]: ["host:write"], [hostB]: ["host:write"] }, expiresAt);
+const hosts = auth.apiKey(
+  { [hostA]: ["host:write"], [hostB]: ["host:write"] },
+  expiresAt
+);
 auth.revoke(key); // gone from the next key list, as the real issuer behaves
 auth.fail(503); // both endpoints answer this instead; auth.fail() restores them
 auth.keyLists(); // how many key lists were served

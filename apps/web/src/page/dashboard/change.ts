@@ -42,7 +42,10 @@ export const Change = defineTaggedUnion({
     resources: Schema.Array(Schema.String),
     removed: Schema.Array(Schema.String),
   },
-  RevokeClient: { clientId: Schema.String, maybeResource: Schema.Option(Schema.String) },
+  RevokeClient: {
+    clientId: Schema.String,
+    maybeResource: Schema.Option(Schema.String),
+  },
   BlockClient: { clientId: Schema.String, isBlocked: Schema.Boolean },
   RotateSecret: { clientId: Schema.String },
   DeleteClient: { clientId: Schema.String, isManaged: Schema.Boolean },
@@ -53,7 +56,11 @@ export type Change = typeof Change.Type;
 // CREDENTIAL
 
 export const Credential = defineTaggedUnion({
-  ClientSecret: { clientId: Schema.String, name: Schema.String, secret: Schema.String },
+  ClientSecret: {
+    clientId: Schema.String,
+    name: Schema.String,
+    secret: Schema.String,
+  },
   ApiKey: { keyId: Schema.String, name: Schema.String, key: Schema.String },
 });
 
@@ -69,13 +76,15 @@ export const isVoidedBy = (change: Change, credential: Credential): boolean =>
   Change.matchOrElse(
     change,
     {
-      DeleteClient: ({ clientId }) => credentialId(credential) === `client:${clientId}`,
+      DeleteClient: ({ clientId }) =>
+        credentialId(credential) === `client:${clientId}`,
       DeleteKey: ({ keyId }) => credentialId(credential) === `key:${keyId}`,
     },
-    () => false,
+    () => false
   );
 
-export const needsReread = (change: Change): boolean => !Change.guards.RotateSecret(change);
+export const needsReread = (change: Change): boolean =>
+  !Change.guards.RotateSecret(change);
 
 // WORDS
 
@@ -88,7 +97,8 @@ export type Confirmation = Readonly<{
   isDanger: boolean;
 }>;
 
-const REAUTHORIZE = "It must authorize again, and an automatic Client asks for consent.";
+const REAUTHORIZE =
+  "It must authorize again, and an automatic Client asks for consent.";
 
 export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
   Change.matchOrElse<Option.Option<Confirmation>>(
@@ -153,7 +163,7 @@ export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
                 body: "It may authorize again. Authorization revoked by the block stays revoked.",
                 label: "unblock",
                 isDanger: false,
-              },
+              }
         ),
       RotateSecret: () =>
         Option.some({
@@ -174,7 +184,7 @@ export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
           isDanger: true,
         }),
     },
-    () => Option.none(),
+    () => Option.none()
   );
 
 export const announcementOf = (change: Change): string =>
@@ -184,16 +194,18 @@ export const announcementOf = (change: Change): string =>
     CreateKey: () => "API key created. Store it now.",
     RenameKey: () => "Key renamed.",
     SetKeyGrants: () => "Grants saved.",
-    SetKeyEnabled: ({ isEnabled }) => (isEnabled ? "Key enabled." : "Key disabled."),
+    SetKeyEnabled: ({ isEnabled }) =>
+      isEnabled ? "Key enabled." : "Key disabled.",
     DeleteKey: () => "Key deleted.",
     RegisterClient: () => "Client registered.",
     UpdateClient: () => "Client saved.",
     SetClientAccess: () => "Access saved.",
     RevokeClient: () => "Authorization revoked.",
-    BlockClient: ({ isBlocked }) => (isBlocked ? "Client blocked." : "Client unblocked."),
+    BlockClient: ({ isBlocked }) =>
+      isBlocked ? "Client blocked." : "Client unblocked.",
     RotateSecret: () => "Secret rotated. Store it now.",
     DeleteClient: () => "Client deleted.",
   });
 
-export const splitWords = (text: string): ReadonlyArray<string> =>
+export const splitWords = (text: string): readonly string[] =>
   pipe(text.split(/\s+/u), Array.filter(String.isNonEmpty), Array.dedupe);

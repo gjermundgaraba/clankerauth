@@ -1,4 +1,7 @@
-import { ClientListResult, ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
+import {
+  ClientListResult,
+  ApiKey,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import { Effect, Schema } from "effect";
 import { Query } from "foldkit/experimental";
 
@@ -21,6 +24,6 @@ export const listingQuery = Query.define({
       overview: issuer.listClients(),
       keys: Effect.map(issuer.listApiKeys(), ({ keys }) => keys),
     },
-    { concurrency: "unbounded" },
+    { concurrency: "unbounded" }
   ).pipe(toOwnerSentence),
 });

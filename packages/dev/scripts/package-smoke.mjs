@@ -1,28 +1,59 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-const execute = promisify(execFile);
+import { Schema } from "effect";
+
+import {
+  assertDeclarations,
+  execute,
+} from "../../../scripts/package-install.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-const serverRequire = createRequire(new URL("../../../apps/server/package.json", import.meta.url));
+const serverRequire = createRequire(
+  new URL("../../../apps/server/package.json", import.meta.url)
+);
 
-const { name, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const Release = Schema.Struct({ version: Schema.String });
 
-const directory = await mkdtemp(join(tmpdir(), "clankerauth-dev-install-"));
+const Manifest = Schema.Struct({
+  ...Release.fields,
+  name: Schema.String,
+  dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  exports: Schema.Record(
+    Schema.String,
+    Schema.Struct({ types: Schema.String })
+  ),
+});
+
+const decodeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Manifest)
+);
+
+const decodeRelease = Schema.decodeUnknownSync(Schema.fromJsonString(Release));
+
+/** @param {string} directory The package's directory. */
+const readManifest = async (directory) =>
+  decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
+
+const { name, version } = await readManifest(root);
+
+const directory = await mkdtemp(
+  path.join(tmpdir(), "clankerauth-dev-install-")
+);
 
 try {
-  await execute("npm", ["pack", "--pack-destination", directory], { cwd: root });
+  await execute("npm", ["pack", "--pack-destination", directory], {
+    cwd: root,
+  });
   const [tarball] = await readdir(directory);
   await writeFile(
-    join(directory, "package.json"),
-    JSON.stringify({ private: true, type: "module" }),
+    path.join(directory, "package.json"),
+    JSON.stringify({ private: true, type: "module" })
   );
   await execute(
     "npm",
@@ -32,42 +63,63 @@ try {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      join(directory, tarball),
+      path.join(directory, tarball),
     ],
-    { cwd: directory },
+    { cwd: directory }
   );
-  const installed = join(directory, "node_modules", name);
-  const manifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
+  const installed = path.join(directory, "node_modules", name);
+
+  const manifest = await readManifest(installed);
+
   assert.equal(manifest.version, version);
   assert.deepEqual(manifest.dependencies ?? {}, {});
+  await assertDeclarations(installed, manifest.exports);
 
-  for (const [entry, target] of Object.entries(manifest.exports))
-    assert.ok(
-      (await readFile(join(installed, target.types), "utf8")).length > 0,
-      `Entry point ships no declarations: ${entry}`,
+  const notices = await readFile(
+    path.join(installed, "dist/THIRD_PARTY_NOTICES.txt"),
+    "utf-8"
+  );
+
+  const headings = new Set(
+    notices.split("\n---\n\n").map((section) => section.split("\n")[0])
+  );
+
+  for (const provider of [
+    "@better-auth/api-key",
+    "@better-auth/oauth-provider",
+  ]) {
+    // why: providers export their dist entry but not their package.json.
+    const manifestPath = path.join(
+      path.dirname(serverRequire.resolve(provider)),
+      "../package.json"
     );
 
-  const notices = await readFile(join(installed, "dist/THIRD_PARTY_NOTICES.txt"), "utf8");
-  const headings = new Set(notices.split("\n---\n\n").map((section) => section.split("\n")[0]));
+    const { version: providerVersion } = decodeRelease(
+      await readFile(manifestPath, "utf-8")
+    );
 
-  for (const provider of ["@better-auth/api-key", "@better-auth/oauth-provider"]) {
-    // why: providers export their dist entry but not their package.json.
-    const manifestPath = join(dirname(serverRequire.resolve(provider)), "../package.json");
-    const { version } = JSON.parse(await readFile(manifestPath, "utf8"));
-    const heading = `${provider}@${version}`;
-    assert.ok(headings.has(heading), `Missing bundled dependency notice: ${heading}`);
+    const heading = `${provider}@${providerVersion}`;
+    assert.ok(
+      headings.has(heading),
+      `Missing bundled dependency notice: ${heading}`
+    );
   }
 
-  const test = (await readFile(join(root, "tests/lifecycle.test.mjs"), "utf8"))
-    .replace('"../dist/index.mjs"', JSON.stringify(name))
-    .replace('"../dist/edge.mjs"', JSON.stringify(`${name}/edge`));
+  const lifecycle = await readFile(
+    path.join(root, "tests/lifecycle.test.mts"),
+    "utf-8"
+  );
 
-  await writeFile(join(directory, "installed.test.mjs"), test);
+  await writeFile(path.join(directory, "installed.test.mts"), lifecycle);
 
-  const result = await execute(process.execPath, ["--test", "installed.test.mjs"], {
-    cwd: directory,
-    timeout: 60000,
-  });
+  const result = await execute(
+    process.execPath,
+    ["--test", "installed.test.mts"],
+    {
+      cwd: directory,
+      timeout: 60_000,
+    }
+  );
 
   process.stdout.write(result.stdout);
 } finally {

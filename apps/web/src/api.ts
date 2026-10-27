@@ -15,31 +15,34 @@ const isBuiltIn = Schema.is(Action.BuiltIn);
 
 const UNKNOWN_FAILURE = "Request could not be completed. Please try again.";
 
-const reasonOf = <E>(error: E): string => {
-  if (isIssuerError(error)) {
-    return error.message;
-  }
-
-  if (error instanceof Action.InvalidInput) {
-    return pipe(
-      error.issues,
-      Array.map(({ message }) => message),
-      Array.dedupe,
-      Array.match({ onEmpty: () => error.message, onNonEmpty: Array.join(" ") }),
-    );
-  }
-
-  if (isBuiltIn(error)) {
-    return error.message;
-  }
-
-  return UNKNOWN_FAILURE;
-};
-
-export const toOwnerSentence = <A, E>(call: Effect.Effect<A, E>): Effect.Effect<A, string> =>
+export const toOwnerSentence = <A, E>(
+  call: Effect.Effect<A, E>
+): Effect.Effect<A, string> =>
   call.pipe(
-    Effect.mapError(reasonOf),
-    Effect.catchDefect(() => Effect.fail(UNKNOWN_FAILURE)),
+    Effect.mapError((failure) => {
+      if (isIssuerError(failure)) {
+        return failure.message;
+      }
+
+      if (failure instanceof Action.InvalidInput) {
+        return pipe(
+          failure.issues,
+          Array.map(({ message }) => message),
+          Array.dedupe,
+          Array.match({
+            onEmpty: () => failure.message,
+            onNonEmpty: Array.join(" "),
+          })
+        );
+      }
+
+      if (isBuiltIn(failure)) {
+        return failure.message;
+      }
+
+      return UNKNOWN_FAILURE;
+    }),
+    Effect.catchDefect(() => Effect.fail(UNKNOWN_FAILURE))
   );
 
 // SESSION
@@ -47,53 +50,63 @@ export const toOwnerSentence = <A, E>(call: Effect.Effect<A, E>): Effect.Effect<
 // why: the provider client follows OAuth redirects itself; a second navigation would cancel it
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
 
-const settled = <A, E>(
-  call: () => Promise<Readonly<{ data: A | null; error: E | null }>>,
-  failure: string,
+const settled = <A>(
+  call: () => Promise<Readonly<{ data: A | null; error: unknown }>>,
+  failure: string
 ): Effect.Effect<A, string> =>
   Effect.tryPromise({ try: call, catch: () => failure }).pipe(
     Effect.flatMap(({ data, error }) =>
-      error === null && data !== null ? Effect.succeed(data) : Effect.fail(failure),
-    ),
+      error === null && data !== null
+        ? Effect.succeed(data)
+        : Effect.fail(failure)
+    )
   );
 
 export const isSignedIn: Effect.Effect<boolean, string> = Effect.tryPromise({
-  try: () => auth.getSession(),
+  try: async () => await auth.getSession(),
   catch: () => UNKNOWN_FAILURE,
 }).pipe(
   Effect.flatMap(({ data, error }) =>
-    error === null ? Effect.succeed(data !== null) : Effect.fail(UNKNOWN_FAILURE),
-  ),
+    error === null
+      ? Effect.succeed(data !== null)
+      : Effect.fail(UNKNOWN_FAILURE)
+  )
 );
 
-export const signIn = (email: string, password: string): Effect.Effect<void, string> =>
+export const signIn = (
+  email: string,
+  password: string
+): Effect.Effect<void, string> =>
   settled(
-    () => auth.signIn.email({ email, password }),
-    "Sign-in failed. Check your credentials or try again later.",
+    async () => await auth.signIn.email({ email, password }),
+    "Sign-in failed. Check your credentials or try again later."
   ).pipe(Effect.asVoid);
 
 export const signOut: Effect.Effect<void, string> = settled(
-  () => auth.signOut(),
-  "Sign-out failed. Please try again.",
+  async () => await auth.signOut(),
+  "Sign-out failed. Please try again."
 ).pipe(Effect.asVoid);
 
-export const publicClientName = (clientId: string): Effect.Effect<Option.Option<string>, string> =>
+export const publicClientName = (
+  clientId: string
+): Effect.Effect<Option.Option<string>, string> =>
   settled(
-    () => auth.oauth2.publicClient({ query: { client_id: clientId } }),
-    "Sign in through your application to continue authorization.",
+    async () =>
+      await auth.oauth2.publicClient({ query: { client_id: clientId } }),
+    "Sign in through your application to continue authorization."
   ).pipe(Effect.map(({ client_name }) => Option.fromNullishOr(client_name)));
 
 export const decideConsent = (
   accept: boolean,
-  maybeScope: Option.Option<string>,
+  maybeScope: Option.Option<string>
 ): Effect.Effect<void, string> =>
   settled(
-    () =>
-      auth.oauth2.consent(
+    async () =>
+      await auth.oauth2.consent(
         Option.match(maybeScope, {
           onNone: () => ({ accept }),
           onSome: (scope) => ({ accept, scope }),
-        }),
+        })
       ),
-    "Authorization could not be completed. Restart from your application.",
+    "Authorization could not be completed. Restart from your application."
   ).pipe(Effect.asVoid);

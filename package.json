@@ -11,13 +11,17 @@
     "ready": "vp run check && vp run -r build && vp run -r test && vp run @clankerauth/web#test:smoke",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.mjs",
     "test:package": "node apps/server/scripts/production-smoke.mjs",
-    "test:lint": "node --test tools/oxlint/anti-slop/tests/policy.test.mjs tools/oxlint/clankerauth/tests/policy.test.mjs",
-    "prepare": "vp config"
+    "test:lint": "vp test run",
+    "prepare": "vp config && effect-tsgo patch --no-typescript --oxlint"
   },
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
     "@foldkit/oxlint-plugin": "catalog:",
     "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "typescript": "catalog:",
+    "ultracite": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },

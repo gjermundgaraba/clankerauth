@@ -26,7 +26,10 @@ export const keyPrefix = "clankerauth_";
  */
 export const lifetime = 24 * 60 * 60;
 
-export const Entry = Schema.Struct({ id: Schema.String, sealed: Schema.String });
+export const Entry = Schema.Struct({
+  id: Schema.String,
+  sealed: Schema.String,
+});
 
 export type Entry = typeof Entry.Type;
 
@@ -54,7 +57,13 @@ export const digest = async (key: string) =>
 
 /** One key's entry ID and sealing key on one resource. */
 const derive = async (keyDigest: Uint8Array<ArrayBuffer>, resource: string) => {
-  const material = await crypto.subtle.importKey("raw", keyDigest, "HKDF", false, ["deriveBits"]);
+  const material = await crypto.subtle.importKey(
+    "raw",
+    keyDigest,
+    "HKDF",
+    false,
+    ["deriveBits"]
+  );
 
   const bits = new Uint8Array(
     await crypto.subtle.deriveBits(
@@ -65,16 +74,19 @@ const derive = async (keyDigest: Uint8Array<ArrayBuffer>, resource: string) => {
         info: encoder.encode(`clankerauth key list\0${resource}`),
       },
       material,
-      512,
-    ),
+      512
+    )
   );
 
   return {
     id: base64url.encode(bits.subarray(0, 32)),
-    key: await crypto.subtle.importKey("raw", bits.subarray(32), "AES-GCM", false, [
-      "encrypt",
-      "decrypt",
-    ]),
+    key: await crypto.subtle.importKey(
+      "raw",
+      bits.subarray(32),
+      "AES-GCM",
+      false,
+      ["encrypt", "decrypt"]
+    ),
   };
 };
 
@@ -82,7 +94,7 @@ const derive = async (keyDigest: Uint8Array<ArrayBuffer>, resource: string) => {
 export const seal = async (
   keyDigest: Uint8Array<ArrayBuffer>,
   resource: string,
-  grant: Grant,
+  grant: Grant
 ): Promise<Entry> => {
   const { id, key } = await derive(keyDigest, resource);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -90,7 +102,7 @@ export const seal = async (
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    encoder.encode(Schema.encodeSync(GrantJson)(grant)),
+    encoder.encode(Schema.encodeSync(GrantJson)(grant))
   );
 
   const sealed = new Uint8Array(iv.length + ciphertext.byteLength);
@@ -107,19 +119,22 @@ export const seal = async (
 export const open = async (
   key: string,
   resource: string,
-  entries: ReadonlyMap<string, string>,
+  entries: ReadonlyMap<string, string>
 ): Promise<Grant | undefined> => {
   const derived = await derive(await digest(key), resource);
   const sealed = entries.get(derived.id);
 
-  if (sealed === undefined) return undefined;
+  if (sealed === undefined) {
+    return undefined;
+  }
+
   const bytes = new Uint8Array(base64url.decode(sealed));
 
   const plaintext = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: bytes.subarray(0, 12) },
     derived.key,
-    bytes.subarray(12),
+    bytes.subarray(12)
   );
 
-  return Schema.decodeUnknownSync(GrantJson)(new TextDecoder().decode(plaintext));
+  return Schema.decodeSync(GrantJson)(new TextDecoder().decode(plaintext));
 };

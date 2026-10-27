@@ -17,14 +17,25 @@
  */
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server as HttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
+import type { Server as HttpServer } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import nodePath from "node:path";
+
+import {
+  Clock,
+  Config,
+  Data,
+  Deferred,
+  Effect,
+  Option,
+  Redacted,
+  Schema,
+} from "effect";
+import { constVoid } from "effect/Function";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import * as oauth from "oauth4webapi";
 import lockfile from "proper-lockfile";
-import { Clock, Config, Data, Deferred, Effect, Option, Redacted, Schema } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
 
 /**
  * No sign-in to `resource` can give a token: none is kept, or the issuer refused to refresh it.
@@ -94,7 +105,9 @@ export const SignIn = Schema.Struct({
 export type SignIn = typeof SignIn.Type;
 
 /** The file: each sign-in, by its resource. */
-const SignIns = Schema.Struct({ signIns: Schema.Record(Schema.String, SignIn) });
+const SignIns = Schema.Struct({
+  signIns: Schema.Record(Schema.String, SignIn),
+});
 
 type SignIns = typeof SignIns.Type;
 
@@ -103,60 +116,95 @@ const SignInsJson = Schema.fromJsonString(SignIns);
 const none: SignIns = { signIns: {} };
 
 /** The file's path, read from the environment on every call. */
-export const path = () =>
-  join(
-    process.env["XDG_CONFIG_HOME"] || join(homedir(), ".config"),
+export const path = () => {
+  const configured = process.env["XDG_CONFIG_HOME"];
+
+  return nodePath.join(
+    configured === undefined || configured === ""
+      ? nodePath.join(homedir(), ".config")
+      : configured,
     "clankerauth",
-    "sign-ins.json",
+    "sign-ins.json"
   );
+};
 
-const causeOf = (error: { readonly message: string; readonly cause?: unknown }) =>
-  error.cause instanceof Error ? error.cause.message : error.message;
+const causeOf = (error: {
+  readonly message: string;
+  readonly cause?: unknown;
+}) => (error.cause instanceof Error ? error.cause.message : error.message);
 
-const failed = (what: string) => (error: { readonly message: string; readonly cause?: unknown }) =>
-  new TokenUnavailable({ message: `${what} ${path()}: ${causeOf(error)}`, cause: error });
+const failed =
+  (what: string) =>
+  (error: { readonly message: string; readonly cause?: unknown }) =>
+    new TokenUnavailable({
+      message: `${what} ${path()}: ${causeOf(error)}`,
+      cause: error,
+    });
 
 const hasCode = (code: string) => (error: { readonly cause?: unknown }) =>
-  error.cause instanceof Error && "code" in error.cause && error.cause.code === code;
+  error.cause instanceof Error &&
+  "code" in error.cause &&
+  error.cause.code === code;
 
 const read = () =>
-  Effect.tryPromise(() => readFile(path(), "utf8")).pipe(
-    Effect.map((json) => Option.getOrElse(Schema.decodeOption(SignInsJson)(json), () => none)),
+  Effect.tryPromise(async () => await readFile(path(), "utf-8")).pipe(
+    Effect.map((json) =>
+      Option.getOrElse(Schema.decodeOption(SignInsJson)(json), () => none)
+    ),
     Effect.catchIf(hasCode("ENOENT"), () => Effect.succeed(none)),
-    Effect.mapError(failed("Cannot read")),
+    Effect.mapError(failed("Cannot read"))
   );
 
 /** Every sign-in kept; none when there is no file, or one no version of it can be read from. */
-export const list = () => Effect.map(read(), ({ signIns }) => Object.values(signIns));
+export const list = () =>
+  Effect.map(read(), ({ signIns }) => Object.values(signIns));
 
 const persist = Effect.fn("Credentials.persist")(
   function* (signIns: SignIns) {
     const file = path();
 
-    if (Object.keys(signIns.signIns).length === 0)
-      return yield* Effect.tryPromise(() => rm(file, { force: true }));
+    if (Object.keys(signIns.signIns).length === 0) {
+      yield* Effect.tryPromise(async () => {
+        await rm(file, { force: true });
+      });
+
+      return;
+    }
 
     const json = yield* Schema.encodeEffect(SignInsJson)(signIns);
     // why: staged and renamed, so an interrupted write never leaves a refresh token half-saved.
     const staging = `${file}.${randomBytes(6).toString("hex")}`;
 
     yield* Effect.tryPromise(async () => {
-      await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+      await mkdir(nodePath.dirname(file), { recursive: true, mode: 0o700 });
       await writeFile(staging, `${json}\n`, { mode: 0o600 });
       await rename(staging, file);
-    }).pipe(Effect.tapError(() => Effect.promise(() => rm(staging, { force: true }))));
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.promise(async () => {
+          await rm(staging, { force: true });
+        })
+      )
+    );
   },
-  Effect.mapError(failed("Cannot write")),
+  Effect.mapError(failed("Cannot write"))
 );
 
 /** Wait this long for another process to let the file go: well past a refresh's deadline. */
-const lockRetries = { retries: 150, factor: 1, minTimeout: 100, maxTimeout: 100 };
+const lockRetries = {
+  retries: 150,
+  factor: 1,
+  minTimeout: 100,
+  maxTimeout: 100,
+};
 
 /** Read the file, write what `change` makes of it, and give what it held before. */
-type Save = (change: (signIns: SignIns) => SignIns) => Effect.Effect<SignIns, TokenUnavailable>;
+type Save = (
+  change: (signIns: SignIns) => SignIns
+) => Effect.Effect<SignIns, TokenUnavailable>;
 
-const save: Save = (change) =>
-  Effect.flatMap(read(), (before) => Effect.as(persist(change(before)), before));
+const rewrite: Save = (change) =>
+  Effect.tap(read(), (before) => persist(change(before)));
 
 /**
  * Run `use` holding the file's lock, `sign-ins.json.lock` beside it, given the one way to write
@@ -167,18 +215,21 @@ const save: Save = (change) =>
 const locked = <A, E, R>(use: (save: Save) => Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     Effect.tryPromise(async () => {
-      await mkdir(dirname(path()), { recursive: true, mode: 0o700 });
+      await mkdir(nodePath.dirname(path()), { recursive: true, mode: 0o700 });
 
-      return lockfile.lock(path(), {
+      return await lockfile.lock(path(), {
         realpath: false,
         retries: lockRetries,
         update: 1000,
         // why: throwing here would crash the program, and the writes need the lock no longer.
-        onCompromised: () => undefined,
+        onCompromised: constVoid,
       });
     }).pipe(Effect.mapError(failed("Cannot lock"))),
-    () => use(save),
-    (release) => Effect.promise(() => release().catch(() => undefined)),
+    () => use(rewrite),
+    (release) =>
+      Effect.promise(async () => {
+        await release().catch(constVoid);
+      })
   );
 
 /** How long one request to an application or an issuer may take: well under a lock's wait. */
@@ -198,19 +249,28 @@ const NamedElsewhere = Schema.Struct({
 
 /** Why `oauth4webapi` failed, for a person. */
 const reason = (error: Error) => {
-  if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError)
+  if (
+    error instanceof oauth.ResponseBodyError ||
+    error instanceof oauth.AuthorizationResponseError
+  ) {
     return [error.error, error.error_description].filter(Boolean).join(": ");
+  }
 
   if (error instanceof oauth.OperationProcessingError) {
     const named = Schema.decodeUnknownOption(NamedElsewhere)(error.cause);
 
-    if (Option.isSome(named))
+    if (Option.isSome(named)) {
       return `it publishes the resource ${named.value.body.resource}: sign in to that address`;
+    }
 
-    if (error.cause instanceof Response) return `${error.message} (HTTP ${error.cause.status})`;
+    if (error.cause instanceof Response) {
+      return `${error.message} (HTTP ${error.cause.status})`;
+    }
   }
 
-  return error.cause instanceof Error ? `${error.message} (${error.cause.message})` : error.message;
+  return error.cause instanceof Error
+    ? `${error.message} (${error.cause.message})`
+    : error.message;
 };
 
 const refreshScope = "offline_access";
@@ -229,11 +289,13 @@ const located = (url: string | URL) =>
 
       return parsed;
     },
-    catch: (cause) => new TokenUnavailable({ message: `${String(url)} is no URL`, cause }),
+    catch: (cause) =>
+      new TokenUnavailable({ message: `${String(url)} is no URL`, cause }),
   });
 
 const holds = (resource: string, url: URL) =>
-  url.href === resource || url.href.startsWith(resource.endsWith("/") ? resource : `${resource}/`);
+  url.href === resource ||
+  url.href.startsWith(resource.endsWith("/") ? resource : `${resource}/`);
 
 /** The sign-in whose resource holds `url`, the most specific when several do. */
 const signInFor = (signIns: SignIns, url: URL) =>
@@ -245,7 +307,10 @@ const signInFor = (signIns: SignIns, url: URL) =>
 const held = Effect.fn("Credentials.held")(function* (url: URL) {
   const signIn = signInFor(yield* read(), url);
 
-  if (signIn !== undefined) return signIn;
+  if (signIn !== undefined) {
+    return signIn;
+  }
+
   const resource = new URL("/", url).href;
   const command = `clankerauth login ${resource}`;
 
@@ -260,7 +325,7 @@ const signInOf = (
   grant: Omit<SignIn, "accessToken" | "refreshToken" | "expiresAt">,
   tokens: oauth.TokenEndpointResponse,
   refreshToken: string,
-  now: number,
+  now: number
 ): SignIn => ({
   resource: grant.resource,
   url: grant.url,
@@ -275,7 +340,7 @@ const signInOf = (
 const refresh = (signIn: SignIn) =>
   Effect.tryPromise({
     try: async () =>
-      oauth.processRefreshTokenResponse(
+      await oauth.processRefreshTokenResponse(
         signIn.server,
         { client_id: signIn.clientId },
         await oauth.refreshTokenGrantRequest(
@@ -283,18 +348,22 @@ const refresh = (signIn: SignIn) =>
           { client_id: signIn.clientId },
           oauth.None(),
           signIn.refreshToken,
-          { additionalParameters: { resource: signIn.resource }, ...requestOptions(signIn.url) },
-        ),
+          {
+            additionalParameters: { resource: signIn.resource },
+            ...requestOptions(signIn.url),
+          }
+        )
       ),
     catch: (error) => {
       if (
         !(error instanceof oauth.ResponseBodyError) ||
         (error.status !== 400 && error.status !== 401)
-      )
+      ) {
         return new TokenUnavailable({
           message: `Refresh: ${error instanceof Error ? reason(error) : String(error)}`,
           cause: error,
         });
+      }
 
       const scopes = asked(signIn.scope);
 
@@ -318,37 +387,47 @@ const current = (signIn: SignIn) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
     Date.parse(signIn.expiresAt) - now > refreshMargin
       ? Option.some(Redacted.make(signIn.accessToken))
-      : Option.none(),
+      : Option.none()
   );
 
 const accessToken = Effect.fn("Credentials.accessToken")(function* (url: URL) {
   const unlocked = yield* current(yield* held(url));
 
-  if (Option.isSome(unlocked)) return unlocked.value;
+  if (Option.isSome(unlocked)) {
+    return unlocked.value;
+  }
 
   return yield* locked((save) =>
     Effect.gen(function* () {
       const signIn = yield* held(url);
       const refreshedMeanwhile = yield* current(signIn);
 
-      if (Option.isSome(refreshedMeanwhile)) return refreshedMeanwhile.value;
+      if (Option.isSome(refreshedMeanwhile)) {
+        return refreshedMeanwhile.value;
+      }
 
       const tokens = yield* refresh(signIn);
       const now = yield* Clock.currentTimeMillis;
-      const refreshed = signInOf(signIn, tokens, tokens.refresh_token ?? signIn.refreshToken, now);
+
+      const refreshed = signInOf(
+        signIn,
+        tokens,
+        tokens.refresh_token ?? signIn.refreshToken,
+        now
+      );
 
       yield* save(({ signIns }) =>
         // why: a sign-in another process changed meanwhile, having taken the lock over, is newer.
         signIns[signIn.resource]?.refreshToken === signIn.refreshToken
           ? { signIns: { ...signIns, [signIn.resource]: refreshed } }
-          : { signIns },
+          : { signIns }
       );
 
       return Redacted.make(refreshed.accessToken);
     }).pipe(
       // why: the issuer rotates the refresh token as it answers, so an interrupted refresh would lose the only one left.
-      Effect.uninterruptible,
-    ),
+      Effect.uninterruptible
+    )
   );
 });
 
@@ -362,7 +441,7 @@ export interface TokenOptions {
    * A bearer token the environment may give, an API key or an access token, returned instead
    * of any sign-in when it is set: `Config.Redacted("NOTES_TOKEN")`.
    */
-  readonly token?: Config.Config<Redacted.Redacted<string>>;
+  readonly token?: Config.Config<Redacted.Redacted>;
 }
 
 /**
@@ -371,16 +450,22 @@ export interface TokenOptions {
  * holds the URL, which `clankerauth login <url>` keeps and this refreshes. Ask again for each
  * call, or each run: a token is never within a minute of expiring.
  */
-export const token = Effect.fn("Credentials.token")(function* (options: TokenOptions) {
+export const token = Effect.fn("Credentials.token")(function* (
+  options: TokenOptions
+) {
   if (options.token !== undefined) {
     const given = yield* Config.option(options.token).pipe(
       Effect.mapError(
         (error) =>
-          new TokenUnavailable({ message: `The token given is unreadable: ${error.message}` }),
-      ),
+          new TokenUnavailable({
+            message: `The token given is unreadable: ${error.message}`,
+          })
+      )
     );
 
-    if (Option.isSome(given)) return given.value;
+    if (Option.isSome(given)) {
+      return given.value;
+    }
   }
 
   return yield* accessToken(yield* located(options.url));
@@ -398,10 +483,13 @@ export const token = Effect.fn("Credentials.token")(function* (options: TokenOpt
  * });
  * ```
  */
-export const authorizing = (options: TokenOptions) => (client: HttpClient.HttpClient) =>
-  HttpClient.mapRequestEffect(client, (request) =>
-    Effect.map(token(options), (bearer) => HttpClientRequest.bearerToken(request, bearer)),
-  );
+export const authorizing =
+  (options: TokenOptions) => (client: HttpClient.HttpClient) =>
+    HttpClient.mapRequestEffect(client, (request) =>
+      Effect.map(token(options), (bearer) =>
+        HttpClientRequest.bearerToken(request, bearer)
+      )
+    );
 
 const step = <A>(what: string, run: () => Promise<A>) =>
   Effect.tryPromise({
@@ -415,34 +503,49 @@ const step = <A>(what: string, run: () => Promise<A>) =>
 const discover = Effect.fn("Credentials.discover")(function* (url: string) {
   const resource = yield* Effect.try({
     try: () => new URL(url),
-    catch: () => new SignInFailed({ message: `${url} is no URL, such as https://notes.example/` }),
+    catch: () =>
+      new SignInFailed({
+        message: `${url} is no URL, such as https://notes.example/`,
+      }),
   });
 
   const what = `Discovery at ${resource.origin}`;
 
-  const metadata = yield* step(what, async () =>
-    oauth.processResourceDiscoveryResponse(
-      resource,
-      await oauth.resourceDiscoveryRequest(resource, requestOptions(resource)),
-    ),
+  const metadata = yield* step(
+    what,
+    async () =>
+      await oauth.processResourceDiscoveryResponse(
+        resource,
+        await oauth.resourceDiscoveryRequest(resource, requestOptions(resource))
+      )
   );
 
   const [named] = metadata.authorization_servers ?? [];
 
-  if (named === undefined)
-    return yield* new SignInFailed({ message: `${what}: it names no authorization server` });
+  if (named === undefined) {
+    return yield* new SignInFailed({
+      message: `${what}: it names no authorization server`,
+    });
+  }
 
   const issuer = yield* Effect.try({
     try: () => new URL(named),
     catch: () =>
-      new SignInFailed({ message: `${what}: its authorization server ${named} is no URL` }),
+      new SignInFailed({
+        message: `${what}: its authorization server ${named} is no URL`,
+      }),
   });
 
-  const server = yield* step(what, async () =>
-    oauth.processDiscoveryResponse(
-      issuer,
-      await oauth.discoveryRequest(issuer, { algorithm: "oauth2", ...requestOptions(issuer) }),
-    ),
+  const server = yield* step(
+    what,
+    async () =>
+      await oauth.processDiscoveryResponse(
+        issuer,
+        await oauth.discoveryRequest(issuer, {
+          algorithm: "oauth2",
+          ...requestOptions(issuer),
+        })
+      )
   );
 
   return {
@@ -451,8 +554,10 @@ const discover = Effect.fn("Credentials.discover")(function* (url: string) {
     server: yield* Schema.decodeUnknownEffect(Server)(server).pipe(
       Effect.mapError(
         (error) =>
-          new SignInFailed({ message: `${what}: the issuer lacks an endpoint (${error.message})` }),
-      ),
+          new SignInFailed({
+            message: `${what}: the issuer lacks an endpoint (${error.message})`,
+          })
+      )
     ),
   };
 });
@@ -461,21 +566,23 @@ const discover = Effect.fn("Credentials.discover")(function* (url: string) {
 const registeredRedirect = "http://127.0.0.1/callback";
 
 const register = (server: Server) =>
-  step("Registration", async () =>
-    oauth.processDynamicClientRegistrationResponse(
-      await oauth.dynamicClientRegistrationRequest(
-        server,
-        {
-          client_name: "clankerauth CLI",
-          redirect_uris: [registeredRedirect],
-          application_type: "native",
-          token_endpoint_auth_method: "none",
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-        },
-        requestOptions(server.issuer),
-      ),
-    ),
+  step(
+    "Registration",
+    async () =>
+      await oauth.processDynamicClientRegistrationResponse(
+        await oauth.dynamicClientRegistrationRequest(
+          server,
+          {
+            client_name: "clankerauth CLI",
+            redirect_uris: [registeredRedirect],
+            application_type: "native",
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+          },
+          requestOptions(server.issuer)
+        )
+      )
   ).pipe(Effect.map((registered) => registered.client_id));
 
 const page =
@@ -494,22 +601,35 @@ const listen = Effect.acquireRelease(
         return;
       }
 
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(page);
+      response
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+        .end(page);
       Deferred.doneUnsafe(received, Effect.succeed(url.searchParams));
     });
 
     const port = yield* Effect.callback<number, SignInFailed>((resume) => {
-      server.once("error", (error) =>
+      server.once("error", (error) => {
         resume(
           Effect.fail(
-            new SignInFailed({ message: `Cannot listen for the redirect: ${error.message}` }),
-          ),
-        ),
-      );
-      server.listen(0, "127.0.0.1", () =>
-        // SAFETY: a listening TCP server's address is an AddressInfo, not a pipe's string.
-        resume(Effect.succeed((server.address() as AddressInfo).port)),
-      );
+            new SignInFailed({
+              message: `Cannot listen for the redirect: ${error.message}`,
+            })
+          )
+        );
+      });
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+
+        resume(
+          address instanceof Object
+            ? Effect.succeed(address.port)
+            : Effect.fail(
+                new SignInFailed({
+                  message: "Cannot listen for the redirect: no TCP port bound",
+                })
+              )
+        );
+      });
     });
 
     return { server, port, received };
@@ -518,7 +638,7 @@ const listen = Effect.acquireRelease(
     Effect.sync(() => {
       server.closeAllConnections();
       server.close();
-    }),
+    })
 );
 
 const authorizationPage = Effect.fn("Credentials.authorizationPage")(function* (
@@ -526,7 +646,7 @@ const authorizationPage = Effect.fn("Credentials.authorizationPage")(function* (
   clientId: string,
   redirectUri: string,
   scope: string,
-  resource: string,
+  resource: string
 ) {
   const verifier = oauth.generateRandomCodeVerifier();
   const state = oauth.generateRandomState();
@@ -538,7 +658,9 @@ const authorizationPage = Effect.fn("Credentials.authorizationPage")(function* (
     response_type: "code",
     scope,
     resource,
-    code_challenge: yield* Effect.promise(() => oauth.calculatePKCECodeChallenge(verifier)),
+    code_challenge: yield* Effect.promise(
+      async () => await oauth.calculatePKCECodeChallenge(verifier)
+    ),
     code_challenge_method: "S256",
     state,
   }).toString();
@@ -550,14 +672,24 @@ const exchangeCode = (
   server: Server,
   clientId: string,
   callback: URLSearchParams,
-  expected: { readonly state: string; readonly verifier: string; readonly redirectUri: string },
-  resource: string,
+  expected: {
+    readonly state: string;
+    readonly verifier: string;
+    readonly redirectUri: string;
+  },
+  resource: string
 ) =>
   step("Sign-in", async () => {
     const client = { client_id: clientId };
-    const parameters = oauth.validateAuthResponse(server, client, callback, expected.state);
 
-    return oauth.processAuthorizationCodeResponse(
+    const parameters = oauth.validateAuthResponse(
+      server,
+      client,
+      callback,
+      expected.state
+    );
+
+    return await oauth.processAuthorizationCodeResponse(
       server,
       client,
       await oauth.authorizationCodeGrantRequest(
@@ -567,15 +699,15 @@ const exchangeCode = (
         parameters,
         expected.redirectUri,
         expected.verifier,
-        { additionalParameters: { resource }, ...requestOptions(server.issuer) },
-      ),
+        { additionalParameters: { resource }, ...requestOptions(server.issuer) }
+      )
     );
   });
 
 const revoke = (signIn: SignIn) =>
   Effect.ignore(
-    Effect.tryPromise(async () =>
-      oauth.processRevocationResponse(
+    Effect.tryPromise(async () => {
+      await oauth.processRevocationResponse(
         await oauth.revocationRequest(
           signIn.server,
           { client_id: signIn.clientId },
@@ -584,10 +716,10 @@ const revoke = (signIn: SignIn) =>
           {
             additionalParameters: { token_type_hint: "refresh_token" },
             ...requestOptions(signIn.url),
-          },
-        ),
-      ),
-    ),
+          }
+        )
+      );
+    })
   );
 
 export interface SignInOptions {
@@ -609,15 +741,26 @@ export interface SignInOptions {
  */
 export const signIn = Effect.fn("Credentials.signIn")(function* (
   url: string,
-  options: SignInOptions,
+  options: SignInOptions
 ) {
   const { resource, scopes, server } = yield* discover(url);
-  const scope = [...asked(options.scope ?? scopes.join(" ")), refreshScope].join(" ");
+
+  const scope = [
+    ...asked(options.scope ?? scopes.join(" ")),
+    refreshScope,
+  ].join(" ");
+
   const clientId = yield* register(server);
   const { port, received } = yield* listen;
   const redirectUri = `http://127.0.0.1:${port}/callback`;
 
-  const approval = yield* authorizationPage(server, clientId, redirectUri, scope, resource);
+  const approval = yield* authorizationPage(
+    server,
+    clientId,
+    redirectUri,
+    scope,
+    resource
+  );
 
   yield* options.approve(approval.url);
 
@@ -626,9 +769,11 @@ export const signIn = Effect.fn("Credentials.signIn")(function* (
       duration: "5 minutes",
       orElse: () =>
         Effect.fail(
-          new SignInFailed({ message: "Sign-in: nobody approved it within five minutes" }),
+          new SignInFailed({
+            message: "Sign-in: nobody approved it within five minutes",
+          })
         ),
-    }),
+    })
   );
 
   const tokens = yield* exchangeCode(
@@ -636,26 +781,31 @@ export const signIn = Effect.fn("Credentials.signIn")(function* (
     clientId,
     callback,
     { ...approval, redirectUri },
-    resource,
+    resource
   );
 
-  if (tokens.refresh_token === undefined)
-    return yield* new SignInFailed({ message: "Sign-in: the issuer issued no refresh token" });
+  if (tokens.refresh_token === undefined) {
+    return yield* new SignInFailed({
+      message: "Sign-in: the issuer issued no refresh token",
+    });
+  }
 
   const kept = signInOf(
     { resource, url: new URL(server.issuer).origin, server, clientId, scope },
     tokens,
     tokens.refresh_token,
-    yield* Clock.currentTimeMillis,
+    yield* Clock.currentTimeMillis
   );
 
   const before = yield* locked((save) =>
-    save(({ signIns }) => ({ signIns: { ...signIns, [resource]: kept } })),
+    save(({ signIns }) => ({ signIns: { ...signIns, [resource]: kept } }))
   );
 
   const replaced = before.signIns[resource];
 
-  if (replaced !== undefined) yield* revoke(replaced);
+  if (replaced !== undefined) {
+    yield* revoke(replaced);
+  }
 
   return { url: kept.url, resource, scope: kept.scope };
 }, Effect.scoped);
@@ -665,7 +815,9 @@ export const signIn = Effect.fn("Credentials.signIn")(function* (
  * refresh never slips between, then revoke it. A sign-in is forgotten even when the issuer does
  * not answer its revocation.
  */
-export const signOut = Effect.fn("Credentials.signOut")(function* (url?: string | URL) {
+export const signOut = Effect.fn("Credentials.signOut")(function* (
+  url?: string | URL
+) {
   const target = url === undefined ? undefined : yield* located(url);
 
   const leaving = (signIns: SignIns) =>
@@ -680,16 +832,19 @@ export const signOut = Effect.fn("Credentials.signOut")(function* (url?: string 
       return {
         signIns: Object.fromEntries(
           Object.entries(signIns.signIns).filter(([kept]) =>
-            left.every((signIn) => signIn.resource !== kept),
-          ),
+            left.every((gone) => gone.resource !== kept)
+          )
         ),
       };
-    }),
+    })
   );
 
   const left = leaving(before);
 
-  yield* Effect.forEach(left, revoke, { concurrency: "unbounded", discard: true });
+  yield* Effect.forEach(left, revoke, {
+    concurrency: "unbounded",
+    discard: true,
+  });
 
   return { signedOut: left.length > 0 };
 });

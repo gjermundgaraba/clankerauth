@@ -1,7 +1,3 @@
-import { Array, Match, Option } from "effect";
-import { AsyncData } from "foldkit";
-import type { Html, HtmlBuilder } from "foldkit/html";
-import { defineView } from "foldkit/submodel";
 import {
   Announcer,
   Button,
@@ -22,34 +18,37 @@ import {
   TopBar,
   Wordmark,
 } from "@gjermundgaraba-designs/pixel-paper";
+import { Array, Match, Option } from "effect";
+import { AsyncData } from "foldkit";
+import type { Html, HtmlBuilder } from "foldkit/html";
+import { defineView } from "foldkit/submodel";
 
-import { PRODUCT, wallCardView } from "../wall.ts";
 import {
   AppRoute,
-  type DashboardRoute,
   clientsRouter,
   keysRouter,
   loginRouter,
   resourcesRouter,
 } from "../../route.ts";
+import type { DashboardRoute } from "../../route.ts";
+import { PRODUCT, wallCardView } from "../wall.ts";
 import { Credential, credentialId } from "./change.ts";
 import { clientsHeadView, clientsPanels } from "./clients.ts";
 import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
-import * as Form from "./form.ts";
-import * as FormView from "./formView.ts";
+import * as FormView from "./form-view.ts";
+import type * as Form from "./form.ts";
 import { keysHeadView, keysPanels } from "./keys.ts";
 import type { Listing } from "./listing.ts";
 import { Message } from "./message.ts";
 import {
   Activity,
-  type Model,
-  type PendingCredential,
   isHeld,
   isSaving,
   listingOf,
   pendingConfirmation,
   refusalAt,
 } from "./model.ts";
+import type { Model, PendingCredential } from "./model.ts";
 import type { SectionContext } from "./parts.ts";
 import { resourcesHeadView, resourcesPanels } from "./resources.ts";
 
@@ -66,7 +65,7 @@ const waitingView = (h: HtmlBuilder<Message>): Html =>
         Loading.view({ isLoading: true, label: "loading the dashboard" }, h),
       ],
     },
-    h,
+    h
   );
 
 const unavailableView = (reason: string, h: HtmlBuilder<Message>): Html =>
@@ -84,12 +83,17 @@ const unavailableView = (reason: string, h: HtmlBuilder<Message>): Html =>
             isDefault: true,
             onClick: Message.ClickedRetryListing(),
           },
-          h,
+          h
         ),
       ],
-      body: [Outcome.view({ tone: "Error", title: "Unable to continue", body: [reason] }, h)],
+      body: [
+        Outcome.view(
+          { tone: "Error", title: "Unable to continue", body: [reason] },
+          h
+        ),
+      ],
     },
-    h,
+    h
   );
 
 // CONSOLE
@@ -98,7 +102,7 @@ const topBarView = (
   model: Model,
   listing: Listing,
   section: DashboardRoute,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html =>
   TopBar.view(
     {
@@ -128,7 +132,7 @@ const topBarView = (
               },
             ],
           },
-          h,
+          h
         ),
       ],
       tools: [
@@ -140,15 +144,18 @@ const topBarView = (
             onClick: Message.ClickedSignOut(),
             isDisabled: !Activity.guards.Idle(model.activity),
           },
-          h,
+          h
         ),
       ],
       toParentMessage: (message) => Message.GotTopBarMessage({ message }),
     },
-    h,
+    h
   );
 
-const noticesView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => [
+const noticesView = (
+  model: Model,
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
   ...(AsyncData.isStale(listingOf(model))
     ? [
         Notice.view(
@@ -157,12 +164,16 @@ const noticesView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html>
             body: [NOT_REFRESHED],
             actions: [
               Button.view(
-                { label: "retry refresh", isSmall: true, onClick: Message.ClickedRetryListing() },
-                h,
+                {
+                  label: "retry refresh",
+                  isSmall: true,
+                  onClick: Message.ClickedRetryListing(),
+                },
+                h
               ),
             ],
           },
-          h,
+          h
         ),
       ]
     : []),
@@ -175,9 +186,9 @@ const noticesView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html>
           body: [reason],
           attributes: [h.Id(REFUSAL_ID), h.Tabindex(-1)],
         },
-        h,
-      ),
-    ),
+        h
+      )
+    )
   ),
 ];
 
@@ -195,8 +206,8 @@ const secretOf = (credential: Credential): string =>
 
 const credentialView = (
   { credential, copy }: PendingCredential,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<Html> => {
+  h: HtmlBuilder<Message>
+): readonly Html[] => {
   const label = credentialLabel(credential);
 
   const copyButton = h.submodel({
@@ -205,21 +216,33 @@ const credentialView = (
     view: CopyButton.view,
     viewInputs: { text: secretOf(credential), label: `Copy ${label}` },
     toParentMessage: (message) =>
-      Message.GotCredentialCopyMessage({ credentialId: credentialId(credential), message }),
+      Message.GotCredentialCopyMessage({
+        credentialId: credentialId(credential),
+        message,
+      }),
   });
 
   return [
     ...Credential.match(credential, {
       ClientSecret: ({ clientId }) => [
-        PropsList.view({ items: [{ label: "client id", value: [clientId], isCode: true }] }, h),
+        PropsList.view(
+          { items: [{ label: "client id", value: [clientId], isCode: true }] },
+          h
+        ),
       ],
       ApiKey: () => [],
     }),
-    Secret.view({ value: secretOf(credential), label, actions: [copyButton] }, h),
+    Secret.view(
+      { value: secretOf(credential), label, actions: [copyButton] },
+      h
+    ),
   ];
 };
 
-const credentialsView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> =>
+const credentialsView = (
+  model: Model,
+  h: HtmlBuilder<Message>
+): readonly Html[] =>
   Array.match(model.credentials, {
     onEmpty: () => [],
     onNonEmpty: (credentials) => [
@@ -237,9 +260,11 @@ const credentialsView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<H
                   "API keys and client secrets are shown only once. Once dismissed, they cannot be shown again.",
                 ],
               },
-              h,
+              h
             ),
-            ...Array.flatMap(credentials, (pending) => credentialView(pending, h)),
+            ...Array.flatMap(credentials, (pending) =>
+              credentialView(pending, h)
+            ),
             h.div(
               [h.Class("save-row")],
               [
@@ -252,20 +277,24 @@ const credentialsView = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<H
                         variant: "Primary",
                         onClick: Message.ClickedDismissCredentials(),
                       },
-                      h,
+                      h
                     ),
-                  ],
+                  ]
                 ),
-              ],
+              ]
             ),
           ],
         },
-        h,
+        h
       ),
     ],
   });
 
-const issuerView = (model: Model, listing: Listing, h: HtmlBuilder<Message>): Html => {
+const issuerView = (
+  model: Model,
+  listing: Listing,
+  h: HtmlBuilder<Message>
+): Html => {
   const { issuer, email } = listing.overview;
 
   return Panel.view(
@@ -287,45 +316,53 @@ const issuerView = (model: Model, listing: Listing, h: HtmlBuilder<Message>): Ht
                     model: model.issuerCopy,
                     view: CopyButton.view,
                     viewInputs: { text: issuer, label: "Copy issuer" },
-                    toParentMessage: (message) => Message.GotIssuerCopyMessage({ message }),
+                    toParentMessage: (message) =>
+                      Message.GotIssuerCopyMessage({ message }),
                   }),
                 ],
               },
               { label: "signed in as", value: [email] },
             ],
           },
-          h,
+          h
         ),
       ],
     },
-    h,
+    h
   );
 };
 
 const sectionViews = (
   context: SectionContext,
   section: DashboardRoute,
-  h: HtmlBuilder<Message>,
-): Readonly<{ head: Html; panels: ReadonlyArray<Html> }> =>
+  h: HtmlBuilder<Message>
+): Readonly<{ head: Html; panels: readonly Html[] }> =>
   Match.value(section).pipe(
     Match.tagsExhaustive({
-      Clients: () => ({ head: clientsHeadView(context, h), panels: clientsPanels(context, h) }),
+      Clients: () => ({
+        head: clientsHeadView(context, h),
+        panels: clientsPanels(context, h),
+      }),
       Resources: () => ({
         head: resourcesHeadView(context, h),
         panels: resourcesPanels(context, h),
       }),
-      Keys: () => ({ head: keysHeadView(context, h), panels: keysPanels(context, h) }),
-    }),
+      Keys: () => ({
+        head: keysHeadView(context, h),
+        panels: keysPanels(context, h),
+      }),
+    })
   );
 
-const liveRegionView = (h: HtmlBuilder<Message>) => (): Html => Announcer.view(h);
+const liveRegionView = (h: HtmlBuilder<Message>) => (): Html =>
+  Announcer.view(h);
 
 const editorCardView = (
   model: Model,
   form: Form.Model,
   context: SectionContext,
   render: Dialog.RenderInfo,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html => {
   const { title, submit } = FormView.labelsOf(form);
 
@@ -342,9 +379,14 @@ const editorCardView = (
       submit,
       body: [
         ...Option.toArray(
-          Option.map(refusalAt(model, "Editor"), ({ title: refusalTitle, reason }) =>
-            Notice.view({ tone: "Error", title: refusalTitle, body: [reason] }, h),
-          ),
+          Option.map(
+            refusalAt(model, "Editor"),
+            ({ title: refusalTitle, reason }) =>
+              Notice.view(
+                { tone: "Error", title: refusalTitle, body: [reason] },
+                h
+              )
+          )
         ),
         h.submodel({
           slotId: "dashboard-form",
@@ -358,11 +400,15 @@ const editorCardView = (
         }),
       ],
     },
-    h,
+    h
   );
 };
 
-const editorView = (model: Model, context: SectionContext, h: HtmlBuilder<Message>): Html =>
+const editorView = (
+  model: Model,
+  context: SectionContext,
+  h: HtmlBuilder<Message>
+): Html =>
   h.submodel({
     slotId: Dialog.id(model.editor),
     model: model.editor,
@@ -381,15 +427,26 @@ const editorView = (model: Model, context: SectionContext, h: HtmlBuilder<Messag
     toParentMessage: (message) => Message.GotEditorMessage({ message }),
   });
 
-const NO_CONFIRMATION = { title: "", question: "", body: "", label: "", isDanger: false };
+const NO_CONFIRMATION = {
+  title: "",
+  question: "",
+  body: "",
+  label: "",
+  isDanger: false,
+};
 
 const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const confirmation = Option.getOrElse(pendingConfirmation(model), () => NO_CONFIRMATION);
+  const confirmation = Option.getOrElse(
+    pendingConfirmation(model),
+    () => NO_CONFIRMATION
+  );
 
   const detail = Option.match(refusalAt(model, "Confirm"), {
     onNone: () => ({}),
     onSome: ({ title, reason }) => ({
-      toDetailView: () => [Notice.view({ tone: "Error", title, body: [reason] }, h)],
+      toDetailView: () => [
+        Notice.view({ tone: "Error", title, body: [reason] }, h),
+      ],
     }),
   });
 
@@ -405,7 +462,9 @@ const confirmView = (model: Model, h: HtmlBuilder<Message>): Html => {
       isDanger: confirmation.isDanger,
       isBusy: isSaving(model),
       ...detail,
-      toLiveRegionView: ConfirmDialog.isOpen(model.confirm) ? liveRegionView(h) : undefined,
+      toLiveRegionView: ConfirmDialog.isOpen(model.confirm)
+        ? liveRegionView(h)
+        : undefined,
     },
     toParentMessage: (message) => Message.GotConfirmMessage({ message }),
   });
@@ -415,7 +474,7 @@ const consoleView = (
   model: Model,
   listing: Listing,
   section: DashboardRoute,
-  h: HtmlBuilder<Message>,
+  h: HtmlBuilder<Message>
 ): Html => {
   const context: SectionContext = { listing, isHeld: isHeld(model) };
 
@@ -435,21 +494,22 @@ const consoleView = (
             issuerView(model, listing, h),
           ],
         },
-        h,
+        h
       ),
       editorView(model, context, h),
       confirmView(model, h),
-    ],
+    ]
   );
 };
 
-export const view = defineView<Model, Message, ViewInputs>((model, { section }, h): Html =>
-  AsyncData.match(listingOf(model), {
-    onIdle: () => waitingView(h),
-    onLoading: () => waitingView(h),
-    onFailure: (reason) => unavailableView(reason, h),
-    onRefreshing: (listing) => consoleView(model, listing, section, h),
-    onStale: ({ data }) => consoleView(model, data, section, h),
-    onSuccess: (listing) => consoleView(model, listing, section, h),
-  }),
+export const view = defineView<Model, Message, ViewInputs>(
+  (model, { section }, h): Html =>
+    AsyncData.match(listingOf(model), {
+      onIdle: () => waitingView(h),
+      onLoading: () => waitingView(h),
+      onFailure: (reason) => unavailableView(reason, h),
+      onRefreshing: (listing) => consoleView(model, listing, section, h),
+      onStale: ({ data }) => consoleView(model, data, section, h),
+      onSuccess: (listing) => consoleView(model, listing, section, h),
+    })
 );

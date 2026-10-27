@@ -1,5 +1,6 @@
 import { Option } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
+
 import { documentPaths } from "./document-paths.ts";
 import {
   clientsRouter,
@@ -20,11 +21,19 @@ const url = (pathname: string) => ({
 });
 
 describe("document paths", () => {
-  test("are the paths the routers build, each routed to a page", () => {
-    const built = [clientsRouter(), resourcesRouter(), keysRouter(), loginRouter(), setupRouter()];
+  it("are the paths the routers build, each routed to a page", () => {
+    const built = [
+      clientsRouter(),
+      resourcesRouter(),
+      keysRouter(),
+      loginRouter(),
+      setupRouter(),
+    ];
 
     expect(built.every((path) => documentPaths.includes(path))).toBe(true);
-    expect(documentPaths.map((path) => urlToAppRoute(url(path))._tag)).toEqual([
+    expect(
+      documentPaths.map((path) => urlToAppRoute(url(path))._tag)
+    ).toStrictEqual([
       "Clients",
       "Resources",
       "Keys",

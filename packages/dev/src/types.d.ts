@@ -24,7 +24,10 @@ export interface DisposableIssuerOptions {
    */
   port?: number;
   /** Test hook replacing outbound CIMD metadata retrieval. Defaults to the secure transport. */
-  cimdTransport?: (input: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
+  cimdTransport?: (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ) => Response | Promise<Response>;
   /** Test hook observing incoming HTTP requests, including provisioning. No headers or bodies. */
   onRequest?: (request: { method: string; url: URL }) => void;
 }
@@ -54,7 +57,10 @@ export interface DisposableIssuer {
   port: number;
   directory: string;
   /** Mint a scoped API key and return its secret. Permissions are resource identifier to scopes. */
-  apiKey(options: { name?: string; permissions: Record<string, string[]> }): Promise<string>;
+  apiKey(options: {
+    name?: string;
+    permissions: Record<string, string[]>;
+  }): Promise<string>;
   /**
    * Sign the owner in and seal the forward cookie for `appOrigin`, exactly as a browser
    * does through `/forward-auth/continue`. Needs `cookieDomain`. The `cookies` array is
@@ -68,4 +74,6 @@ export interface DisposableIssuer {
 }
 
 /** Start an issuer on a loopback port. The caller owns signals and must await close(). */
-export function startDisposableIssuer(options: DisposableIssuerOptions): Promise<DisposableIssuer>;
+export function startDisposableIssuer(
+  options: DisposableIssuerOptions
+): Promise<DisposableIssuer>;

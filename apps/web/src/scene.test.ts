@@ -1,3 +1,10 @@
+import { Dialog as UiDialog } from "@foldkit/ui";
+import {
+  Card,
+  Dialog,
+  Focus,
+  TopBar,
+} from "@gjermundgaraba-designs/pixel-paper";
 import {
   Command,
   Mount,
@@ -14,18 +21,17 @@ import {
   text,
   type,
 } from "foldkit/scene";
-import type { Url } from "foldkit/url";
 import { modifyFields } from "foldkit/struct";
-import { Dialog as UiDialog } from "@foldkit/ui";
-import { Card, Dialog, Focus, TopBar } from "@gjermundgaraba-designs/pixel-paper";
-import { describe, test } from "vite-plus/test";
+import type { Url } from "foldkit/url";
+import { describe, it } from "vite-plus/test";
 
-import { listed } from "./page/dashboard/dashboard.fixture.ts";
-import * as Dashboard from "./page/dashboard/index.ts";
 import { urlAt } from "./fixture.ts";
 import { CheckAccess, init, update } from "./main.ts";
 import { Message } from "./message.ts";
-import { Access, type Model, Page } from "./model.ts";
+import { Access, Page } from "./model.ts";
+import type { Model } from "./model.ts";
+import { listed } from "./page/dashboard/dashboard.fixture.ts";
+import * as Dashboard from "./page/dashboard/index.ts";
 import * as Login from "./page/login.ts";
 import * as Setup from "./page/setup.ts";
 import { view } from "./view.ts";
@@ -34,7 +40,7 @@ const checkedAt = (url: Url, access: Access): Model =>
   update(init(url).model, Message.SucceededCheckAccess({ access })).model;
 
 describe("application view", () => {
-  test("a signed-out owner signs in and goes on to the page that asked for it", () => {
+  it("a signed-out owner signs in and goes on to the page that asked for it", () => {
     scene(
       { update, view },
       given(checkedAt(urlAt("/login", "rd=%2Fkeys"), Access.SignedOut())),
@@ -42,33 +48,45 @@ describe("application view", () => {
       type(label("Email"), "owner@fixture.invalid"),
       type(label("Password"), "correct horse"),
       click(role("button", { name: "sign in" })),
-      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Login.Message.CompletedFocus()),
       Command.resolve(
-        Login.SignIn({ email: "owner@fixture.invalid", password: "correct horse" }),
-        Login.Message.SucceededSignIn(),
+        Focus.Focus({ id: Card.submitId("login") }),
+        Login.Message.CompletedFocus()
+      ),
+      Command.resolve(
+        Login.SignIn({
+          email: "owner@fixture.invalid",
+          password: "correct horse",
+        }),
+        Login.Message.SucceededSignIn()
       ),
       Command.resolve(
         Login.ContinueAfterSignIn({ destination: "/keys" }),
-        Login.Message.CompletedContinueAfterSignIn(),
-      ),
+        Login.Message.CompletedContinueAfterSignIn()
+      )
     );
   });
 
-  test("a refused sign-in says why beside the form", () => {
+  it("a refused sign-in says why beside the form", () => {
     scene(
       { update, view },
       given(checkedAt(urlAt("/login"), Access.SignedOut())),
       type(label("Email"), "owner@fixture.invalid"),
       type(label("Password"), "wrong"),
       submit(role("form", { name: "Sign in" })),
-      Command.resolve(Focus.Focus({ id: Card.submitId("login") }), Login.Message.CompletedFocus()),
-      Command.resolve(Login.SignIn, Login.Message.FailedSignIn({ reason: "Sign-in failed." })),
+      Command.resolve(
+        Focus.Focus({ id: Card.submitId("login") }),
+        Login.Message.CompletedFocus()
+      ),
+      Command.resolve(
+        Login.SignIn,
+        Login.Message.FailedSignIn({ reason: "Sign-in failed." })
+      ),
       expect(text("Sign-in failed.", { exact: false })).toExist(),
-      expect(role("button", { name: "sign in" })).toExist(),
+      expect(role("button", { name: "sign in" })).toExist()
     );
   });
 
-  test("setup says under the confirmation that it does not match, and moves focus to it", () => {
+  it("setup says under the confirmation that it does not match, and moves focus to it", () => {
     scene(
       { update, view },
       given(checkedAt(urlAt("/setup"), Access.SetupRequired())),
@@ -77,47 +95,63 @@ describe("application view", () => {
       type(label("Password"), "correct horse battery"),
       type(label("Confirm password"), "something else"),
       click(role("button", { name: "create account" })),
-      Command.resolve(Focus.Focus({ id: "setup-confirmation" }), Setup.Message.CompletedFocus()),
+      Command.resolve(
+        Focus.Focus({ id: "setup-confirmation" }),
+        Setup.Message.CompletedFocus()
+      ),
       expect(label("Confirm password")).toHaveAttr("aria-invalid", "true"),
-      expect(label("Confirm password")).toHaveAccessibleDescription("Passwords do not match."),
-      expect(text("Not created")).toBeAbsent(),
+      expect(label("Confirm password")).toHaveAccessibleDescription(
+        "Passwords do not match."
+      ),
+      expect(text("Not created")).toBeAbsent()
     );
   });
 
-  test("a failed access check says why and asks again on request", () => {
+  it("a failed access check says why and asks again on request", () => {
     scene(
       { update, view },
       given(
         update(
           init(urlAt("/")).model,
-          Message.FailedCheckAccess({ reason: "Fixture request failed" }),
-        ).model,
+          Message.FailedCheckAccess({ reason: "Fixture request failed" })
+        ).model
       ),
       expect(text("Unable to continue")).toExist(),
       expect(text("Fixture request failed", { exact: false })).toExist(),
       click(role("button", { name: "try again" })),
-      Command.resolve(CheckAccess(), Message.SucceededCheckAccess({ access: Access.SignedOut() })),
-      expect(role("heading", { name: "Sign in to clankerauth" })).toExist(),
+      Command.resolve(
+        CheckAccess(),
+        Message.SucceededCheckAccess({ access: Access.SignedOut() })
+      ),
+      expect(role("heading", { name: "Sign in to clankerauth" })).toExist()
     );
   });
 
-  test("the page has one live region, which an open dashboard dialog hosts", () => {
+  it("the page has one live region, which an open dashboard dialog hosts", () => {
     scene(
       { update, view },
       given(
         modifyFields(init(urlAt("/keys")).model, {
           page: () => Page.Dashboard({ dashboard: listed }),
-        }),
+        })
       ),
       Mount.resolveAll(
-        ...TopBar.sceneMounts((message) => Dashboard.Message.GotTopBarMessage({ message })),
+        ...TopBar.sceneMounts((message) =>
+          Dashboard.Message.GotTopBarMessage({ message })
+        )
       ),
       expectAll(all.role("status")).toHaveCount(1),
       click(role("button", { name: "delete Automation" })),
-      Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
+      Command.resolve(
+        UiDialog.ShowDialog,
+        UiDialog.Message.SucceededShowDialog()
+      ),
       Mount.resolveAll(...Dialog.sceneMounts),
       expectAll(all.role("status")).toHaveCount(1),
-      inside(role("alertdialog", { name: "Delete API key" }), expect(role("status")).toExist()),
+      inside(
+        role("alertdialog", { name: "Delete API key" }),
+        expect(role("status")).toExist()
+      )
     );
   });
 });

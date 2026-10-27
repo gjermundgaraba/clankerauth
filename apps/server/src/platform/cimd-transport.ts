@@ -1,60 +1,85 @@
+import { once } from "node:events";
+
 import { fetchClientMetadataResource as secureFetch } from "@better-auth/cimd/node";
-import { Context, Layer } from "effect";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
+import { Context, Layer } from "effect";
+
+const abortOf = async (
+  signal: AbortSignal,
+  until: AbortSignal
+): Promise<never> => {
+  await once(signal, "abort", { signal: until });
+
+  throw signal.reason;
+};
+
+const discard = async (late: Promise<Response>) => {
+  try {
+    const response = await late;
+
+    await response.body?.cancel();
+  } catch {
+    // why: nobody awaits an abandoned fetch, so its late failure is dropped
+  }
+};
 
 // why: the secure transport cannot abort its DNS lookup, so capacity stays held until it settles
-export function createAbortAwareTransport(
+export const createAbortAwareTransport = (
   transport: ClientMetadataResourceFetch,
-  maximumPending = 8,
-): ClientMetadataResourceFetch {
+  maximumPending = 8
+): ClientMetadataResourceFetch => {
   let pending = 0;
 
-  return (input, init) => {
-    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  const settle = async (
+    input: Parameters<ClientMetadataResourceFetch>[0],
+    init: Parameters<ClientMetadataResourceFetch>[1],
+    signal: AbortSignal | undefined
+  ): Promise<Response> => {
+    try {
+      await Promise.resolve();
+      signal?.throwIfAborted();
 
-    if (signal?.aborted) return Promise.reject(signal.reason);
-
-    if (pending >= maximumPending)
-      return Promise.reject(new Error("CIMD transport capacity reached"));
-    pending++;
-
-    return new Promise<Response>((resolve, reject) => {
-      let aborted = false;
-
-      const onAbort = () => {
-        aborted = true;
-        reject(signal?.reason);
-      };
-
-      signal?.addEventListener("abort", onAbort, { once: true });
-
-      const release = () => {
-        pending--;
-        signal?.removeEventListener("abort", onAbort);
-      };
-
-      void Promise.resolve()
-        .then(() => {
-          signal?.throwIfAborted();
-
-          return transport(input, init);
-        })
-        .then(
-          (response) => {
-            release();
-
-            if (aborted) {
-              void response.body?.cancel().catch(() => {});
-            } else resolve(response);
-          },
-          (cause: unknown) => {
-            release();
-            reject(cause);
-          },
-        );
-    });
+      return await transport(input, init);
+    } finally {
+      pending -= 1;
+    }
   };
-}
+
+  return async (input, init) => {
+    const signal =
+      init?.signal ?? (input instanceof Request ? input.signal : undefined);
+
+    if (signal?.aborted === true) {
+      throw signal.reason;
+    }
+
+    if (pending >= maximumPending) {
+      throw new Error("CIMD transport capacity reached");
+    }
+
+    pending += 1;
+
+    const work = settle(input, init, signal);
+
+    if (signal === undefined) {
+      return await work;
+    }
+
+    const listening = new AbortController();
+
+    try {
+      return await Promise.race([work, abortOf(signal, listening.signal)]);
+    } catch (error) {
+      if (signal.aborted) {
+        void discard(work);
+      }
+
+      throw error;
+    } finally {
+      listening.abort();
+    }
+  };
+};
 
 export class CimdTransport extends Context.Service<
   CimdTransport,
@@ -64,6 +89,10 @@ export class CimdTransport extends Context.Service<
     fetch: createAbortAwareTransport(secureFetch),
   });
 
-  static readonly layerWith = (fetch: ClientMetadataResourceFetch | undefined) =>
-    fetch === undefined ? CimdTransport.layer : Layer.succeed(CimdTransport, { fetch });
+  static readonly layerWith = (
+    fetch: ClientMetadataResourceFetch | undefined
+  ) =>
+    fetch === undefined
+      ? CimdTransport.layer
+      : Layer.succeed(CimdTransport, { fetch });
 }

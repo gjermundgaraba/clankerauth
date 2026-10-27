@@ -11,7 +11,7 @@ export default defineConfig({
   },
   test: {
     include: ["tests/**/*.test.ts"],
-    testTimeout: 30000,
+    testTimeout: 30_000,
     sequence: { shuffle: { tests: true } },
   },
 });

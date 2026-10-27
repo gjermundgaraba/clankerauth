@@ -1,9 +1,12 @@
+import { Administration } from "@gjermundgaraba/clankerauth-admin-api";
+import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
+import * as Testing from "@gjermundgaraba/effect-actions/Testing";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { Effect, Result } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import * as Testing from "@gjermundgaraba/effect-actions/Testing";
-import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
-import { Administration } from "@gjermundgaraba/clankerauth-admin-api";
 
 interface WebMcpRequest {
   readonly method: string;
@@ -14,17 +17,21 @@ interface WebMcpRequest {
 
 export const webMcpRequest = (request: WebMcpRequest) =>
   Result.getOrThrow(
-    HttpClientRequest.toWebResult(ActionMcp.request(request.method, request.params, request)),
+    HttpClientRequest.toWebResult(
+      ActionMcp.request(request.method, request.params, request)
+    )
   );
 
 export const administrationTools = (
   handler: (request: Request) => Promise<Response>,
   origin: string,
-  token: string,
+  token: string
 ) =>
   ActionMcp.client(Administration, {
     url: `${origin}/mcp`,
-    transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
+    transformClient: HttpClient.mapRequest(
+      HttpClientRequest.bearerToken(token)
+    ),
   }).pipe(Effect.provide(Testing.layer(handler)));
 
 interface OfficialClientOptions {
@@ -37,19 +44,19 @@ interface OfficialClientOptions {
 
 export const withMcpClient = async <A>(
   { fetch, path, baseUrl, headers }: OfficialClientOptions,
-  run: (client: Client) => Promise<A>,
+  run: (client: Client) => Promise<A>
 ): Promise<A> => {
   const client = new Client(
     { name: "test", version: "0" },
-    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    { versionNegotiation: { mode: { pin: "2026-07-28" } } }
   );
 
   try {
     await client.connect(
       new StreamableHTTPClientTransport(new URL(path, baseUrl), {
-        fetch: (input, init) => fetch(new Request(input, init)),
+        fetch: async (input, init) => await fetch(new Request(input, init)),
         requestInit: { headers },
-      }),
+      })
     );
 
     return await run(client);

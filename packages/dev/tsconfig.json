@@ -4,7 +4,11 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@gjermundgaraba/clankerauth-dev": ["./src/types.d.ts"],
+      "@gjermundgaraba/clankerauth-dev/edge": ["./src/edge.ts"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "tests", "vite.config.ts"]
 }

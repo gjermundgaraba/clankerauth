@@ -1,14 +1,15 @@
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
-import {
-  OwnerExists,
-  type InternalServerError,
-  type Owner,
-  type ProviderRefused,
+import { OwnerExists } from "@gjermundgaraba/clankerauth-admin-api";
+import type {
+  InternalServerError,
+  Owner,
+  ProviderRefused,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Database, persisted } from "../platform/sqlite.ts";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
+
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
+import { Database, persisted } from "../platform/sqlite.ts";
 import { providerSessionFor } from "./provider-session.ts";
 
 const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
@@ -17,7 +18,7 @@ export class OwnerAccount extends Context.Service<
   OwnerAccount,
   {
     /** Setup creates the only account, so the owner is whichever user exists. */
-    readonly find: () => Effect.Effect<string | undefined, InternalServerError>;
+    readonly find: Effect.Effect<string | undefined, InternalServerError>;
     /**
      * First-run setup is the only sign-up: the provider route is not mounted, and the
      * user-creation hook refuses a second account. Setup requests are serialized so a
@@ -27,9 +28,16 @@ export class OwnerAccount extends Context.Service<
     readonly create: (input: {
       readonly email: string;
       readonly password: string;
-    }) => Effect.Effect<string[], OwnerExists | ProviderRefused | InternalServerError>;
+    }) => Effect.Effect<
+      string[],
+      OwnerExists | ProviderRefused | InternalServerError
+    >;
     /** The owner as administration's caller, acting through a temporary provider session. */
-    readonly caller: (userId: string, email: string, writable: boolean) => Owner;
+    readonly caller: (
+      userId: string,
+      email: string,
+      writable: boolean
+    ) => Owner;
   }
 >()("clankerauth/OwnerAccount") {
   static readonly layer = Layer.effect(
@@ -41,33 +49,44 @@ export class OwnerAccount extends Context.Service<
       const setup = yield* Semaphore.make(1);
       const providerSession = providerSessionFor(context, baseURL);
 
-      const find = Effect.fn("OwnerAccount.find")(function* () {
+      const find = Effect.gen(function* () {
         const rows = yield* sql`SELECT id FROM user LIMIT 1`;
 
-        if (!rows.length) return undefined;
+        if (!rows.length) {
+          return;
+        }
 
         return (yield* decodeOwnerRow(rows[0])).id;
-      });
+      }).pipe(Effect.withSpan("OwnerAccount.find"));
 
       return {
         find,
         create: Effect.fn("OwnerAccount.create")(
-          function* (input: { readonly email: string; readonly password: string }) {
+          function* (input: {
+            readonly email: string;
+            readonly password: string;
+          }) {
             // why: the provider refuses an existing email before its hook can answer a conflict
-            if (yield* find()) return yield* Effect.fail(OwnerExists.of());
+            if ((yield* find) !== undefined) {
+              return yield* OwnerExists.of();
+            }
 
             const { headers } = yield* provider(
-              () =>
-                auth.api.signUpEmail({
-                  body: { name: "Owner", email: input.email.trim(), password: input.password },
+              async () =>
+                await auth.api.signUpEmail({
+                  body: {
+                    name: "Owner",
+                    email: input.email.trim(),
+                    password: input.password,
+                  },
                   returnHeaders: true,
                 }),
-              { refused: refusal, conflict: OwnerExists.of },
+              { refused: refusal, conflict: OwnerExists.of }
             );
 
             return headers.getSetCookie();
           },
-          (effect) => setup.withPermit(effect),
+          (effect) => setup.withPermit(effect)
         ),
         caller: (userId, email, writable) => ({
           userId,
@@ -76,6 +95,6 @@ export class OwnerAccount extends Context.Service<
           providerHeaders: providerSession(userId),
         }),
       };
-    }),
+    })
   );
 }

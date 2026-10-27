@@ -1,26 +1,58 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
-import { installPacked, packDependency } from "../../../scripts/package-install.mjs";
+
+import { Schema } from "effect";
 import { build } from "vite";
 
-const execute = promisify(execFile);
+import {
+  assertDeclarations,
+  execute,
+  installPacked,
+  packDependency,
+} from "../../../scripts/package-install.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-const { name, version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const Manifest = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+  sideEffects: Schema.Boolean,
+  dependencies: Schema.Record(Schema.String, Schema.String),
+  peerDependencies: Schema.Record(Schema.String, Schema.String),
+  peerDependenciesMeta: Schema.Struct({
+    "@gjermundgaraba/effect-actions": Schema.Struct({
+      optional: Schema.Boolean,
+    }),
+  }),
+  exports: Schema.Record(
+    Schema.String,
+    Schema.Struct({ types: Schema.String })
+  ),
+});
 
-const directory = await mkdtemp(join(tmpdir(), "clankerauth-sdk-install-"));
+const decodeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Manifest)
+);
 
-const typeCheck = (file) =>
-  execute(
+/** @param {string} directory The package's directory. */
+const readManifest = async (directory) =>
+  decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
+
+const { name, version } = await readManifest(root);
+
+const directory = await mkdtemp(
+  path.join(tmpdir(), "clankerauth-sdk-install-")
+);
+
+/** @param {string} file The file to check, in the install directory. */
+const typeCheck = async (file) =>
+  await execute(
     process.execPath,
     [
-      join(root, "node_modules/typescript/bin/tsc"),
+      path.join(root, "node_modules/typescript/bin/tsc"),
       "--noEmit",
       "--strict",
       "--target",
@@ -29,20 +61,21 @@ const typeCheck = (file) =>
       "NodeNext",
       "--moduleResolution",
       "NodeNext",
-      join(directory, file),
+      path.join(directory, file),
     ],
-    { cwd: directory },
+    { cwd: directory }
   );
 
-const emitDeclarations = (...files) =>
-  execute(
+/** @param {...string} files The files to compile, in the install directory. */
+const emitDeclarations = async (...files) =>
+  await execute(
     process.execPath,
     [
-      join(root, "node_modules/typescript/bin/tsc"),
+      path.join(root, "node_modules/typescript/bin/tsc"),
       "--declaration",
       "--emitDeclarationOnly",
       "--outDir",
-      join(directory, "declarations"),
+      path.join(directory, "declarations"),
       "--strict",
       "--target",
       "ESNext",
@@ -50,47 +83,58 @@ const emitDeclarations = (...files) =>
       "NodeNext",
       "--moduleResolution",
       "NodeNext",
-      ...files.map((file) => join(directory, file)),
+      ...files.map((file) => path.join(directory, file)),
     ],
-    { cwd: directory },
+    { cwd: directory }
   );
 
+/** @param {string} specifier The module to import from the install directory. */
 const load = async (specifier) => {
-  const file = join(directory, `${specifier.replaceAll(/[^\w-]/gu, "_")}.mjs`);
+  const file = path.join(
+    directory,
+    `${specifier.replaceAll(/[^\w-]/gu, "_")}.mjs`
+  );
+
   await writeFile(file, `export * from "${specifier}";`);
 
-  return import(pathToFileURL(file).href);
+  return await import(pathToFileURL(file).href);
 };
 
 try {
   await installPacked(directory, root, ["effect"]);
-  const installed = join(directory, "node_modules", name);
-  const manifest = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
+  const installed = path.join(directory, "node_modules", name);
+
+  const manifest = await readManifest(installed);
+
   assert.equal(manifest.version, version);
   assert.equal(manifest.sideEffects, false);
-  assert.equal(manifest.peerDependenciesMeta["@gjermundgaraba/effect-actions"].optional, true);
-  assert.equal(manifest.dependencies["@gjermundgaraba/effect-actions"], undefined);
+  assert.equal(
+    manifest.peerDependenciesMeta["@gjermundgaraba/effect-actions"].optional,
+    true
+  );
+  assert.equal(
+    manifest.dependencies["@gjermundgaraba/effect-actions"],
+    undefined
+  );
   assert.ok(
-    manifest.peerDependencies.effect,
-    "effect must be a peer: a second copy would split its types and services",
+    manifest.peerDependencies.effect !== undefined &&
+      manifest.peerDependencies.effect !== "",
+    "effect must be a peer: a second copy would split its types and services"
   );
   assert.equal(manifest.dependencies.effect, undefined);
 
-  assert.ok(
-    (await readFile(join(installed, "README.md"), "utf8")).includes(
-      `@gjermundgaraba/effect-actions@${manifest.peerDependencies["@gjermundgaraba/effect-actions"]}`,
-    ),
-    "The README's effect-actions install line does not match the peer range",
-  );
+  const readme = await readFile(path.join(installed, "README.md"), "utf-8");
 
-  for (const [entry, target] of Object.entries(manifest.exports))
-    assert.ok(
-      (await readFile(join(installed, target.types), "utf8")).length > 0,
-      `Entry point ships no declarations: ${entry}`,
-    );
+  assert.ok(
+    readme.includes(
+      `@gjermundgaraba/effect-actions@${manifest.peerDependencies["@gjermundgaraba/effect-actions"]}`
+    ),
+    "The README's effect-actions install line does not match the peer range"
+  );
+  await assertDeclarations(installed, manifest.exports);
 
   await writeFile(
-    join(directory, "consumer.ts"),
+    path.join(directory, "consumer.ts"),
     `
 import { Effect } from "effect";
 import { HttpClient } from "effect/http";
@@ -100,17 +144,23 @@ const verification: Effect.Effect<Verifier.Principal, AuthenticationError | Conf
   Verifier.make({ issuer: "https://clankerauth.example/api/auth", resource: "https://notes.example/", store: Verifier.store() })
     .pipe(Effect.flatMap(verifier => verifier.verifyToken("token")));
 void verification;
-`,
+`
   );
   await typeCheck("consumer.ts");
 
   const api = await load(name);
 
-  for (const exported of ["Verifier", "RequestPolicy"])
-    assert(exported in api, `Missing core export: ${exported}`);
+  for (const exported of ["Verifier", "RequestPolicy"]) {
+    assert.ok(exported in api, `Missing core export: ${exported}`);
+  }
 
-  for (const absent of ["Unauthorized", "InsufficientScope", "ProviderUnavailable"])
-    assert(!(absent in api), `Root re-exports an error: ${absent}`);
+  for (const absent of [
+    "Unauthorized",
+    "InsufficientScope",
+    "ProviderUnavailable",
+  ]) {
+    assert.ok(!(absent in api), `Root re-exports an error: ${absent}`);
+  }
 
   const errors = await load(`${name}/errors`);
 
@@ -119,14 +169,17 @@ void verification;
     "InsufficientScope",
     "ProviderUnavailable",
     "ConfigurationError",
-  ])
-    assert(exported in errors, `Missing error export: ${exported}`);
+  ]) {
+    assert.ok(exported in errors, `Missing error export: ${exported}`);
+  }
 
   const { Effect } = await load("effect");
   const { FetchHttpClient } = await load("effect/http");
 
   const make = (options) =>
-    Effect.runPromise(api.Verifier.make(options).pipe(Effect.provide(FetchHttpClient.layer)));
+    Effect.runPromise(
+      api.Verifier.make(options).pipe(Effect.provide(FetchHttpClient.layer))
+    );
 
   const verifier = await make({
     issuer: "https://clankerauth.example/api/auth",
@@ -134,8 +187,11 @@ void verification;
     store: api.Verifier.store(),
   });
 
-  const missing = await Effect.runPromise(Effect.flip(verifier.verifyToken("")));
-  assert(missing instanceof errors.Unauthorized);
+  const missing = await Effect.runPromise(
+    Effect.flip(verifier.verifyToken(""))
+  );
+
+  assert.ok(missing instanceof errors.Unauthorized);
 
   const keyList = await load(`${name}/key-list`);
 
@@ -149,8 +205,9 @@ void verification;
     "Entry",
     "Grant",
     "Claims",
-  ])
-    assert(exported in keyList, `Missing key-list export: ${exported}`);
+  ]) {
+    assert.ok(exported in keyList, `Missing key-list export: ${exported}`);
+  }
 
   const credentials = await load(`${name}/credentials`);
 
@@ -165,16 +222,26 @@ void verification;
     "SignInRequired",
     "TokenUnavailable",
     "SignInFailed",
-  ])
-    assert(exported in credentials, `Missing credentials export: ${exported}`);
+  ]) {
+    assert.ok(
+      exported in credentials,
+      `Missing credentials export: ${exported}`
+    );
+  }
 
-  process.env["XDG_CONFIG_HOME"] = join(directory, "config");
-  assert.deepEqual(await Effect.runPromise(credentials.signOut()), { signedOut: false });
+  process.env.XDG_CONFIG_HOME = path.join(directory, "config");
+  assert.deepEqual(await Effect.runPromise(credentials.signOut()), {
+    signedOut: false,
+  });
   assert.deepEqual(await Effect.runPromise(credentials.list()), []);
 
   const { startFakeIssuer } = await load(`${name}/testing`);
   const notes = "http://127.0.0.1:7337/";
-  const issuer = await startFakeIssuer({ resource: notes, scopes: ["notes:read", "notes:write"] });
+
+  const issuer = await startFakeIssuer({
+    resource: notes,
+    scopes: ["notes:read", "notes:write"],
+  });
 
   try {
     const key = issuer.apiKey();
@@ -185,18 +252,28 @@ void verification;
 
     const installedVerifier = await listed(store);
 
-    assert.deepEqual(await Effect.runPromise(installedVerifier.verifyToken(key)), {
-      subject: "owner",
-      scopes: ["notes:read", "notes:write"],
-      actor: { kind: "key", keyId: "key-1" },
-      expiresAt: undefined,
-    });
+    assert.deepEqual(
+      await Effect.runPromise(installedVerifier.verifyToken(key)),
+      {
+        subject: "owner",
+        scopes: ["notes:read", "notes:write"],
+        actor: { kind: "key", keyId: "key-1" },
+        expiresAt: undefined,
+      }
+    );
     await Effect.runPromise(installedVerifier.verifyToken(await issuer.sign()));
     issuer.revoke(key);
-    await Effect.runPromise((await listed(store)).verifyToken(key));
+    const relisted = await listed(store);
+    await Effect.runPromise(relisted.verifyToken(key));
     assert.equal(issuer.keyLists(), 1);
-    const revoked = await Effect.runPromise(Effect.flip((await listed()).verifyToken(key)));
-    assert(revoked instanceof errors.Unauthorized);
+
+    const unlisted = await listed();
+
+    const revoked = await Effect.runPromise(
+      Effect.flip(unlisted.verifyToken(key))
+    );
+
+    assert.ok(revoked instanceof errors.Unauthorized);
     assert.equal(issuer.keyLists(), 2);
   } finally {
     await issuer.close();
@@ -211,10 +288,10 @@ void verification;
       "--no-fund",
       await packDependency(directory, root, "@gjermundgaraba/effect-actions"),
     ],
-    { cwd: directory },
+    { cwd: directory }
   );
   await writeFile(
-    join(directory, "integration.ts"),
+    path.join(directory, "integration.ts"),
     `
 import { Effect } from "effect";
 import type { Layer } from "effect";
@@ -283,13 +360,13 @@ void subject;
 void Whoami.name;
 void page;
 void protocol;
-`,
+`
   );
   await typeCheck("integration.ts");
 
   // why: declared-actions.ts imports no SDK name, as an application's actions module does not.
   await writeFile(
-    join(directory, "declared-resource.ts"),
+    path.join(directory, "declared-resource.ts"),
     `
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
@@ -297,10 +374,10 @@ import { ProviderUnavailable } from "@gjermundgaraba/clankerauth-sdk/errors";
 import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/session";
 export const Login = Authentication.make("notes.Login", CurrentPrincipal, { error: ProviderUnavailable });
 export const Notes = Resource.make(Login, { scopes: ["notes:read", "notes:write"], required: "notes:read" });
-`,
+`
   );
   await writeFile(
-    join(directory, "declared-actions.ts"),
+    path.join(directory, "declared-actions.ts"),
     `
 import { Effect, Schema } from "effect";
 import { HttpRouter } from "effect/http";
@@ -327,16 +404,16 @@ export const tagged = HttpRouter.middleware((route) =>
   Effect.flatMap(CurrentPrincipal, () => route),
 ).combine(Notes.admitted());
 export const local = Notes.local("owner");
-`,
+`
   );
   await writeFile(
-    join(directory, "declared-login.ts"),
+    path.join(directory, "declared-login.ts"),
     `
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { ProviderUnavailable } from "@gjermundgaraba/clankerauth-sdk/errors";
 import { CurrentPrincipal } from "@gjermundgaraba/clankerauth-sdk/session";
 export const Login = Authentication.make("notes.Login", CurrentPrincipal, { error: ProviderUnavailable });
-`,
+`
   );
   await emitDeclarations("declared-resource.ts", "declared-actions.ts");
   // why: alone, so no other file's imports reach the type `/session` must name itself.
@@ -344,11 +421,16 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
 
   const { Resource } = await load(`${name}/effect-actions`);
   const { CurrentPrincipal } = await load(`${name}/session`);
-  const { make: login } = await load("@gjermundgaraba/effect-actions/Authentication");
+
+  const { make: login } = await load(
+    "@gjermundgaraba/effect-actions/Authentication"
+  );
 
   const Notes = Resource.make(
-    login("notes.Login", CurrentPrincipal, { error: errors.ProviderUnavailable }),
-    { scopes: ["notes:read"], required: "notes:read" },
+    login("notes.Login", CurrentPrincipal, {
+      error: errors.ProviderUnavailable,
+    }),
+    { scopes: ["notes:read"], required: "notes:read" }
   );
 
   const resource = await Effect.runPromise(
@@ -358,22 +440,23 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
           issuer: "https://clankerauth.example/api/auth",
           publicUrl: new URL("https://notes.example"),
           store: api.Verifier.store(),
-        }),
+        })
       ),
-      Effect.provide(FetchHttpClient.layer),
-    ),
+      Effect.provide(FetchHttpClient.layer)
+    )
   );
 
   assert.equal(resource.resource, "https://notes.example/");
   assert.deepEqual(Notes.local("owner").actor, { kind: "local" });
-  assert(
-    (await Effect.runPromise(Effect.flip(resource.verifier.verifyToken("")))) instanceof
-      errors.Unauthorized,
+  assert.ok(
+    (await Effect.runPromise(
+      Effect.flip(resource.verifier.verifyToken(""))
+    )) instanceof errors.Unauthorized
   );
 
   await writeFile(
-    join(directory, "browser.ts"),
-    `export * from "${name}/errors";\nexport * from "${name}/session";\n`,
+    path.join(directory, "browser.ts"),
+    `export * from "${name}/errors";\nexport * from "${name}/session";\n`
   );
 
   const bundled = await build({
@@ -383,9 +466,18 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
     build: {
       write: false,
       minify: false,
-      lib: { entry: join(directory, "browser.ts"), formats: ["es"], fileName: "browser" },
+      lib: {
+        entry: path.join(directory, "browser.ts"),
+        formats: ["es"],
+        fileName: "browser",
+      },
     },
   });
+
+  assert.ok(
+    Array.isArray(bundled),
+    "The library build returns its outputs as an array"
+  );
 
   const chunks = bundled
     .flatMap((output) => output.output)
@@ -394,13 +486,16 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
   const code = chunks.map((chunk) => chunk.code).join("\n");
   const modules = chunks.flatMap((chunk) => Object.keys(chunk.modules));
 
-  assert(code.length > 0, "The browser entry points produced no bundle");
+  assert.ok(code.length > 0, "The browser entry points produced no bundle");
 
   for (const forbidden of ["jose", "keyList", "key-list", "at+jwt"]) {
-    assert(!code.includes(forbidden), `The browser bundle reaches server code: ${forbidden}`);
-    assert(
+    assert.ok(
+      !code.includes(forbidden),
+      `The browser bundle reaches server code: ${forbidden}`
+    );
+    assert.ok(
       !modules.some((id) => id.includes(forbidden)),
-      `The browser bundle pulls in a server module: ${forbidden}`,
+      `The browser bundle pulls in a server module: ${forbidden}`
     );
   }
 

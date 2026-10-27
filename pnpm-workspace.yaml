@@ -40,6 +40,10 @@ catalog:
   proper-lockfile: 4.1.2
   "@types/proper-lockfile": 4.1.4
   vitest: 5.0.5
+  ultracite: 8.0.2
+  oxlint: 1.89.0
+  oxfmt: 0.74.0
+  "@effect/tsgo": 0.57.0
 
 overrides:
   vite@*: "catalog:"
@@ -77,3 +81,12 @@ patchedDependencies:
   # The plugin reads Crypto.randomUUIDv4 as effect 4.0.0's value; from 4.0.3 it is a method,
   # so without this its DevTools MCP relay fails to start under the effect pinned here.
   "@foldkit/vite-plugin@0.28.0": patches/@foldkit__vite-plugin@0.28.0.patch
+permissions:
+  ultracite:
+    skills: true
+# Name the directories pnpm links Ultracite's skill into: without one it auto-detects an agent,
+# and where none is installed, as in the Docker build, the install fails.
+skills:
+  dirs:
+    - .agents/skills
+    - .claude/skills
