@@ -75,26 +75,21 @@ export const accessForClient = Effect.fn("ResourceCatalog.accessForClient")(
 export class ResourceCatalog extends Context.Service<
   ResourceCatalog,
   {
-    /** Every resource, administration's built in among them. */
     readonly list: Effect.Effect<CatalogResource[], InternalServerError>;
     readonly get: (
       identifier: string
     ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
-    /** A resource an application serves: any but administration's. */
     readonly application: (
       identifier: string
     ) => Effect.Effect<CatalogResource | undefined, InternalServerError>;
-    /** Every managed client's resource links; automatic clients have none. */
     readonly access: Effect.Effect<
       ReadonlyArray<typeof ClientAccess.Type>,
       InternalServerError
     >;
-    /** An automatic client may ask for any resource; a managed one only for its own. */
     readonly hasAccess: (
       clientId: string,
       identifier: string
     ) => Effect.Effect<boolean, InternalServerError>;
-    /** The scopes `identifiers` define, refusing an unknown one as invalid input. */
     readonly scopesFor: (
       identifiers: readonly string[]
     ) => Effect.Effect<

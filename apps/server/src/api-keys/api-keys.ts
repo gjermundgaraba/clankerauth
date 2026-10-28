@@ -35,7 +35,7 @@ const permissions = Schema.decodeUnknownEffect(KeyPermissions);
 const storedKey = Schema.decodeUnknownEffect(
   Schema.Struct({
     id: Schema.String,
-    key: Schema.String,
+    key: Schema.RedactedFromValue(Schema.String),
     referenceId: Schema.String,
     expiresAt: Schema.NullOr(Schema.DateTimeUtcFromString),
     permissions: Schema.NullOr(Schema.fromJsonString(KeyPermissions)),
@@ -84,7 +84,6 @@ export class ApiKeys extends Context.Service<
       InternalServerError,
       CurrentOwner | Scope.Scope
     >;
-    /** Creates a key; its secret is returned once. */
     readonly create: (
       input: typeof ApiKeyInput.Type
     ) => Effect.Effect<Summary & { key: string }, Refusal, CurrentOwner>;
@@ -98,18 +97,9 @@ export class ApiKeys extends Context.Service<
       InternalServerError | ApiKeyNotFound,
       CurrentOwner | Scope.Scope
     >;
-    /**
-     * Every enabled, unexpired key granted on the resource, with the scopes it still
-     * defines, sealed and signed for offline verification. An unknown resource, and the
-     * administration resource, whose keys are read with `holder`, get a list with no entries.
-     */
     readonly keyList: (
       identifier: string
     ) => Effect.Effect<{ list: string }, InternalServerError>;
-    /**
-     * The owner of an enabled, unexpired key and the scopes it grants on the resource, read
-     * from the database now. An unknown key, or one whose row does not decode, has none.
-     */
     readonly holder: (
       key: Redacted.Redacted,
       identifier: string
@@ -151,7 +141,7 @@ export class ApiKeys extends Context.Service<
       return {
         list: Effect.gen(function* () {
           const { providerHeaders } = yield* CurrentOwner;
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
 
           const result = yield* provider(
             async () =>
@@ -188,7 +178,7 @@ export class ApiKeys extends Context.Service<
               await auth.api.createApiKey({
                 body: {
                   userId: owner.userId,
-                  name: input.name.trim(),
+                  name: input.name,
                   permissions: Record.map(input.permissions, (scopes) => [
                     ...scopes,
                   ]),
@@ -213,7 +203,7 @@ export class ApiKeys extends Context.Service<
                   body: {
                     userId: owner.userId,
                     keyId: input.keyId,
-                    name: input.name?.trim(),
+                    name: input.name,
                     enabled: input.enabled,
                     permissions:
                       input.permissions &&
@@ -231,7 +221,7 @@ export class ApiKeys extends Context.Service<
           keyId,
         }: typeof ApiKeyId.Type) {
           const { providerHeaders } = yield* CurrentOwner;
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
           yield* provider(
             async () =>
               await auth.api.deleteApiKey({ headers, body: { keyId } }),
@@ -255,7 +245,6 @@ export class ApiKeys extends Context.Service<
           `
             : [];
 
-          // why: a key's digest is its entry's secret, so only the key ID may reach the log
           const entries = yield* Effect.forEach(rows, (row) =>
             Effect.gen(function* () {
               const key = yield* storedKey(row);
@@ -271,7 +260,9 @@ export class ApiKeys extends Context.Service<
               const entry = yield* Effect.tryPromise(
                 async () =>
                   await KeyList.seal(
-                    new Uint8Array(Buffer.from(key.key, "base64url")),
+                    new Uint8Array(
+                      Buffer.from(Redacted.value(key.key), "base64url")
+                    ),
                     identifier,
                     {
                       keyId: key.id,

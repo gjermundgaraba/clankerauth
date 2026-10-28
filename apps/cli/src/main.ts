@@ -42,11 +42,10 @@ const browserOpener = (url: string): readonly [string, readonly string[]] => {
   return ["xdg-open", [url]];
 };
 
-const openInBrowser = (page: URL) =>
+const tryOpenBrowser = (page: URL) =>
   Effect.sync(() => {
     const [command, args] = browserOpener(page.href);
 
-    // why: best effort, as over SSH there is no browser to open; the URL is printed for that.
     spawn(command, args, { stdio: "ignore", detached: true })
       .on("error", constVoid)
       .unref();
@@ -60,7 +59,7 @@ const approve = (browser: boolean) => (page: URL) =>
             `Approve the sign-in in your browser. If it did not open, open this URL:\n\n  ${page.href}\n\n`
           )
         ),
-        openInBrowser(page)
+        tryOpenBrowser(page)
       )
     : Effect.sync(() =>
         process.stderr.write(
@@ -137,7 +136,7 @@ const issuerNamed = Config.option(Config.String("CLANKERAUTH_URL")).pipe(
 const administrationSignIn = Effect.gen(function* () {
   const named = yield* issuerNamed;
 
-  const kept = (yield* Credentials.list().pipe(Effect.mapError(refused)))
+  const kept = (yield* Credentials.list.pipe(Effect.mapError(refused)))
     .filter(
       (signIn) => signIn.resource === administrationIdentifier(signIn.url)
     )
@@ -166,7 +165,6 @@ const administrationSignIn = Effect.gen(function* () {
 
 const administrationKey = Config.Redacted("CLANKERAUTH_TOKEN");
 
-// why: a key the environment gives needs no sign-in, so the issuer is named alongside it
 const administrationTarget = Effect.gen(function* () {
   const given = yield* Config.option(administrationKey).pipe(
     Effect.mapError(refused)

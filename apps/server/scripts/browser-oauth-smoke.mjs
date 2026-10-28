@@ -93,6 +93,18 @@ child.stderr.on("data", (chunk) => {
   output += chunk;
 });
 
+const isHealthy = async () => {
+  try {
+    const health = await fetch(`${issuer}/healthz`, {
+      signal: AbortSignal.timeout(500),
+    });
+
+    return health.ok;
+  } catch {
+    return false;
+  }
+};
+
 let browser;
 
 try {
@@ -103,18 +115,10 @@ try {
       throw new Error(`Server exited during startup: ${output}`);
     }
 
-    try {
-      const health = await fetch(`${issuer}/healthz`, {
-        signal: AbortSignal.timeout(500),
-      });
+    ready = await isHealthy();
 
-      ready = health.ok;
-
-      if (ready) {
-        break;
-      }
-    } catch {
-      // why: the listener may not be bound yet
+    if (ready) {
+      break;
     }
 
     await setTimeout(50);

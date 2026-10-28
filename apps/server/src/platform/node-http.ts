@@ -17,7 +17,6 @@ export const createNodeServer = (listener?: RequestListener) =>
 
 export interface Listener {
   readonly port: number;
-  /** Answers with `handler`, 503 until then. Closing the calling scope stops listening first. */
   readonly serve: (
     handler: RequestListener
   ) => Effect.Effect<void, never, Scope.Scope>;
@@ -37,7 +36,6 @@ export const listen = Effect.fn("NodeHttp.listen")(function* (
     handler(incoming, outgoing);
   });
 
-  // why: stop admitting connections first, then interrupt open responses without waiting
   const stop: Effect.Effect<void> = Effect.callback((resume) => {
     server.close(() => {
       resume(Effect.void);
@@ -78,7 +76,6 @@ const maxBodySize = ByteSize.bytes(65_536);
 
 interface RequestPolicyOptions {
   readonly baseURL: string;
-  /** The direct peer is a trusted reverse proxy: the client is the last X-Forwarded-For hop. */
   readonly trustProxy: boolean;
 }
 

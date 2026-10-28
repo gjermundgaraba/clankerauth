@@ -63,7 +63,6 @@ export const testIssuer = (
 
 export const startGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
   Effect.gen(function* () {
-    // why: fibers forked into this scope start after the services, so closing it stops them first
     const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
 
     const context = yield* Layer.buildWithScope(
@@ -94,7 +93,6 @@ export class WebApplication extends Context.Service<
                   Effect.provideService(
                     effect,
                     HttpServerRequest.HttpServerRequest,
-                    // why: node-http sets the peer header from the socket; tests bypass node-http
                     request.modify({
                       remoteAddress: Option.fromNullishOr(
                         request.headers[peerHeader]
@@ -181,7 +179,6 @@ export const advanceDate = (millis: number) =>
     () => Effect.sync(() => vi.useRealTimers())
   );
 
-/** Dies unless `response` has `status`: a fixture's setup request, not what a test asserts. */
 export const requireStatus = (response: Response, status: number) =>
   response.status === status
     ? Effect.void

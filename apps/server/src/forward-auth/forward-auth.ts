@@ -21,7 +21,6 @@ import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
 import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
 
-// why: an empty header, cookie or parameter counts as absent, as an absent one does
 const nonEmpty = (value: string | null | undefined): value is string =>
   value !== undefined && value !== null && value !== "";
 

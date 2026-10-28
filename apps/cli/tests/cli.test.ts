@@ -67,7 +67,6 @@ const listenUntilFinished = async (server: Server) => {
   return port;
 };
 
-// why: one issuer per test, as the issuer allows twenty token requests a minute.
 const startOwner = async (resources: readonly Published[] = []) => {
   const issuer = await startDisposableIssuer({
     resources: [notes, ...resources],
@@ -161,7 +160,6 @@ const approve = async ({ issuer, cookie }: Owner, authorization: string) => {
     redirect: "manual",
   });
 
-  // why: the issuer answers a script's request with the redirect as JSON, a browser's with a 302.
   const location =
     authorize.status === 302
       ? (authorize.headers.get("location") ?? "")
@@ -265,7 +263,6 @@ const home = async () => {
       (stderr, stop) => {
         const url = /https?:\/\/\S+\/oauth2\/authorize\S+/u.exec(stderr)?.[0];
 
-        // why: a failed approval would otherwise leave `login` waiting out its approval window.
         if (url !== undefined && approval === undefined) {
           approval = approveOrStop(url, stop);
         }
@@ -375,6 +372,8 @@ const Listed = Schema.Struct({
   keys: Schema.Array(Schema.Struct({ keyId: Schema.String })),
 });
 
+const slowerThanProcessStartsMillis = 500;
+
 const slowTokenEndpoint = async ({ issuer }: Owner) => {
   let requests = 0;
 
@@ -383,8 +382,7 @@ const slowTokenEndpoint = async ({ issuer }: Owner) => {
     response: ServerResponse
   ) => {
     const body = await text(request);
-    // why: a refresh slower than eight processes take to start is one only the lock keeps them from repeating.
-    await sleep(500);
+    await sleep(slowerThanProcessStartsMillis);
 
     const answer = await fetch(`${issuer.issuer}/oauth2/token`, {
       method: "POST",
@@ -402,7 +400,6 @@ const slowTokenEndpoint = async ({ issuer }: Owner) => {
   const server = createHttpServer((request, response) => {
     requests += 1;
     forward(request, response).catch(() => {
-      // why: once the head is sent, a failure can only cut the answer short.
       if (response.headersSent) {
         response.destroy();
       } else {
@@ -484,7 +481,6 @@ describe("the clankerauth CLI", () => {
     )?.[0];
 
     expect(printed).toBeDefined();
-    // why: the opener runs detached, so it may write after `login` has exited.
     await expect
       .poll(
         async () =>

@@ -28,7 +28,6 @@ const program = Effect.scoped(
   })
 );
 
-// why: the collector outlives the issuer, so migration and shutdown spans still reach it
 NodeRuntime.runMain(
   Effect.provide(program, issuer.pipe(Layer.provideMerge(telemetry)))
 );

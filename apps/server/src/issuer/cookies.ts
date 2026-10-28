@@ -20,7 +20,6 @@ export const signedSessionCookie = async (
       token,
       context.secret
     ),
-    // why: stops getSession from extending this request-local session's expiry
     serializeSignedCookie(
       context.authCookies.dontRememberToken.name,
       "true",

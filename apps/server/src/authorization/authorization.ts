@@ -7,7 +7,6 @@ export const referencePrefix = "resource:";
 export const resourceReference = (identifier: string) =>
   `${referencePrefix}${identifier}`;
 
-// why: codes live in the verification table, outside the client's foreign keys, so nothing cascades
 export const clearCodes = (
   query: Sql,
   clientId: string | null,
@@ -15,7 +14,6 @@ export const clearCodes = (
 ) =>
   query`DELETE FROM verification WHERE json_valid(value) AND json_extract(value, '$.type') = 'authorization_code' AND (${clientId} IS NULL OR json_extract(value, '$.query.client_id') = ${clientId}) AND (${reference} IS NULL OR json_extract(value, '$.referenceId') = ${reference})`;
 
-// why: the provider has no bulk revocation API
 export const clearAuthorization = Effect.fn("Authorization.clear")(function* (
   query: Sql,
   selection: {

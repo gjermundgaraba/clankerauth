@@ -38,7 +38,6 @@ it.effect(
 
 const baseURL = "http://localhost:3000";
 
-/** Node requires `duplex` for a streaming request body; the DOM lib does not declare it. */
 interface StreamingRequestInit extends RequestInit {
   readonly duplex: "half";
 }

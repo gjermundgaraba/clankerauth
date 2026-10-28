@@ -26,14 +26,10 @@ type KeyForm = typeof Model.Key.Type;
 
 type ClientForm = typeof Model.Client.Type;
 
-/** What the open form needs from the dashboard: what may be granted, and the attributes of the
- *  control that takes focus when the dialog opens. */
 export type ViewInputs = Readonly<{
   resources: readonly ResourceView[];
   initialFocus: Dialog.RenderInfo["initialFocus"];
 }>;
-
-// WORDS
 
 type FormLabels = Readonly<{ title: string; submit: string }>;
 
@@ -73,8 +69,6 @@ const SCOPE_HELP =
   "Optional. Separate scopes with spaces. offline_access is reserved.";
 
 const REDIRECT_URI_ROWS = 3;
-
-// FIELDS
 
 const nameField = (
   config: Readonly<{
@@ -391,8 +385,6 @@ const clientFields = (
     ],
   });
 };
-
-// VIEW
 
 export const view = defineView<Model, Message, ViewInputs>(
   (form, inputs, h): Html =>

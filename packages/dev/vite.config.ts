@@ -4,7 +4,6 @@ import path from "node:path";
 import { Option, Schema } from "effect";
 import { defineConfig } from "vite-plus";
 
-/** The fields a bundled dependency's notice is keyed by. Other `package.json` files are skipped. */
 const decodeManifest = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -15,7 +14,6 @@ const decodeManifest = Schema.decodeUnknownOption(
 );
 
 export default defineConfig({
-  // why: `vp pack` clears dist, and a replayed cache writes nothing, so `edge.d.ts` would vanish.
   run: {
     tasks: {
       build: {

@@ -1,13 +1,3 @@
-/**
- * The deployment edge, for local development: clankerauth's `forward_auth` check and,
- * for upgrades, a reverse proxy. A browser holds no credential of its own; the check
- * trades its forward cookie for a short-lived access token, and this process copies
- * that token upstream, exactly as the Caddy configuration in the README does.
- *
- * It is `node:http` rather than `fetch` because `fetch` overwrites `Sec-Fetch-Mode`,
- * and that header is what tells the issuer whether a request may be redirected through
- * sign-in. Relaying the browser's own header is the whole point of the check.
- */
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
 import type {
@@ -18,7 +8,6 @@ import type {
 } from "node:http";
 import type { Duplex } from "node:stream";
 
-/** Paths a caller reaches with its own bearer, or with none at all. */
 const defaultPublicPaths = ["/mcp", "/.well-known", "/healthz"] as const;
 
 export interface CheckOptions {
@@ -51,7 +40,6 @@ export interface CheckedRequest {
   readonly headers: IncomingHttpHeaders;
 }
 
-/** Whether a resource option selects per request path rather than naming one resource. */
 const isPerPath = (
   resource: CheckOptions["resource"]
 ): resource is (path: string) => string => typeof resource === "function";
@@ -272,7 +260,6 @@ export const upgrade = (options: EdgeOptions) => {
       socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     };
 
-    // why: a reset is routine for a closing socket, and unhandled it crashes the dev server.
     socket.on("error", (error: Error) => {
       options.onError?.(error);
       socket.destroy();
@@ -283,7 +270,6 @@ export const upgrade = (options: EdgeOptions) => {
         hostname: backend.hostname,
         port: backend.port,
         path: request.url ?? "/",
-        // why: Host goes upstream unchanged; the app's request policy answers only its public host.
         headers: { ...copyHeaders(request.headers), authorization },
       });
 
@@ -340,7 +326,6 @@ export const upgrade = (options: EdgeOptions) => {
         return;
       }
 
-      // why: proxying a socket its client left during the check leaks both handshake halves.
       if (socket.destroyed) {
         return;
       }
@@ -415,7 +400,6 @@ export const forwardAuth = (options: EdgeOptions) => {
     apply: "serve" as const,
     configureServer: (server: DevServerLike) => {
       server.middlewares.use(handle);
-      // why: Vite's proxy claims `upgrade` before an async check ends, so this listener goes first.
       server.httpServer?.on("upgrade", (request, socket, head) => {
         take(request, socket, head);
       });
@@ -432,7 +416,7 @@ export const reserveLoopbackPort = async (): Promise<number> => {
   const address = reservation.address();
 
   if (!(address instanceof Object)) {
-    throw new Error("Could not reserve a loopback port");
+    throw new TypeError("Could not reserve a loopback port");
   }
 
   await reservation[Symbol.asyncDispose]();

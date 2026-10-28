@@ -49,8 +49,6 @@ const titleOf = (model: Model): string =>
     Dashboard: () => dashboardTitle(routeOf(model)),
   });
 
-// PAGES
-
 const startingView = (h: HtmlBuilder<Message>): Html =>
   Deck.view(
     {
@@ -151,8 +149,6 @@ const pageView = (model: Model, h: HtmlBuilder<Message>): Html =>
         toParentMessage: (message) => Message.GotDashboardMessage({ message }),
       }),
   });
-
-// VIEW
 
 const isLiveRegionInDialog = (page: Page): boolean =>
   Page.matchOrElse(

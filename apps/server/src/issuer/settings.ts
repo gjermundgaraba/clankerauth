@@ -10,13 +10,9 @@ export interface IssuerSettings {
   database: string;
   host: string;
   port: number;
-  /** Additional browser origins allowed to call MCP with OAuth bearer tokens. */
   mcpAllowedOrigins: readonly string[];
-  /** Take the client address from the last X-Forwarded-For hop set by a trusted reverse proxy. */
   trustProxy: boolean;
-  /** Permit a plain-HTTP issuer beyond loopback, for private networks without TLS. */
   allowInsecureHttp: boolean;
-  /** Parent domain the forward cookie is scoped to, so forward auth covers sibling hosts. */
   cookieDomain: string | undefined;
 }
 

@@ -6,8 +6,6 @@ import {
 import { Array, Option, Schema, String, pipe } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
-// CHANGE
-
 export const Change = defineTaggedUnion({
   PutResource: {
     identifier: Schema.String,
@@ -53,8 +51,6 @@ export const Change = defineTaggedUnion({
 
 export type Change = typeof Change.Type;
 
-// CREDENTIAL
-
 export const Credential = defineTaggedUnion({
   ClientSecret: {
     clientId: Schema.String,
@@ -86,9 +82,6 @@ export const isVoidedBy = (change: Change, credential: Credential): boolean =>
 export const needsReread = (change: Change): boolean =>
   !Change.guards.RotateSecret(change);
 
-// WORDS
-
-/** What a ConfirmDialog asks before a change that revokes or destroys something. */
 export type Confirmation = Readonly<{
   title: string;
   question: string;

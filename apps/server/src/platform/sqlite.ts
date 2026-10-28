@@ -7,20 +7,16 @@ import { InternalServerError } from "@gjermundgaraba/clankerauth-admin-api";
 import { Context, Effect, Exit, Layer, Schema } from "effect";
 import { Kysely, sql as query } from "kysely";
 
-/** Cell values from node:sqlite / Kysely before Schema decoding at query sites. */
 export type SqliteCell = string | number | bigint | boolean | null | Uint8Array;
 
-/** Opaque Better Auth table row; decode columns with Schema before use. */
 export type SqliteRow = Record<string, SqliteCell>;
 
-/** What a query hands a decoder: a cell, a row or the rows, read as stored. */
 export type Persisted =
   | SqliteCell
   | SqliteRow
   | readonly SqliteRow[]
   | undefined;
 
-/** Opaque Better Auth table map keyed by table name. */
 export type DatabaseSchema = Record<string, SqliteRow>;
 
 export const persisted = <T, RD>(schema: Schema.ConstraintDecoder<T, RD>) => {
@@ -97,7 +93,6 @@ export const openDatabase = async (filename: string) => {
       dialect: new NodeSqliteDialect({ database }),
     });
 
-    // why: initializing the dialect makes Kysely own connection cleanup before any query
     await query`SELECT 1`.execute(kysely);
 
     return {
@@ -116,7 +111,6 @@ export const openDatabase = async (filename: string) => {
 export class Database extends Context.Service<
   Database,
   {
-    /** The connection Better Auth runs on, for the provider's own adapter. */
     readonly kysely: Kysely<DatabaseSchema>;
     readonly sql: Sql;
     readonly transaction: <A, E, R>(

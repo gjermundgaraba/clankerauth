@@ -20,8 +20,6 @@ import { signIn } from "../api.ts";
 import { clientsRouter } from "../route.ts";
 import { wallFormView } from "./wall.ts";
 
-// MODEL
-
 const LoginField = Schema.Literals(["Email", "Password"]);
 
 type LoginField = typeof LoginField.Type;
@@ -51,8 +49,6 @@ export type Model = typeof Model.Type;
 
 type UpdateReturn = Update.Return<Model, Message>;
 
-// MESSAGE
-
 export const Message = defineMessageUnion({
   UpdatedEmail: { value: Schema.String },
   UpdatedPassword: { value: Schema.String },
@@ -65,8 +61,6 @@ export const Message = defineMessageUnion({
 });
 
 export type Message = typeof Message.Type;
-
-// INIT
 
 export const init = (search: string, fallback: string): Model => {
   const query = new URLSearchParams(search);
@@ -85,8 +79,6 @@ export const init = (search: string, fallback: string): Model => {
   };
 };
 
-// COMMAND
-
 export const SignIn = Command.define("SignIn", {
   args: { email: Schema.String, password: Schema.String },
   messages: [Message.SucceededSignIn, Message.FailedSignIn],
@@ -99,19 +91,19 @@ export const SignIn = Command.define("SignIn", {
     ),
 });
 
-// why: never redirect off this origin; forward auth continues here and validates the destination
+const sameOriginOrClients = (candidate: string) =>
+  URL.canParse(candidate, location.origin) &&
+  new URL(candidate, location.origin).origin === location.origin
+    ? candidate
+    : clientsRouter();
+
 export const ContinueAfterSignIn = Command.define("ContinueAfterSignIn", {
   args: { destination: Schema.String },
   messages: [Message.CompletedContinueAfterSignIn],
   execute: ({ destination }) =>
-    Effect.suspend(() =>
-      load(
-        URL.canParse(destination, location.origin) &&
-          new URL(destination, location.origin).origin === location.origin
-          ? destination
-          : clientsRouter()
-      )
-    ).pipe(Effect.as(Message.CompletedContinueAfterSignIn())),
+    Effect.suspend(() => load(sameOriginOrClients(destination))).pipe(
+      Effect.as(Message.CompletedContinueAfterSignIn())
+    ),
 });
 
 export const continuationOf = (model: Model) =>
@@ -120,8 +112,6 @@ export const continuationOf = (model: Model) =>
     RedirectTo: ({ destination }) =>
       Option.some(ContinueAfterSignIn({ destination })),
   });
-
-// UPDATE
 
 const FORM_ID = "login";
 
@@ -189,8 +179,6 @@ export const update = (model: Model, message: Message) =>
     CompletedFocus: () => ({ model }),
     CompletedContinueAfterSignIn: () => ({ model }),
   });
-
-// VIEW
 
 const MISSING_SENTENCES: Readonly<Record<LoginField, string>> = {
   Email: "Enter your email address.",

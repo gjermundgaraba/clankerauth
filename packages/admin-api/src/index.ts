@@ -2,7 +2,7 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { Context, Schema } from "effect";
-import type { Effect, Scope } from "effect";
+import type { Effect, Redacted, Scope } from "effect";
 import { HttpApiSchema, HttpApiSecurity } from "effect/http-api";
 
 /**
@@ -126,20 +126,18 @@ export interface Owner {
   /** Whether the caller may change anything; the dashboard session always may. */
   readonly writable: boolean;
   readonly providerHeaders: Effect.Effect<
-    Headers,
+    Redacted.Redacted<Headers>,
     InternalServerError,
     Scope.Scope
   >;
 }
 
-// why: the cookie name varies by deployment, and a layer serves only its own descriptor's binding.
 export const ownerSession = (cookie: string) =>
   Authentication.make("clankerauth.OwnerSession", CurrentOwner, {
     security: HttpApiSecurity.apiKey({ in: "cookie", key: cookie }),
     error: undecided,
   });
 
-// why: a browser sends its cookies itself, so only the server would read this cookie name.
 export const OwnerSession = ownerSession("better-auth.session_token");
 
 export const OwnerToken = Authentication.make(
@@ -182,7 +180,6 @@ export const ClientAuthMethod = Schema.Literals([
 
 export const ApplicationType = Schema.Literals(["web", "native"]);
 
-/** The resources a managed client may obtain, each named once. */
 const ResourceSelection = Schema.Array(Schema.String).check(
   Schema.isUnique({ message: "Choose unique Resources" })
 );
@@ -196,7 +193,6 @@ export const ClientInput = Schema.Struct({
   application_type: ApplicationType,
 });
 
-// why: the provider's update endpoint cannot change `token_endpoint_auth_method`.
 export const ClientUpdateInput = Schema.Struct({
   client_id: Schema.String,
   client_name: Schema.String,
@@ -246,15 +242,14 @@ export const ResourceSummary = Resource.pipe(
   Schema.fieldsAssign({ builtIn: Schema.Boolean })
 );
 
-// why: the issuer trims each field before storing it, so these checks allow surrounding spaces.
 export const ResourceInput = Schema.Struct({
-  identifier: Schema.String,
-  name: Schema.String.check(
-    Schema.isPattern(/\S/u, { message: "Resources require a name" })
+  identifier: Schema.Trim,
+  name: Schema.Trim.check(
+    Schema.isMinLength(1, { message: "Resources require a name" })
   ),
   scopes: Schema.Array(
-    Schema.String.check(
-      Schema.isPattern(/^\s*[\u0021\u0023-\u005B\u005D-\u007E]+\s*$/u, {
+    Schema.Trim.check(
+      Schema.isPattern(/^[\u0021\u0023-\u005B\u005D-\u007E]+$/u, {
         message: "Resources require well-formed custom scopes",
       })
     )
@@ -288,11 +283,6 @@ export const KeyPermissions = Schema.Record(
   Schema.Array(Schema.String)
 );
 
-/**
- * Permissions as the owner grants them: at least one resource, each with scopes named once.
- * A stored key's are `KeyPermissions`, which a key whose permissions no longer decode is
- * listed with, empty.
- */
 const KeyGrants = Schema.Record(
   Schema.String,
   Schema.Array(Schema.String).check(
@@ -309,13 +299,11 @@ const KeyGrants = Schema.Record(
   })
 );
 
-/** A key's name as the owner writes it; the issuer stores it trimmed. */
-const KeyName = Schema.String.check(
-  Schema.isMaxLength(100, { message: "Key names require 1–100 characters" }),
-  Schema.isPattern(/\S/u, { message: "Key names require 1–100 characters" })
+const KeyName = Schema.Trim.check(
+  Schema.isMinLength(1, { message: "Key names require 1–100 characters" }),
+  Schema.isMaxLength(100, { message: "Key names require 1–100 characters" })
 );
 
-// why: an input without an offset reads as UTC, so no instant depends on the host's time zone.
 const Timestamp = Schema.DateTimeUtcFromString;
 
 /**

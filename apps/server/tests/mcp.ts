@@ -35,7 +35,6 @@ export const administrationTools = (
   }).pipe(Effect.provide(Testing.layer(handler)));
 
 interface OfficialClientOptions {
-  /** A web handler, such as `HttpRouter.toWebHandler(routes).handler`. */
   readonly fetch: (request: Request) => Promise<Response>;
   readonly path: string;
   readonly baseUrl: string;

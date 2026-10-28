@@ -4,10 +4,8 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import type { Listing } from "./listing.ts";
 
-/** What every section of the dashboard renders from. */
 export type SectionContext = Readonly<{
   listing: Listing;
-  /** Whether every change is held; see `isHeld`. */
   isHeld: boolean;
 }>;
 

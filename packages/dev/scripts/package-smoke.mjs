@@ -36,7 +36,7 @@ const decodeManifest = Schema.decodeUnknownSync(
 
 const decodeRelease = Schema.decodeUnknownSync(Schema.fromJsonString(Release));
 
-/** @param {string} directory The package's directory. */
+/** @param {string} directory */
 const readManifest = async (directory) =>
   decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
 
@@ -88,7 +88,6 @@ try {
     "@better-auth/api-key",
     "@better-auth/oauth-provider",
   ]) {
-    // why: providers export their dist entry but not their package.json.
     const manifestPath = path.join(
       path.dirname(serverRequire.resolve(provider)),
       "../package.json"

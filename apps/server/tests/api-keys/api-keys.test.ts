@@ -687,7 +687,6 @@ it.live(
         )
       )(response);
 
-      // why: the plugin dates a lifetime in whole seconds itself, so expiry drifts by the request
       expect(Date.parse(created.expiresAt)).toBeGreaterThanOrEqual(
         requested - 1
       );
@@ -1007,7 +1006,6 @@ it.live(
       );
       expect((yield* mcp("tools/list", {}, { cookie: "" })).status).toBe(200);
 
-      // why: the SameSite session cookie is the CSRF boundary, so owner actions ignore Origin
       for (const requestOrigin of ["https://evil.example", ""]) {
         expect(
           (yield* call("/api/listClients", {}, { origin: requestOrigin }))

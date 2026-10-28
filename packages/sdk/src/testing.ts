@@ -1,13 +1,3 @@
-/**
- * A signing fake issuer for tests: the two endpoints a resource server actually calls,
- * and nothing else. Use it where a real issuer would make a test slow or awkward — a
- * token that must expire in two seconds, a key granted on someone else's resource, an
- * outage — and `@gjermundgaraba/clankerauth-dev` where the protocol itself is under test.
- *
- * It signs with a real EdDSA key and publishes it as JWKS, so every token and key list
- * still travels the resource server's own verifier: signature, issuer, audience, type,
- * claims, scopes, and each key's sealed entry. Node only.
- */
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -103,7 +93,7 @@ export const startFakeIssuer = async (
   const address = server.address();
 
   if (!(address instanceof Object)) {
-    throw new Error("The fake issuer failed to bind a TCP port");
+    throw new TypeError("The fake issuer failed to bind a TCP port");
   }
 
   const issuer = `http://127.0.0.1:${address.port}/api/auth`;

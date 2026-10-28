@@ -37,7 +37,6 @@ jobs:
           vp exec pnpm --filter @clankerauth/server deploy --prod /tmp/clankerauth-production
           vp run test:package /tmp/clankerauth-production
 
-  # Builds the image on every run; pushes it from main, tagged sha-<short> and latest.
   image:
     needs: check
     runs-on: ubuntu-24.04

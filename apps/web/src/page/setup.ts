@@ -19,8 +19,6 @@ import type * as Update from "foldkit/update";
 import { issuer, toOwnerSentence } from "../api.ts";
 import { wallFormView } from "./wall.ts";
 
-// MODEL
-
 const SetupField = Schema.Literals(["Email", "Password", "Confirmation"]);
 
 type SetupField = typeof SetupField.Type;
@@ -44,8 +42,6 @@ export const Model = Schema.Struct({
 
 export type Model = typeof Model.Type;
 
-// MESSAGE
-
 const Outcome = Schema.Literals(["Created", "AlreadyOwned"]);
 
 type Outcome = typeof Outcome.Type;
@@ -65,16 +61,12 @@ export const Message = defineMessageUnion({
 
 export type Message = typeof Message.Type;
 
-// OUT MESSAGE
-
 export const OutMessage = defineMessageUnion({
   CreatedOwner: {},
   FoundOwner: {},
 });
 
 export type OutMessage = typeof OutMessage.Type;
-
-// INIT
 
 export const init = (): Model => ({
   email: "",
@@ -85,8 +77,6 @@ export const init = (): Model => ({
   isCreating: false,
   maybeProblem: Option.none(),
 });
-
-// COMMAND
 
 const INPUT_FIELDS = new Map<PropertyKey, SetupField>([
   ["email", "Email"],
@@ -128,8 +118,6 @@ export const SetupOwner = Command.define("SetupOwner", {
       })
     ),
 });
-
-// UPDATE
 
 const FORM_ID = "setup";
 
@@ -203,8 +191,6 @@ export const update = (model: Model, message: Message) =>
       CompletedFocus: () => ({ model }),
     }
   );
-
-// VIEW
 
 const refusalView = (model: Model, h: HtmlBuilder<Message>): readonly Html[] =>
   Option.match(model.maybeProblem, {

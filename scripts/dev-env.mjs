@@ -27,7 +27,6 @@ if (secret.length < 32) {
   );
 }
 
-// why: overrides exported production variables, so dev never touches production identity state.
 Object.assign(process.env, {
   CLANKERAUTH_BASE_URL: "http://localhost:3000",
   CLANKERAUTH_BETTER_AUTH_SECRET: secret,

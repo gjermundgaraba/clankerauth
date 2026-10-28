@@ -28,8 +28,6 @@ import {
 
 type UpdateReturn = Update.Return<Model, Message, Clipboard.Clipboard>;
 
-// COMMAND
-
 export const CheckAccess = Command.define("CheckAccess", {
   messages: [Message.SucceededCheckAccess, Message.FailedCheckAccess],
   execute: issuer.setupStatus().pipe(
@@ -68,15 +66,12 @@ export const LoadUrl = Command.define("LoadUrl", {
   execute: ({ href }) => load(href).pipe(Effect.as(Message.CompletedLoadUrl())),
 });
 
-// why: the browser is already at the address, and assigning it again only jumps to its fragment
 export const ReloadPage = Command.define("ReloadPage", {
   messages: [Message.CompletedReloadPage],
   execute: Effect.sync(() => {
     location.reload();
   }).pipe(Effect.as(Message.CompletedReloadPage())),
 });
-
-// PAGES
 
 const searchOf = (url: Url): string => Option.getOrElse(url.search, () => "");
 
@@ -189,8 +184,6 @@ const isServedBy = (page: Page, route: AppRoute): boolean =>
     Dashboard: () => isDashboardRoute(route),
   });
 
-// INIT
-
 export const init: Runtime.RoutingApplicationInit<
   Model,
   Message,
@@ -204,8 +197,6 @@ export const init: Runtime.RoutingApplicationInit<
   },
   commands: [CheckAccess()],
 });
-
-// UPDATE
 
 const foldSetupOutMessage = Setup.OutMessage.match<
   Update.Step<Model, Message, Clipboard.Clipboard>
@@ -339,8 +330,6 @@ export const update = (model: Model, message: Message) =>
       foldDashboard(model, dashboardMessage),
     GotTipsMessage: ({ message: tipsMessage }) => foldTips(model, tipsMessage),
   });
-
-// SUBSCRIPTION
 
 export const subscriptions = Subscription.lift(Tips.subscriptions("tip"))<
   Model,

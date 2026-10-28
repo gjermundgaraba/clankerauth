@@ -22,9 +22,6 @@ import { decideConsent, publicClientName } from "../api.ts";
 import { codesView } from "./codes.ts";
 import { wallCardView } from "./wall.ts";
 
-// MODEL
-
-/** What a signed authorization request asks, as the provider wrote it into this page's query. */
 const ConsentRequest = Schema.Struct({
   clientId: Schema.String,
   scopes: Schema.Array(Schema.String),
@@ -58,8 +55,6 @@ type Asking = typeof Model.Asking.Type;
 
 type UpdateReturn = Update.Return<Model, Message>;
 
-// MESSAGE
-
 export const Message = defineMessageUnion({
   SucceededFetchClientName: { maybeName: Schema.Option(Schema.String) },
   FailedFetchClientName: { reason: Schema.String },
@@ -72,8 +67,6 @@ export const Message = defineMessageUnion({
 });
 
 export type Message = typeof Message.Type;
-
-// COMMAND
 
 export const FetchClientName = Command.define("FetchClientName", {
   args: { clientId: Schema.String },
@@ -99,8 +92,6 @@ export const DecideConsent = Command.define("DecideConsent", {
       })
     ),
 });
-
-// INIT
 
 const INCOMPLETE =
   "Start authorization from your application; this consent link is incomplete.";
@@ -135,8 +126,6 @@ export const init = (search: string): UpdateReturn =>
     }),
   });
 
-// UPDATE
-
 const NOTHING_GRANTED = "Tick at least one permission, or deny the request.";
 
 const whileAsking = (
@@ -157,7 +146,6 @@ const decided = (
   commands: [DecideConsent({ accept: decision === "Allowing", maybeScope })],
 });
 
-// why: the provider refuses an empty scope, and an omitted scope approves everything requested
 const allowed = (asking: Asking): UpdateReturn =>
   Array.match(asking.granted, {
     onEmpty: () =>
@@ -233,8 +221,6 @@ export const update = (model: Model, message: Message) =>
         }),
       })),
   });
-
-// VIEW
 
 const HEADING = "Allow this connection?";
 

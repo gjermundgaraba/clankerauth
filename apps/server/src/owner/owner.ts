@@ -17,14 +17,7 @@ const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
 export class OwnerAccount extends Context.Service<
   OwnerAccount,
   {
-    /** Setup creates the only account, so the owner is whichever user exists. */
     readonly find: Effect.Effect<string | undefined, InternalServerError>;
-    /**
-     * First-run setup is the only sign-up: the provider route is not mounted, and the
-     * user-creation hook refuses a second account. Setup requests are serialized so a
-     * concurrent one sees the created owner and gets a conflict. The provider signs
-     * the owner in; the returned cookies belong on the response.
-     */
     readonly create: (input: {
       readonly email: string;
       readonly password: string;
@@ -32,7 +25,6 @@ export class OwnerAccount extends Context.Service<
       string[],
       OwnerExists | ProviderRefused | InternalServerError
     >;
-    /** The owner as administration's caller, acting through a temporary provider session. */
     readonly caller: (
       userId: string,
       email: string,
@@ -66,7 +58,6 @@ export class OwnerAccount extends Context.Service<
             readonly email: string;
             readonly password: string;
           }) {
-            // why: the provider refuses an existing email before its hook can answer a conflict
             if ((yield* find) !== undefined) {
               return yield* OwnerExists.of();
             }

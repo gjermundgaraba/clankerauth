@@ -28,8 +28,7 @@ import { setupActions } from "../owner/setup.ts";
 import { Resources } from "../resources/resources.ts";
 import { responseCookies } from "./response-cookies.ts";
 
-// why: MCP tool calls run outside the uninterruptible route middleware, and an abort interrupts them
-const settles =
+const uninterruptibleForMcp =
   <A extends readonly unknown[], B, E, R>(
     handler: (...args: A) => Effect.Effect<B, E, R>
   ) =>
@@ -48,26 +47,25 @@ export const actionRoutes = (mcpAllowedOrigins: readonly string[]) =>
       const owner = Action.implement(
         Administration,
         {
-          listClients: settles(() => clients.list),
-          createClient: settles(clients.create),
-          updateClient: settles(clients.update),
-          deleteClient: settles(clients.delete),
-          revokeClient: settles(clients.revoke),
-          blockClient: settles(clients.block),
-          rotateClientSecret: settles(clients.rotate),
-          setClientAccess: settles(resources.setAccess),
-          getResource: settles(resources.get),
-          putResource: settles(resources.put),
-          deleteResource: settles(resources.delete),
-          listApiKeys: settles(() => keys.list),
-          createApiKey: settles(keys.create),
-          updateApiKey: settles(keys.update),
-          deleteApiKey: settles(keys.delete),
+          listClients: uninterruptibleForMcp(() => clients.list),
+          createClient: uninterruptibleForMcp(clients.create),
+          updateClient: uninterruptibleForMcp(clients.update),
+          deleteClient: uninterruptibleForMcp(clients.delete),
+          revokeClient: uninterruptibleForMcp(clients.revoke),
+          blockClient: uninterruptibleForMcp(clients.block),
+          rotateClientSecret: uninterruptibleForMcp(clients.rotate),
+          setClientAccess: uninterruptibleForMcp(resources.setAccess),
+          getResource: uninterruptibleForMcp(resources.get),
+          putResource: uninterruptibleForMcp(resources.put),
+          deleteResource: uninterruptibleForMcp(resources.delete),
+          listApiKeys: uninterruptibleForMcp(() => keys.list),
+          createApiKey: uninterruptibleForMcp(keys.create),
+          updateApiKey: uninterruptibleForMcp(keys.update),
+          deleteApiKey: uninterruptibleForMcp(keys.delete),
         },
         { authorize: authorizeOwner }
       );
 
-      // why: public, so each handler enforces its own access rules
       const issuer = Action.implement(IssuerActions, {
         setupStatus: setup.setupStatus,
         setupOwner: setup.setupOwner,
@@ -97,7 +95,6 @@ export const actionRoutes = (mcpAllowedOrigins: readonly string[]) =>
         ActionMcp.layerHttp(owner, {
           name: "clankerauth-admin",
           version: manifest.version,
-          // why: native MCP admission checks this allowlist even after authentication
           allowedOrigins: mcpAllowedOrigins,
           instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
           authentication: OwnerToken,

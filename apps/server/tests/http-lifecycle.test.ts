@@ -2,7 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { it } from "@effect/vitest";
 import { UnreadableRequest } from "@gjermundgaraba/clankerauth-admin-api";
-import { Context, Effect, Exit, Fiber, Schema, Scope } from "effect";
+import { Resource } from "@gjermundgaraba/clankerauth-sdk/effect-actions";
+import { Context, Duration, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import type { Cause } from "effect";
 import { constUndefined } from "effect/Function";
 import { generateKeyPair, SignJWT } from "jose";
@@ -15,6 +16,11 @@ import { listen } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { webMcpRequest } from "./mcp.ts";
 import { startGeneration, testSettings } from "./test-issuer.ts";
+
+const pastResourceDeadline = Duration.sum(
+  Resource.verificationDeadline,
+  Duration.millis(500)
+);
 
 const settings = testSettings({ baseURL: "https://issuer.example" });
 
@@ -65,7 +71,6 @@ it.live(
         ).mockImplementation(async (request) => {
           entered.resolve(request);
           await release.promise;
-          // why: this query fails if shutdown closed the database under the provider's work
           await Effect.runPromiseWith(services)(
             Database.use(({ sql }) => sql`SELECT 1`)
           );
@@ -128,7 +133,6 @@ it.live(
 
         const { context } = Context.get(services, Issuer);
         const { hash } = context.password;
-        // why: sign-up hashes inside the provider's transaction, so stalling here holds it open
         vi.spyOn(context.password, "hash").mockImplementation(
           async (password) => {
             entered.resolve(undefined);
@@ -281,8 +285,7 @@ it.live(
           startImmediately: true,
         });
 
-        // why: outlasts the deadline a Resource would apply; the raw verifier has none
-        yield* Effect.sleep("5500 millis");
+        yield* Effect.sleep(pastResourceDeadline);
         expect(answered).toBe(false);
         expect(destroy).not.toHaveBeenCalled();
         release.resolve(undefined);

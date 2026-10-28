@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { fetchClientMetadataResource as secureFetch } from "@better-auth/cimd/node";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { Context, Layer } from "effect";
+import { constVoid } from "effect/Function";
 
 const abortOf = async (
   signal: AbortSignal,
@@ -13,17 +14,11 @@ const abortOf = async (
   throw signal.reason;
 };
 
-const discard = async (late: Promise<Response>) => {
-  try {
-    const response = await late;
+const discard = async (late: Promise<Response>) =>
+  await late
+    .then(async (response) => await response.body?.cancel())
+    .catch(constVoid);
 
-    await response.body?.cancel();
-  } catch {
-    // why: nobody awaits an abandoned fetch, so its late failure is dropped
-  }
-};
-
-// why: the secure transport cannot abort its DNS lookup, so capacity stays held until it settles
 export const createAbortAwareTransport = (
   transport: ClientMetadataResourceFetch,
   maximumPending = 8

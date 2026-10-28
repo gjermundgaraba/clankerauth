@@ -57,20 +57,33 @@ export interface DisposableIssuer {
   port: number;
   directory: string;
   /** Mint a scoped API key and return its secret. Permissions are resource identifier to scopes. */
-  apiKey(options: {
+  apiKey: (options: {
     name?: string;
     permissions: Record<string, string[]>;
-  }): Promise<string>;
+  }) => Promise<string>;
   /**
    * Sign the owner in and seal the forward cookie for `appOrigin`, exactly as a browser
    * does through `/forward-auth/continue`. Needs `cookieDomain`. The `cookies` array is
    * what a browser automation harness adds to a context.
    */
-  ownerSession(appOrigin: string): Promise<OwnerSession>;
+  ownerSession: (appOrigin: string) => Promise<OwnerSession>;
   /** An access token for one resource, obtained through the same forward-auth check. */
-  ownerToken(options: { resource: string; appOrigin: string }): Promise<string>;
+  ownerToken: (options: {
+    resource: string;
+    appOrigin: string;
+  }) => Promise<string>;
   /** Drain requests and close SQLite. Removes the directory only when it is temporary. Idempotent. */
-  close(): Promise<void>;
+  close: () => Promise<void>;
+}
+
+export declare class ProvisioningError extends Error {
+  readonly _tag: "ProvisioningError";
+  readonly name = "ProvisioningError";
+}
+
+export declare class ForwardAuthError extends Error {
+  readonly _tag: "ForwardAuthError";
+  readonly name = "ForwardAuthError";
 }
 
 /** Start an issuer on a loopback port. The caller owns signals and must await close(). */

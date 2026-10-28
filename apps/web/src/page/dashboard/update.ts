@@ -28,14 +28,10 @@ import { Message } from "./message.ts";
 import { Activity, isHeld, isSaving, listingOf } from "./model.ts";
 import type { Model, PendingCredential, Place, Refusal } from "./model.ts";
 
-// LISTING
-
 const listing = listingQuery.lift<Model, Message>({
   parentField: "listing",
   toParentMessage: (message) => Message.GotListingMessage({ message }),
 });
-
-// INIT
 
 export const init = (): Update.Return<Model, Message> =>
   listing.loadIfMissing({
@@ -49,8 +45,6 @@ export const init = (): Update.Return<Model, Message> =>
     activity: Activity.Idle(),
     maybeRefusal: Option.none(),
   });
-
-// UPDATE
 
 type UpdateReturn = Update.Return<Model, Message>;
 

@@ -1,10 +1,9 @@
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Redacted } from "effect";
 
 import { signedSessionCookie } from "../issuer/cookies.ts";
 import { provider } from "../issuer/errors.ts";
 import type { ProviderContext } from "../issuer/issuer.ts";
 
-// why: provider admin APIs need a session cookie, which must never reach a response
 export const providerSessionFor = (context: ProviderContext, origin: string) =>
   Effect.fn("OwnerAccount.providerSession")(function* (userId: string) {
     const expiresAt = new Date((yield* Clock.currentTimeMillis) + 60_000);
@@ -29,5 +28,5 @@ export const providerSessionFor = (context: ProviderContext, origin: string) =>
       async () => await signedSessionCookie(context, session.token)
     );
 
-    return new Headers({ origin, cookie });
+    return Redacted.make(new Headers({ origin, cookie }));
   });

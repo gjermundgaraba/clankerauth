@@ -15,7 +15,6 @@ import {
   transaction,
 } from "../../src/platform/sqlite.ts";
 
-// why: node:sqlite rows have no prototype; a copy compares with plain objects.
 const plain = (rows: readonly object[]) => rows.map((row) => ({ ...row }));
 
 const open = (filename: string) =>

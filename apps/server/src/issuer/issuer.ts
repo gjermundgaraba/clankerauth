@@ -42,14 +42,16 @@ export const accessTokenLifetime = 15 * 60;
 
 export const refreshTokenReuseSeconds = 30;
 
-type RunCallback = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+const isOwner = Predicate.isNotNullish;
+
+type RunWithIssuerServices = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
 const providerOptions = (
   settings: IssuerSettings,
   kysely: Kysely<DatabaseSchema>,
   catalog: ResourceCatalog["Service"],
   cimdTransport: ClientMetadataResourceFetch,
-  runCallback: RunCallback
+  runWithIssuerServices: RunWithIssuerServices
 ) => {
   const jwtOptions = {
     disableSettingJwtHeader: true,
@@ -86,7 +88,7 @@ const providerOptions = (
         if (
           identifier === undefined ||
           identifiers.length !== 1 ||
-          !(await runCallback(catalog.get(identifier)))
+          !(await runWithIssuerServices(catalog.get(identifier)))
         ) {
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
@@ -99,7 +101,9 @@ const providerOptions = (
         if (
           clientId === null ||
           clientId === "" ||
-          !(await runCallback(catalog.hasAccess(clientId, identifier)))
+          !(await runWithIssuerServices(
+            catalog.hasAccess(clientId, identifier)
+          ))
         ) {
           throw new APIError("BAD_REQUEST", {
             error: "invalid_target",
@@ -107,7 +111,9 @@ const providerOptions = (
           });
         }
 
-        const allowed = await runCallback(catalog.scopesFor(identifiers));
+        const allowed = await runWithIssuerServices(
+          catalog.scopesFor(identifiers)
+        );
 
         if (scopes.some((scope) => !allowed.includes(scope))) {
           throw new APIError("BAD_REQUEST", {
@@ -124,16 +130,14 @@ const providerOptions = (
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: true,
     clientRegistrationRequirePKCE: true,
-    // why: consentReferenceId enforces access; the provider's check would need every client linked
     enforcePerClientResources: false,
     accessTokenExpiresIn: accessTokenLifetime,
     refreshTokenExpiresIn: 60 * 60 * 24 * 30,
     refreshTokenReuseInterval: refreshTokenReuseSeconds,
     codeExpiresIn: 120,
-    // why: setup creates the only account, so any authenticated user is the owner
     clientPrivileges: async ({ user, action }) =>
-      !!user && action !== "configure-client-credentials-scopes",
-    resourcePrivileges: async ({ user }) => !!user,
+      isOwner(user) && action !== "configure-client-credentials-scopes",
+    resourcePrivileges: async ({ user }) => isOwner(user),
   });
 
   const options = {
@@ -153,7 +157,6 @@ const providerOptions = (
       user: {
         create: {
           before: async () => {
-            // why: runs inside the provider's sign-up transaction, so it must use that adapter
             const adapter = await getCurrentAdapter(await getAdapter(options));
 
             if ((await adapter.count({ model: "user" })) > 0) {
@@ -169,7 +172,6 @@ const providerOptions = (
       before: createAuthMiddleware(async (ctx) => {
         const body: unknown = ctx.body;
 
-        // why: the provider defaults to web clients, which refuse MCP clients' loopback redirects
         if (ctx.path === "/oauth2/register" && Predicate.isObject(body)) {
           const redirects = body["redirect_uris"];
 
@@ -191,7 +193,6 @@ const providerOptions = (
             body["application_type"] = "native";
           }
 
-          // why: consent picks the resources; the provider would refuse a registration's list
           delete body["resources"];
         }
       }),
@@ -211,7 +212,6 @@ const providerOptions = (
         maximumNameLength: 100,
         enableSessionForAPIKeys: false,
         keyExpiration: { defaultExpiresIn: null, minExpiresIn: 0 },
-        // why: the plugin rate-limits its verify endpoint, which offline verification never calls
         rateLimit: { enabled: false },
       }),
       jwt(jwtOptions),
@@ -237,10 +237,8 @@ const providerOptions = (
 
 type ProviderOptions = ReturnType<typeof providerOptions>["options"];
 
-/** The Better Auth instance this issuer is built on. */
 export type ProviderAuth = Auth<ProviderOptions>;
 
-/** The provider's resolved context: its adapter, cookie names and secret. */
 export type ProviderContext = Awaited<ProviderAuth["$context"]>;
 
 export class Issuer extends Context.Service<
@@ -248,7 +246,6 @@ export class Issuer extends Context.Service<
   {
     readonly auth: ProviderAuth;
     readonly context: ProviderContext;
-    /** Replaces the scopes the provider accepts, which are every resource's. */
     readonly publishScopes: (scopes: readonly string[]) => Effect.Effect<void>;
   }
 >()("clankerauth/Issuer") {
@@ -259,18 +256,19 @@ export class Issuer extends Context.Service<
       const { kysely } = yield* Database;
       const catalog = yield* ResourceCatalog;
       const { fetch } = yield* CimdTransport;
-      // why: provider callbacks get these services, never a later request's identity or scope
-      const runCallback = Effect.runPromiseWith(yield* Effect.context());
+
+      const runWithIssuerServices = Effect.runPromiseWith(
+        yield* Effect.context()
+      );
 
       const { options, oauthPlugin } = providerOptions(
         settings,
         kysely,
         catalog,
         fetch,
-        runCallback
+        runWithIssuerServices
       );
 
-      // why: migration and initialization cannot be cancelled, so the database must outlive them
       const initialized = yield* Effect.gen(function* () {
         const plan = yield* Effect.tryPromise(
           async () => await getMigrations(options)
@@ -292,7 +290,6 @@ export class Issuer extends Context.Service<
           async () => await auth.$context
         );
 
-        // why: the provider mints a missing signing key on first use, and two first uses mint two.
         yield* Effect.tryPromise(async () => await auth.api.getJwks());
 
         return { auth, context };

@@ -531,7 +531,6 @@ describe("first-run setup", () => {
             )
         );
 
-        // why: the library's status for an unparseable encoding varies; any 4xx is a refusal
         expect(response.status, contentType).toBeGreaterThanOrEqual(400);
         expect(response.status, contentType).toBeLessThan(500);
         expect(yield* text(response)).not.toContain(password);
@@ -2115,7 +2114,6 @@ describe("dashboard resources and client access", () => {
           { concurrency: "unbounded" }
         );
 
-        // why: linking races the deletion, so it may lose at any provider step
         expect([200, 400, 404]).toContain(results[0]?.status);
         expect(results[1]?.status).toBe(200);
         const state = yield* listing();

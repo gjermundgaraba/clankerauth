@@ -103,7 +103,6 @@ it.live("MCP preflight rejects unlisted origins, methods, and headers", () =>
       expect(response.headers.has("access-control-allow-origin")).toBe(false);
     }
 
-    // why: stateless 2026-07-28 MCP has no GET stream, session deletion, or session headers
     for (const method of ["GET", "DELETE", "PATCH"]) {
       expect((yield* preflight(handle, clientOrigin, method)).status).toBe(403);
     }

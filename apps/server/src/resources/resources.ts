@@ -15,7 +15,15 @@ import type {
 } from "@gjermundgaraba/clankerauth-admin-api";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import type { Scope } from "effect";
-import { Clock, Context, Effect, Layer, Schema, Semaphore } from "effect";
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Redacted,
+  Schema,
+  Semaphore,
+} from "effect";
 
 import { clearAuthorization } from "../authorization/authorization.ts";
 import { requireManaged } from "../clients/managed.ts";
@@ -40,7 +48,6 @@ const resourceParams = (identifier: string) => ({
   identifier: encodeURIComponent(identifier),
 });
 
-// why: clients send `new URL(resource).href`, the token audience, so only that form matches
 const canonical = (identifier: string) => {
   try {
     return new URL(identifier).href === identifier && !identifier.includes("#");
@@ -52,11 +59,7 @@ const canonical = (identifier: string) => {
 const validateInput = Effect.fn("Resources.validateInput")(function* (
   input: ResourceValue
 ) {
-  const identifier = input.identifier.trim();
-  const name = input.name.trim();
-  const scopes = [...new Set(input.scopes.map((scope) => scope.trim()))];
-
-  if (!canonical(identifier)) {
+  if (!canonical(input.identifier)) {
     return yield* invalidInput(
       ["identifier"],
       "Resource identifiers must be absolute URIs in canonical form, without a fragment"
@@ -64,7 +67,7 @@ const validateInput = Effect.fn("Resources.validateInput")(function* (
   }
 
   const reserved = input.scopes.findIndex((scope) =>
-    protocolScopes.includes(scope.trim())
+    protocolScopes.includes(scope)
   );
 
   if (reserved !== -1) {
@@ -74,7 +77,10 @@ const validateInput = Effect.fn("Resources.validateInput")(function* (
     );
   }
 
-  return { identifier, name, scopes } satisfies ResourceValue;
+  return {
+    ...input,
+    scopes: [...new Set(input.scopes)],
+  } satisfies ResourceValue;
 });
 
 const reserved = (resource: typeof ResourceSummary.Type | undefined) =>
@@ -86,7 +92,6 @@ const reserved = (resource: typeof ResourceSummary.Type | undefined) =>
 
 type Refusal = InternalServerError | ProviderRefused | Action.InvalidInput;
 
-// why: provider APIs own their transactions; never hold one around them on the shared connection
 export class Resources extends Context.Service<
   Resources,
   {
@@ -96,7 +101,6 @@ export class Resources extends Context.Service<
       typeof ResourceSummary.Type,
       InternalServerError | ResourceNotFound
     >;
-    /** Creates the resource, or updates the one with its identifier. */
     readonly put: (
       input: ResourceValue
     ) => Effect.Effect<
@@ -111,7 +115,6 @@ export class Resources extends Context.Service<
       InternalServerError | Action.InvalidInput | ResourceNotFound,
       CurrentOwner | Scope.Scope
     >;
-    /** Links a managed client to exactly these resources, clearing what removed links allowed. */
     readonly setAccess: (
       input: typeof ClientAccessInput.Type
     ) => Effect.Effect<
@@ -121,7 +124,6 @@ export class Resources extends Context.Service<
       | ClientNotFound
       | ClientIsAutomatic
     >;
-    /** `setAccess` for a client this issuer has just registered, so managed. */
     readonly link: (
       clientId: string,
       identifiers: readonly string[]
@@ -142,7 +144,6 @@ export class Resources extends Context.Service<
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         mutating.withPermit(effect);
 
-      // why: the provider reads each client's stored scopes; SQL rebuilds them without a session
       const syncClient = Effect.fn("Resources.syncClient")(function* (
         query: Sql,
         resources: readonly ResourceValue[],
@@ -160,7 +161,6 @@ export class Resources extends Context.Service<
         yield* query`UPDATE oauthClient SET scopes = ${scopes}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${clientId} AND scopes IS NOT ${scopes}`;
       });
 
-      // why: resource and client-scope writes are separate; resync heals a failure between them
       const synchronize = Effect.fn("Resources.synchronize")(function* () {
         const resources = yield* catalog.list;
 
@@ -235,7 +235,7 @@ export class Resources extends Context.Service<
           const resource = yield* validateInput(input);
           const existing = yield* catalog.get(resource.identifier);
           yield* reserved(existing);
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
           const allowedScopes = [...protocolScopes, ...resource.scopes];
 
           if (existing === undefined) {
@@ -274,7 +274,7 @@ export class Resources extends Context.Service<
           identifier,
         }: typeof ResourceId.Type) {
           yield* reserved(yield* catalog.get(identifier));
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
 
           yield* provider(
             async () =>

@@ -25,7 +25,6 @@ const ApiKeyCreated = Schema.Struct({
 });
 
 const startServer = Effect.gen(function* () {
-  // why: no host, so `*.localhost` names reach it over either loopback family
   const listener = yield* listen(0);
   const url = `http://clankerauth.home.localhost:${listener.port}`;
 
@@ -169,14 +168,12 @@ it.live(
           .status,
         200
       );
-      // why: a verifier keeps the key list it read, so only a fresh one sees the disabled key
       yield* verifier.verifyToken(key);
       assert.ok(
         (yield* Effect.flip((yield* verifierFor()).verifyToken(key))) instanceof
           Unauthorized
       );
 
-      // why: Node's fetch is not a navigation, so forward auth answers 401, not a login redirect
       const logout = yield* issuer.call(signOutUrl(issuer.url, app.href));
       assert.equal(logout.status, 302);
       assert.equal(logout.headers.get("location"), app.href);

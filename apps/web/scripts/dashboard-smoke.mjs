@@ -12,7 +12,6 @@ import { Schema } from "effect";
 import { chromium } from "playwright";
 import { preview } from "vite";
 
-// why: the fixture serves the wire form back, as the issuer would
 const decodeKey = Schema.decodeUnknownSync(Schema.toEncoded(ApiKey));
 const decodeKeyInput = Schema.decodeUnknownSync(Schema.toEncoded(ApiKeyInput));
 
@@ -21,23 +20,22 @@ const decodeKeyUpdate = Schema.decodeUnknownSync(
 );
 
 /**
- * @param {unknown} body The response body.
- * @param {number} [status] The response status.
+ * @param {unknown} body
+ * @param {number} [status]
  */
 const ok = (body, status = 200) => ({ status, json: body });
 
-/** @param {import("playwright").Locator} target The control to read. */
+/** @param {import("playwright").Locator} target */
 const isHeld = async (target) =>
   (await target.getAttribute("aria-disabled")) === "true";
 
 /**
- * @param {import("playwright").Locator} scope Where the checkbox is.
- * @param {string} id The checkbox's id.
+ * @param {import("playwright").Locator} scope
+ * @param {string} id
  */
 const checkbox = (scope, id) =>
   scope.locator(`[role="checkbox"][aria-labelledby="${id}-label"]`);
 
-// why: fail here on a missing build, not later on a page that preview cannot serve
 await readFile(new URL("../dist/index.html", import.meta.url));
 
 const server = await preview({
@@ -269,9 +267,9 @@ try {
 
     await route.fulfill(response);
   });
-  /** @param {string} key The request's method and path. */
+  /** @param {string} key */
   const count = (key) => calls.filter((call) => call === key).length;
-  /** @param {string} key The request's method and path. */
+  /** @param {string} key */
   const lastBody = (key) => bodies.get(key)?.at(-1);
   const credentials = page.locator("#credentials");
 
@@ -282,7 +280,7 @@ try {
 
   const dialog = page.locator("dialog[open]");
   const headAction = page.locator(".page-head .page-acts button");
-  /** @param {string} name The button's accessible name. */
+  /** @param {string} name */
   const button = (name) => page.getByRole("button", { name, exact: true });
 
   const waitForIdle = async () =>
@@ -305,8 +303,8 @@ try {
   };
 
   /**
-   * @param {string} label The navigation link's label.
-   * @param {string} heading The section's heading.
+   * @param {string} label
+   * @param {string} heading
    */
   const showSection = async (label, heading) => {
     const loads = count("POST /api/setupStatus");
@@ -320,7 +318,7 @@ try {
     assert.equal(count("POST /api/setupStatus"), loads);
   };
 
-  /** @param {string} label The form's button. */
+  /** @param {string} label */
   const openForm = async (label) => {
     await page
       .locator(".page-head")
@@ -329,12 +327,12 @@ try {
     await assertModalWithFocus();
   };
 
-  /** @param {string} label The submit button's label. */
+  /** @param {string} label */
   const submitForm = async (label) => {
     await dialog.getByRole("button", { name: label, exact: true }).click();
   };
 
-  /** @param {string} label The confirming button's label. */
+  /** @param {string} label */
   const confirmChange = async (label) => {
     await assertModalWithFocus();
     await dialog.getByRole("button", { name: label, exact: true }).click();
@@ -342,15 +340,14 @@ try {
     await waitForIdle();
   };
 
-  // why: `dispatchEvent` skips Playwright's enabled check, so the press reaches the held control
-  /** @param {import("playwright").Locator} target The held control. */
+  /** @param {import("playwright").Locator} target */
   const pressHeld = async (target) => {
     assert.equal(await isHeld(target), true);
     await target.dispatchEvent("click");
     assert.equal(await dialog.count(), 0);
   };
 
-  /** @param {string} id The checkbox's id. */
+  /** @param {string} id */
   const tick = async (id) => {
     await checkbox(dialog, id).click();
   };
@@ -560,7 +557,6 @@ try {
   assert.ok(consent.includes("Client metadata host: client.fixture.invalid"));
   assert.ok(consent.includes(callback));
   assert.equal(await main.locator("em").count(), 0);
-  // why: CDP sees every navigation attempt, including a second one that would cancel the first
   const protocol = await page.context().newCDPSession(page);
   await protocol.send("Page.enable");
   const navigations = [];

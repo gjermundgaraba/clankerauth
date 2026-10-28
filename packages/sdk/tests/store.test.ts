@@ -34,10 +34,6 @@ const capture = (logs: Array<readonly unknown[]>) =>
     }),
   ]);
 
-/**
- * How the stub issuer answers a read: failing, if it is unavailable when the read arrives, and
- * after `hold` completes, if one is set then, and its route's `latency` passes.
- */
 interface Upstream {
   unavailable: boolean;
   hold: Deferred.Deferred<undefined> | undefined;
@@ -166,7 +162,6 @@ it.effect(
         keyId: "key",
       });
       assert.deepEqual(reads, { jwks: 1, lists: 1 });
-      // why: a clone keeps only plain data, so an Effect, Promise, Response or class instance fails.
       assert.deepStrictEqual(structuredClone(store), store);
 
       const elsewhere = yield* verifier(Verifier.store());
@@ -259,7 +254,6 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
         const late = yield* Fiber.join(slow);
         assert.equal(Result.isSuccess(fast), slowFails);
 
-        // why: a slow failure on the key is decided by the list the fast read wrote; JWKS has no held fallback.
         assert.equal(Result.isSuccess(late), !slowFails || credential === key);
       }
 
@@ -349,7 +343,6 @@ it.effect(
       const cold = yield* verify.pipe(Effect.forkChild);
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       yield* TestClock.adjust("1 second");
-      // why: the list is signed with real crypto, which must finish before time moves.
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       yield* TestClock.adjust("2500 millis");
       assert.deepEqual((yield* Fiber.join(cold)).actor, {

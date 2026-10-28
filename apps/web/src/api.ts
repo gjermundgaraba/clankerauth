@@ -5,8 +5,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { createAuthClient } from "better-auth/client";
 import { Array, Effect, Option, Schema, pipe } from "effect";
 
-// ISSUER
-
 export const issuer = ActionHttp.fetchClient(Http);
 
 const isIssuerError = Schema.is(Schema.Union(errors));
@@ -45,9 +43,6 @@ export const toOwnerSentence = <A, E>(
     Effect.catchDefect(() => Effect.fail(UNKNOWN_FAILURE))
   );
 
-// SESSION
-
-// why: the provider client follows OAuth redirects itself; a second navigation would cancel it
 const auth = createAuthClient({ plugins: [oauthProviderClient()] });
 
 const settled = <A>(

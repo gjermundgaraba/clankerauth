@@ -93,7 +93,6 @@ const json = (body: Schema.Json, status = 200) =>
 
 const notFound = json({ error: "Not found" }, 404);
 
-// why: stateless 2026-07-28 MCP is POST only, with no session or resumption headers
 const mcpRequestHeaders = [
   "Authorization",
   "Content-Type",
@@ -135,7 +134,6 @@ export const application = (
           return notFound;
         }
 
-        // why: the provider validates the resource itself on token requests
         if (path === "/oauth2/authorize") {
           const resources =
             request.method === "GET"
@@ -338,7 +336,6 @@ export const application = (
         { global: true }
       );
 
-      // why: provider calls cannot be cancelled, and each route restores interruptibility
       const uninterruptible = HttpRouter.middleware((handler) =>
         Effect.uninterruptible(handler)
       );

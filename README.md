@@ -111,14 +111,14 @@ A list is valid for 24 hours from `iat`, and the SDK reads the next one after a 
 
 ```sh
 vp install --frozen-lockfile
-vp -C apps/web exec playwright install chromium
+vp -C apps/web exec playwright install --with-deps chromium
 vp run dev      # dashboard on :3000, API on :3001, state in .dev/
 vp check       # format, lint and type check (vp check --fix applies the fixes)
 vp run ready    # format, lint, types, builds, all tests
 vp run test:lint # lint-policy regression fixtures
 ```
 
-Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with the Effect and Foldkit presets, configured in `oxlint.config.ts` and `oxfmt.config.ts`, which name every exception and its reason.
+Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with the Effect and Foldkit presets, configured in `oxlint.config.ts` and `oxfmt.config.ts`.
 
 - `packages/admin-api`: the issuer administration contract defined with effect-actions, shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
@@ -128,7 +128,9 @@ Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with 
 - `apps/cli`: the `@gjermundgaraba/clankerauth` npm package, the `clankerauth` command. Its tests run the packed binary against a development issuer.
 - `repos/foldkit`: [Foldkit](https://foldkit.dev)'s source at 0.168.0, vendored as a git subtree for reference; nothing imports from it. Its agent skills are linked from `.agents/skills` and `.claude/skills`.
 
-The packages are public on npm. To release, bump the versions you want to publish, commit, then tag `v<version>` and push the tag: `.github/workflows/npm.yml` publishes every package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish` from its directory.
+The packages are public on npm. To release, bump the versions you want to publish, commit, then tag `v<version>` and push the tag: `.github/workflows/npm.yml` publishes every package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish` from its directory; then run `npm trust github <package> --repo <repo> --file npm.yml` so the workflow can publish the next one.
+
+CI builds the Docker image on every run and pushes it to `ghcr.io/<owner>/<repo>` only from `main`, tagged `sha-<short>` and `latest`.
 
 ### effect-actions integration
 
@@ -186,7 +188,7 @@ clankerauth create-api-key --name deployer --expires-at null \
 
 It is sent as `Authorization: Bearer <key>` to `/api/owner/<action>` or `/mcp`. The `clankerauth` command reads it from `CLANKERAUTH_TOKEN`, with the issuer's origin in `CLANKERAUTH_URL`, and needs no sign-in then; a program hands the same variable to `token` or `authorizing` of the SDK's `/credentials` as `token: Config.Redacted("CLANKERAUTH_TOKEN")`. The issuer reads the key's administration grant from its own database on every request, so disabling, deleting, re-scoping or expiring the key ends administration on the next request. That grant never enters a key list, so administration's stays empty; grants the same key holds on other resources reach their key lists as any key's do, and changes to them apply within about a minute. It acts as the owner, so a key with `clankerauth:write` can do everything the owner can over administration, including creating, re-scoping and deleting administration keys, itself among them; that is allowed, since `clankerauth:write` already amounts to access to every resource. It cannot sign in to the dashboard or call its cookie binding, `/api/<action>`. Give it `clankerauth:read` alone when a program only lists, and an expiry when it should lapse on its own.
 
-See the breaking [0.30.0](docs/releases/0.30.0.md), [0.27.0](docs/releases/0.27.0.md), [0.26.0](docs/releases/0.26.0.md), [0.25.0](docs/releases/0.25.0.md), [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
+See the breaking [0.31.0](docs/releases/0.31.0.md), [0.30.0](docs/releases/0.30.0.md), [0.27.0](docs/releases/0.27.0.md), [0.26.0](docs/releases/0.26.0.md), [0.25.0](docs/releases/0.25.0.md), [0.24.0](docs/releases/0.24.0.md), [0.23.0](docs/releases/0.23.0.md), [0.16.0](docs/releases/0.16.0.md), [0.13.0](docs/releases/0.13.0.md), [0.11.0](docs/releases/0.11.0.md), [0.10.0](docs/releases/0.10.0.md), [0.9.0](docs/releases/0.9.0.md), [0.8.0](docs/releases/0.8.0.md) and [0.7.0](docs/releases/0.7.0.md) release notes before upgrading an issuer or SDK.
 
 [docs/domain-language.md](docs/domain-language.md) defines the vocabulary used in the UI and code, and [AGENTS.md](AGENTS.md) how the code is laid out.
 

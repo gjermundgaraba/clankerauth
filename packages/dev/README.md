@@ -32,7 +32,7 @@ issuer.clientSecret;
 await issuer.close();
 ```
 
-Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client in-process through the server's administration module, and returns. Only the returned issuer is reached over HTTP. The client is first party: once the owner is signed in, an authorization request redirects straight to the callback with a code and no consent step. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them. A start that fails, for example on an invalid `cookieDomain`, rejects after doing the same, so it leaves no port bound and nothing to close.
+Each call listens on a random loopback port, creates a fresh SQLite database and secret in a temporary directory, provisions the owner, the resources and the client in-process through the server's administration module, and returns. Only the returned issuer is reached over HTTP. The client is first party: once the owner is signed in, an authorization request redirects straight to the callback with a code and no consent step. `close()` drains in-flight requests, closes the database and deletes the directory. Nothing is shared between calls and nothing survives them. A start that fails, for example on an invalid `cookieDomain`, rejects with `ProvisioningError` after doing the same, so it leaves no port bound and nothing to close.
 
 ## Provisioning
 
@@ -53,7 +53,7 @@ const token = await issuer.ownerToken({
 });
 ```
 
-`apiKey` returns the secret once. `ownerSession` signs the owner in and seals the forward cookie exactly as `/forward-auth/continue` does for a browser; `cookies` is the name/value form a browser-automation context takes. `ownerToken` runs the same forward-auth check and returns the access token, so a test never assembles a cookie jar.
+`apiKey` returns the secret once. `ownerSession` signs the owner in and seals the forward cookie exactly as `/forward-auth/continue` does for a browser; `cookies` is the name/value form a browser-automation context takes. `ownerToken` runs the same forward-auth check and returns the access token, so a test never assembles a cookie jar. A refused `apiKey` rejects with `ProvisioningError`, and a refused `ownerSession` or `ownerToken` with `ForwardAuthError`. Both classes are exported, and each one's `_tag` is its name.
 
 ## A workspace that survives a restart
 

@@ -10,7 +10,6 @@ import type {
 } from "@modelcontextprotocol/client";
 import { Schema } from "effect";
 
-// why: the SDK reads back what it saved: the fields it checks are typed, the rest kept as saved
 const persisted = <const Fields extends Schema.Struct.Fields>(fields: Fields) =>
   Schema.fromJsonString(
     Schema.StructWithRest(Schema.Struct(fields), [
@@ -36,7 +35,6 @@ const Tokens = persisted({
   issuer: Schema.optional(Schema.String),
 });
 
-// why: sessionStorage carries the flow across real issuer navigations
 const stored = (key: string) => sessionStorage.getItem(key) ?? undefined;
 
 const store = (key: string, value: string) => {
@@ -47,7 +45,6 @@ const decodeClientInformation = Schema.decodeSync(ClientInformation);
 
 const decodeTokens = Schema.decodeSync(Tokens);
 
-// why: nothing saved yet reads as undefined; anything saved that fails to decode throws
 const clientInformation = (): StoredOAuthClientInformation | undefined => {
   const saved = stored("client");
 
@@ -213,7 +210,6 @@ const mcpTest = {
 
 declare global {
   interface Window {
-    // why: the smoke drives the page through Playwright's `page.evaluate`
     mcpTest: typeof mcpTest;
   }
 }

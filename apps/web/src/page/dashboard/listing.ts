@@ -7,7 +7,6 @@ import { Query } from "foldkit/experimental";
 
 import { issuer, toOwnerSentence } from "../../api.ts";
 
-/** Everything the dashboard lists, read in one go after every saved change. */
 export const Listing = Schema.Struct({
   overview: ClientListResult,
   keys: Schema.Array(ApiKey),

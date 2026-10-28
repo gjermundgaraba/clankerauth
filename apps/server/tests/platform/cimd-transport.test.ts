@@ -69,12 +69,9 @@ describe("abort-aware CIMD transport", () => {
     await expect(result).rejects.toMatchObject({
       name: "AbortError",
     });
-    stalled.reject(new Error("DNS eventually failed"));
-    await stalled.promise.catch(() => {});
-    // why: the wrapper releases capacity in a continuation one microtask after settlement
-    await Promise.resolve();
     transport.mockResolvedValue(new Response("recovered"));
-    const recovered = await fetch(url);
+    stalled.reject(new Error("DNS eventually failed"));
+    const recovered = await vi.waitFor(async () => await fetch(url));
     await expect(recovered.text()).resolves.toBe("recovered");
   });
 

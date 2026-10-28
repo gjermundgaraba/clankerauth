@@ -51,7 +51,6 @@ interface ClientEntry {
   readonly redirect_uris: readonly string[];
 }
 
-/** A `listClients` answer, as far as the suite reads it. */
 interface Administration {
   readonly email: string;
   readonly resources: readonly ResourceEntry[];
@@ -68,11 +67,9 @@ interface AuthorizationServerMetadata {
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
-/** Anything `in` can probe: an object or an array, not `null` or another primitive. */
 const isObject = (value: unknown): value is object =>
   typeof value === "object" && value !== null;
 
-/** An array, with its elements still unread. */
 const isArray = (value: unknown): value is unknown[] => Array.isArray(value);
 
 const isNamed = (value: unknown): value is Named =>
@@ -123,7 +120,6 @@ const isAuthorizationServerMetadata = (
   "authorization_endpoint" in value &&
   isString(value.authorization_endpoint);
 
-/** Decode one base64url JSON segment of a compact JWT, failing the test unless `guard` accepts it. */
 const decodeSegment = <Decoded,>(
   segment: string,
   guard: (value: unknown) => value is Decoded
@@ -137,14 +133,12 @@ const decodeSegment = <Decoded,>(
   return decoded;
 };
 
-/** The part of `value` before the first `separator`, or all of it. */
 const untilFirst = (value: string, separator: string) => {
   const end = value.indexOf(separator);
 
   return end === -1 ? value : value.slice(0, end);
 };
 
-/** The `name=value` pairs of a response's cookies, as a request's cookie header. */
 const cookieHeader = (response: Response) =>
   response.headers
     .getSetCookie()
@@ -166,7 +160,6 @@ const options = {
   },
 };
 
-/** The keys a signed key list carries for one resource, or the status it was refused with. */
 const listed = async (
   issuer: string,
   asked: string
@@ -328,7 +321,6 @@ await test("a cookie domain serves forward auth: the signed-in owner gets a reso
   try {
     assert.equal(new URL(issuer.url).hostname, "clankerauth.notes.localhost");
     assert.equal(issuer.issuer, `${issuer.url}/api/auth`);
-    // why: Node's fetch is a script's request, not a navigation, so it is refused in place.
     const anonymous = await forward(issuer, "");
     assert.equal(anonymous.status, 401);
     await anonymous.body?.cancel();
@@ -396,7 +388,6 @@ await test("new runs have independent credentials and identity databases", async
   await assert.rejects(access(second.directory), { code: "ENOENT" });
 });
 
-/** Wait for the first chunk a socket receives, as `once(socket, "data")` does. */
 const firstChunk = async (socket: Duplex): Promise<Buffer> => {
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
   socket.once("data", resolve);
@@ -415,7 +406,6 @@ const directories = async () => {
     .toSorted();
 };
 
-/** Whether a server can listen on a loopback port again. */
 const portFree = async (port: number) => {
   const probe = createServer();
   const listening = once(probe, "listening");
@@ -442,7 +432,7 @@ await test("failed provisioning removes its temporary directory and listening se
       port,
       resources: [{ ...resource, identifier: "invalid" }],
     }),
-    /provisioning failed/u
+    { _tag: "ProvisioningError", message: /provisioning failed/u }
   );
   assert.deepEqual(await directories(), before);
   assert.equal(await portFree(port), true);
@@ -454,7 +444,7 @@ await test("a start refused after binding, by an invalid cookieDomain, frees its
 
   await assert.rejects(
     startDisposableIssuer({ ...options, port, cookieDomain: "localhost" }),
-    /CLANKERAUTH_COOKIE_DOMAIN/u
+    { _tag: "ProvisioningError", message: /CLANKERAUTH_COOKIE_DOMAIN/u }
   );
   assert.deepEqual(await directories(), before);
   assert.equal(await portFree(port), true);
@@ -465,7 +455,6 @@ await test("close() does not wait for a request whose body never arrives", async
   const { port } = new URL(issuer.url);
   const socket = connect(Number(port), "127.0.0.1");
   await once(socket, "connect");
-  // why: a sign-in handler waits uninterruptibly on a body the client never sends.
   socket.write(
     `POST /api/auth/sign-in/email HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: ${issuer.url}\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n`
   );
@@ -582,7 +571,6 @@ await test("test hooks serve CIMD fixtures and observe real issuer HTTP requests
   });
 
   try {
-    // why: `deepEqual` narrows its subject to the expected value's type, which for `[]` is `never[]`.
     assert.deepEqual<ObservedRequest[]>(requests, []);
     const discoveryURL = `${issuer.issuer}/.well-known/oauth-authorization-server`;
     const discoveryResponse = await fetch(discoveryURL);
@@ -694,7 +682,6 @@ await test(
   }
 );
 
-/** Sign the owner in and read the administration state. */
 const administered = async (
   issuer: DisposableIssuer
 ): Promise<Administration> => {
@@ -857,7 +844,6 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
 
   const seen: Array<string | null> = [];
   const errors: string[] = [];
-  // why: an upgraded socket is no longer its server's to close, so the test destroys each one.
   const sockets = new Set<Duplex>();
 
   const track = (socket: Duplex) => {
@@ -936,7 +922,6 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
   edge.listen(port, "127.0.0.1");
   await edgeListening;
 
-  // why: `fetch` owns Sec-Fetch-Mode, the header that decides whether sign-in may redirect.
   const get = async (target: string, headers: OutgoingHttpHeaders = {}) => {
     const attempt = request(`http://127.0.0.1:${port}${target}`, { headers });
 
@@ -965,7 +950,6 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     assert.ok(contentType !== undefined);
     assert.match(contentType, /application\/json/u);
     assert.deepEqual(JSON.parse(anonymous.body), { error: "unauthenticated" });
-    // why: `deepEqual` narrows its subject to the expected value's type, which for `[]` is `never[]`.
     assert.deepEqual<Array<string | null>>(seen, []);
 
     const probe = await get("/healthz");

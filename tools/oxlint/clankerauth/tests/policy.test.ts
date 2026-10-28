@@ -11,7 +11,13 @@ const diagnostic = /^[^:]+:(?<line>\d+):\d+: .* \[\w+\/(?<code>[^\]]+)\]$/u;
 
 const summary = /^\d+ problems?$/u;
 
-// why: fixtures run the installed linter on the repository's real policy, overrides included.
+const expectEveryLineParsed = (lines: readonly string[], stderr: string) => {
+  expect(
+    lines.filter((line) => !diagnostic.test(line) && !summary.test(line)),
+    stderr
+  ).toStrictEqual([]);
+};
+
 const ruleLines = async (
   rule: string,
   folder: string,
@@ -34,11 +40,7 @@ const ruleLines = async (
 
     const lines = result.stdout.split("\n").filter((line) => line !== "");
 
-    // why: an unreadable line fails the test, so a changed format cannot pass as no findings
-    expect(
-      lines.filter((line) => !diagnostic.test(line) && !summary.test(line)),
-      result.stderr
-    ).toStrictEqual([]);
+    expectEveryLineParsed(lines, result.stderr);
 
     return lines
       .flatMap((line) => {

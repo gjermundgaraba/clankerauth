@@ -1,10 +1,4 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-/**
- * The identity a browser page needs, without any verification code. This entry point is
- * browser-safe: it declares the identity a protected contract states, the `whoami` contract
- * and the issuer's sign-out URL, so contracts, bindings and pages import it directly, and a
- * server answers `Whoami` with its resource's `session`.
- */
 import { Context, Schema } from "effect";
 
 import type { Principal as Verified } from "./verify.ts";

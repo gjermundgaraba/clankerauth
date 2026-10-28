@@ -1,15 +1,3 @@
-/**
- * The key list: how an issuer publishes the API keys granted on one resource, so its
- * resource server verifies them offline without learning who else holds what.
- *
- * Each entry is found by, and sealed under, values derived from the key's SHA-256 digest
- * — what the issuer stores — and the resource identifier. Only a holder of the key can
- * locate or read its entry. Anyone else still sees how many entries a resource has, when
- * they come and go, and roughly how large each grant is. A digest cannot be reversed, so
- * neither the list nor the issuer's store yields a key.
- *
- * Sealing is exported for issuers, including fakes in tests; a resource server only opens.
- */
 import { Schema } from "effect";
 import { base64url } from "jose";
 
@@ -55,7 +43,6 @@ const encoder = new TextEncoder();
 export const digest = async (key: string) =>
   new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(key)));
 
-/** One key's entry ID and sealing key on one resource. */
 const derive = async (keyDigest: Uint8Array<ArrayBuffer>, resource: string) => {
   const material = await crypto.subtle.importKey(
     "raw",

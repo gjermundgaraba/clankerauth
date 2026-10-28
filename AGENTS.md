@@ -56,7 +56,8 @@ such as `CurrentOwner`. `services.ts` builds the graph, and Layers are chosen in
 server source importable from outside `apps/server`.
 
 `CurrentOwner.providerHeaders` is the provider session administration acts through, so the
-dashboard reuses its request's cookie instead of opening a session per call.
+dashboard reuses its request's cookie instead of opening a session per call. It is `Redacted`:
+unwrap it only to hand it to the provider.
 
 ## Web (`apps/web/src`)
 
@@ -88,16 +89,59 @@ Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `
 
 ## Lint and format
 
-`vp check` formats, lints and type-checks; `vp check --fix` applies the safe fixes. The lint
-config is `oxlint.config.ts`: Ultracite's core, anti-slop and Vitest presets, `@effect/tsgo`'s
-recommended Effect preset, Foldkit's recommended preset for `apps/web/src`, and the
+`vp check` formats, lints and type-checks; `vp check --fix` applies the safe fixes. Lint comes
+from `@clanker-stuff/oxlint-config` through `config()` in `oxlint.config.ts`, with this
+repository's overrides there: Foldkit's recommended preset for `apps/web/src` and the
 `clankerauth` plugin. Warnings fail the check. `vp install` patches the linter for the Effect
 rules (the `prepare` script); after installing with `--ignore-scripts`, run `vp run prepare`.
+Fix the code rather than add a lint exception. `vp config` rewrites the Vite+ block of this
+file on every install, so the formatter skips `AGENTS.md`.
 
-Every departure from the presets is in `oxlint.config.ts`, beside its reason. The shared
-exception block at its top is the same in every repository that uses it. A new exception, or a
-change to an existing one, needs the maintainer's approval; fix the code otherwise. There are
-no inline `oxlint-disable` comments.
+## Constraints from dependencies
+
+What Better Auth, its plugins and the platform force on the code:
+
+- Provider calls cannot be cancelled. HTTP routes run them uninterruptibly, and migration and
+  initialization finish before the database closes.
+- Provider APIs own their transactions: never hold one around them on the shared connection.
+  The sign-up hook runs inside the provider's transaction, so it reads through that adapter,
+  and the provider refuses an existing email before the hook can answer a conflict.
+- Authorization codes live in the `verification` table, outside the client's foreign keys, so
+  deleting a client cascades nothing to them. There is no bulk revocation API.
+- `consentReferenceId` enforces resource access; the provider's per-client check is off
+  because it needs every client linked to its resources. The provider validates the resource
+  on token requests itself. Its client scopes are rebuilt with SQL, without a session.
+- Dynamic registration defaults to web clients, which refuse the loopback redirects MCP
+  clients register, so a loopback registration becomes `native`; its `resources` are dropped
+  because consent picks them.
+- The plain create-client endpoint drops `skip_consent`; the administrative one keeps it. The
+  update endpoint cannot change `token_endpoint_auth_method`. A public client's secret fields
+  come back `undefined`.
+- The JWT plugin mints a missing signing key on first use, and two first uses mint two, so the
+  issuer reads the JWKS once at startup. The API-key plugin's rate limit guards only its verify
+  endpoint, which offline verification never calls, so it is off.
+- Core errors carry `message`; the OAuth provider sends `error_description`.
+- The `dontRememberToken` cookie keeps `getSession` from extending a request-local session.
+- The provider's browser client follows OAuth redirects itself. It refuses an empty scope, and
+  an omitted scope approves everything requested.
+- The secure CIMD transport cannot abort its DNS lookup, so its capacity stays held until the
+  lookup settles. Kysely owns connection cleanup once its dialect is initialized.
+- Stateless MCP (2026-07-28) is POST only, with no session or resumption headers.
+- Credentials refresh uninterruptibly: the issuer rotates the refresh token as it answers.
+- Node's `fetch` sets `Sec-Fetch-Mode`, the header that tells the issuer whether a request may
+  be redirected through sign-in, so the dev edge relays with `node:http`. Vite's proxy claims
+  `upgrade` before an async check ends, so the edge's listener goes first, and a socket reset
+  is reported, never thrown, since it would crash the dev server.
+- Vite+'s task cache does not track the TypeScript 7 compiler's reads, so the SDK and contract
+  builds are uncached; in the dev package `vp pack` clears `dist`, so its build is uncached
+  too. `pnpm pack` resolves `catalog:` in a manifest; `npm pack` does not.
+
+## Dependencies and environments
+
+- Dependabot updates only the SHA-pinned GitHub Actions; npm dependencies move by hand through
+  the pnpm catalog.
+- `.agents/setup` prepares an agent environment. Do not snapshot identity state, owner
+  credentials or signing secrets into it.
 
 ## Effect
 

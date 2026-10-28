@@ -20,17 +20,13 @@ export const execute = (
           ...Context.getOrUndefined(context, FetchHttpClient.RequestInit),
           redirect: "manual",
         }),
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailable({ operation: "http.request", cause })
+        Effect.mapError((cause) =>
+          ProviderUnavailable.of("http.request", cause)
         ),
         Effect.filterOrFail(
           (response) => response.status < 300 || response.status >= 400,
           (response) =>
-            new ProviderUnavailable({
-              operation: "http.redirect",
-              cause: { status: response.status },
-            })
+            ProviderUnavailable.of("http.redirect", { status: response.status })
         )
       )
   );

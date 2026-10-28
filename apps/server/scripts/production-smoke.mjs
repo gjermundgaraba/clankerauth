@@ -50,6 +50,18 @@ const password = randomBytes(24).toString("hex");
 /** @type {import("node:child_process").ChildProcess | undefined} */
 let child;
 
+const isHealthy = async () => {
+  try {
+    const health = await fetch(`${baseURL}/healthz`, {
+      signal: AbortSignal.timeout(500),
+    });
+
+    return health.ok;
+  } catch {
+    return false;
+  }
+};
+
 const start = async () => {
   child = spawn(process.execPath, [path.join(root, "dist/main.mjs")], {
     cwd: directory,
@@ -62,16 +74,8 @@ const start = async () => {
       throw new Error("Production server exited during startup");
     }
 
-    try {
-      const health = await fetch(`${baseURL}/healthz`, {
-        signal: AbortSignal.timeout(500),
-      });
-
-      if (health.ok) {
-        return;
-      }
-    } catch {
-      // why: the listener may not be bound yet
+    if (await isHealthy()) {
+      return;
     }
 
     await setTimeout(50);
@@ -146,7 +150,7 @@ const post = async (pathname, body, headers = {}) =>
     body: JSON.stringify(body),
   });
 
-/** @param {string} value The password to sign in with. */
+/** @param {string} value */
 const login = async (value) =>
   await post(
     "/api/auth/sign-in/email",
@@ -274,7 +278,6 @@ try {
     redirect: "manual",
   });
 
-  // why: fetch requests get the provider's redirect descriptor; navigations get a 302
   assert.equal(authorize.status, 200, await authorize.clone().text());
 
   const consentUrl = new URL(

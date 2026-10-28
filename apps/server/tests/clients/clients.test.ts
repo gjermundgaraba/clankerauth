@@ -6,7 +6,7 @@ import {
   ClientNotFound,
   CurrentOwner,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Context, Effect, Exit, Layer, Schema } from "effect";
+import { Context, Duration, Effect, Exit, Layer, Schema } from "effect";
 import { beforeEach, describe, expect } from "vite-plus/test";
 
 import { Clients } from "../../src/clients/clients.ts";
@@ -56,6 +56,8 @@ interface ClientMetadata {
 let fetches: number;
 
 let metadata: ClientMetadata;
+
+const metadataMaxAge = Duration.seconds(1);
 
 let metadataCacheControl: string;
 
@@ -300,7 +302,7 @@ const clientsIssuer = () =>
 describe("clients", () => {
   beforeEach(() => {
     fetches = 0;
-    metadataCacheControl = "max-age=1";
+    metadataCacheControl = `max-age=${Duration.toSeconds(metadataMaxAge)}`;
     metadata = {
       client_id: clientId,
       client_name: "Metadata client",
@@ -421,8 +423,7 @@ describe("clients", () => {
         expect((yield* refresh(clientId, tokens.refresh_token)).status).toBe(
           400
         );
-        // why: outlasts the metadata cache, so the next authorization fetches the document again
-        yield* Effect.sleep("1100 millis");
+        yield* Effect.sleep(Duration.sum(metadataMaxAge, Duration.millis(100)));
         expect(yield* consentRequired(clientId)).not.toContain("/consent");
         expect(fetches).toBe(2);
         expect(

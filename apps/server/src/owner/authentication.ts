@@ -44,7 +44,7 @@ export const sessionOwner = (authentication: typeof OwnerSession) =>
           }
 
           return {
-            providerHeaders: Effect.succeed(headers),
+            providerHeaders: Effect.succeed(Redacted.make(headers)),
             userId: session.user.id,
             email: session.user.email,
             writable: true,
@@ -82,8 +82,9 @@ export const bearerOwner = (resource: AdministrationResource) =>
         return owner.caller(row.id, row.email, writable);
       });
 
-      // why: read on every request, so disabling, deleting or re-scoping a key applies to the next one
-      const keyOwner = Effect.fnUntraced(function* (key: Redacted.Redacted) {
+      const liveKeyOwner = Effect.fnUntraced(function* (
+        key: Redacted.Redacted
+      ) {
         const holder = yield* keys.holder(key, identifier);
 
         if (
@@ -142,7 +143,7 @@ export const bearerOwner = (resource: AdministrationResource) =>
 
       return (token: Redacted.Redacted) =>
         Redacted.value(token).startsWith(KeyList.keyPrefix)
-          ? keyOwner(token)
+          ? liveKeyOwner(token)
           : clientOwner(token);
     }),
     { protectedResource: resource.protectedResource }

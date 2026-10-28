@@ -15,9 +15,13 @@ import {
   validateSettings,
 } from "@clankerauth/server/embed";
 import { NodeFileSystem } from "@effect/platform-node";
-import { CurrentOwner } from "@gjermundgaraba/clankerauth-admin-api";
+import {
+  CurrentOwner,
+  ResourceInput,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Context,
+  Data,
   Effect,
   Exit,
   Fiber,
@@ -42,7 +46,6 @@ import type {
 
 const credentialsFile = "credentials.json";
 
-/** The credentials file is written by this package only, so its shape is a schema. */
 const IdentityFile = Schema.Struct({
   email: Schema.String,
   password: Schema.String,
@@ -66,11 +69,6 @@ const saveIdentity = (directory: string, identity: Identity) =>
     )
   );
 
-/**
- * A run's identity. A disposable issuer invents one; a persistent workspace keeps it
- * in its data directory, so the owner account, the signing secret and the registered
- * client survive a restart. The file is the whole secret: it is the workspace.
- */
 const loadIdentity = Effect.fn("Dev.identity")(function* (
   directory: string,
   persistent: boolean
@@ -97,10 +95,23 @@ const loadIdentity = Effect.fn("Dev.identity")(function* (
   return fresh;
 });
 
-const provisioningFailed = (cause: unknown) =>
-  new Error("Disposable issuer provisioning failed", { cause });
+export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
-/** Sign the owner in and seal the forward cookie, the way a browser does. */
+export class ForwardAuthError extends Data.TaggedError("ForwardAuthError")<{
+  readonly message: string;
+}> {}
+
+const provisioningFailed = (cause: unknown) =>
+  new ProvisioningError({
+    message: "Disposable issuer provisioning failed",
+    cause,
+  });
+
+const decodeResources = Schema.decodeEffect(Schema.Array(ResourceInput));
+
 const ownerSession = Effect.fn("Dev.ownerSession")(function* (
   issuerUrl: string,
   forwardOrigin: string | undefined,
@@ -108,11 +119,10 @@ const ownerSession = Effect.fn("Dev.ownerSession")(function* (
   appOrigin: string
 ) {
   if (forwardOrigin === undefined) {
-    return yield* Effect.fail(
-      new Error(
-        "A forward-auth session needs a cookieDomain; the issuer serves none"
-      )
-    );
+    return yield* new ForwardAuthError({
+      message:
+        "A forward-auth session needs a cookieDomain; the issuer serves none",
+    });
   }
 
   const client = yield* HttpClient.HttpClient;
@@ -123,13 +133,12 @@ const ownerSession = Effect.fn("Dev.ownerSession")(function* (
     }).pipe(HttpClientRequest.bodyJsonUnsafe(owner))
   );
 
-  // why: every response body is read to completion, so no connection is left half-consumed.
   yield* signIn.text;
 
   if (signIn.status !== 200) {
-    return yield* Effect.fail(
-      new Error(`Owner sign-in failed with HTTP ${signIn.status}`)
-    );
+    return yield* new ForwardAuthError({
+      message: `Owner sign-in failed with HTTP ${signIn.status}`,
+    });
   }
 
   const destination = new URL("/", appOrigin).href;
@@ -151,30 +160,27 @@ const ownerSession = Effect.fn("Dev.ownerSession")(function* (
   };
 });
 
-/** The platform this package runs on. A forward-auth answer is read, never followed. */
 const platform = Layer.mergeAll(
   NodeFileSystem.layer,
   FetchHttpClient.layer,
   Layer.succeed(FetchHttpClient.RequestInit, { redirect: "manual" })
 );
 
-/**
- * One running issuer, built into the caller's scope. Closing the scope closes sockets and
- * frees the port, then awaits request fibers, then closes SQLite, then removes a
- * temporary directory.
- */
 const makeWorkspace = Effect.fnUntraced(function* (
   options: DisposableIssuerOptions
 ) {
+  const declared = yield* decodeResources(options.resources).pipe(
+    Effect.mapError(provisioningFailed)
+  );
+
   const fs = yield* FileSystem.FileSystem;
   const staticRoot = fileURLToPath(new URL("web/", import.meta.url));
 
   if (!(yield* fs.exists(path.join(staticRoot, "index.html")))) {
-    return yield* Effect.fail(
-      new Error(
-        "The @gjermundgaraba/clankerauth-dev installation is missing its bundled dashboard assets"
-      )
-    );
+    return yield* new ProvisioningError({
+      message:
+        "The @gjermundgaraba/clankerauth-dev installation is missing its bundled dashboard assets",
+    });
   }
 
   const { dataDir } = options;
@@ -190,11 +196,9 @@ const makeWorkspace = Effect.fnUntraced(function* (
           path.resolve(dataDir)
         );
 
-  // why: listen first, as the issuer's URL needs the port
   const listener = yield* listen(options.port ?? 0, "127.0.0.1");
   const { port } = listener;
 
-  // why: a cookie shared across hosts needs a common parent domain, which an IP address lacks.
   const url =
     options.cookieDomain === undefined
       ? `http://127.0.0.1:${port}`
@@ -212,7 +216,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
     trustProxy: false,
     allowInsecureHttp: options.cookieDomain !== undefined,
     cookieDomain: options.cookieDomain,
-  }).pipe(Effect.mapError(({ message }) => new Error(message)));
+  }).pipe(Effect.mapError(({ message }) => new ProvisioningError({ message })));
 
   const issuer = yield* Layer.build(
     issuerServices(
@@ -221,7 +225,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
     )
   ).pipe(
     Effect.catchTag("SchemaRepairRequired", ({ message }) =>
-      Effect.fail(new Error(message))
+      Effect.fail(new ProvisioningError({ message }))
     )
   );
 
@@ -259,11 +263,6 @@ const makeWorkspace = Effect.fnUntraced(function* (
   const resources = Context.get(issuer, Resources);
   const keys = Context.get(issuer, ApiKeys);
 
-  /**
-   * Run administration as the owner, the way the dashboard's session does. No code path
-   * detaches a provider Promise: like a request handler, this runs uninterruptibly, so
-   * `close()` during a call waits for it and its session cleanup before SQLite closes.
-   */
   const asOwner = <A, E>(
     operation: (
       userId: string
@@ -293,7 +292,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
   }
 
   yield* asOwner(() =>
-    Effect.forEach(options.resources, (resource) => resources.put(resource), {
+    Effect.forEach(declared, (resource) => resources.put(resource), {
       discard: true,
     })
   );
@@ -327,9 +326,9 @@ const makeWorkspace = Effect.fnUntraced(function* (
   const clientSecret = registered.client_secret;
 
   if (clientSecret === undefined) {
-    return yield* Effect.fail(
-      new Error("Disposable issuer did not return client credentials")
-    );
+    return yield* new ProvisioningError({
+      message: "Disposable issuer did not return client credentials",
+    });
   }
 
   if (dataDir !== undefined) {
@@ -397,9 +396,9 @@ const makeWorkspace = Effect.fnUntraced(function* (
       const { authorization } = decision.headers;
 
       if (decision.status !== 204 || authorization === undefined) {
-        return yield* Effect.fail(
-          new Error(`Forward auth issued no token (HTTP ${decision.status})`)
-        );
+        return yield* new ForwardAuthError({
+          message: `Forward auth issued no token (HTTP ${decision.status})`,
+        });
       }
 
       return authorization.replace(/^Bearer /iu, "");
@@ -407,13 +406,11 @@ const makeWorkspace = Effect.fnUntraced(function* (
   };
 });
 
-/** Start an issuer on a loopback port. The caller owns signals; `close()` waits for calls in flight. */
 export const startDisposableIssuer = async (
   options: DisposableIssuerOptions
 ): Promise<DisposableIssuer> => {
   const scope = Scope.makeUnsafe();
 
-  // why: fibers join the scope, so `close()` interrupts a call in flight before SQLite closes.
   const run = async <A, E>(
     effect: Effect.Effect<A, E, Layer.Success<typeof platform> | Scope.Scope>
   ) =>

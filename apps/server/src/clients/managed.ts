@@ -7,7 +7,6 @@ import { Effect, Schema } from "effect";
 import { persisted } from "../platform/sqlite.ts";
 import type { Sql } from "../platform/sqlite.ts";
 
-// why: a client that registered itself, through DCR or CIMD, has no owning user
 export const isAutomatic = (client: { readonly userId: string | null }) =>
   client.userId === null;
 

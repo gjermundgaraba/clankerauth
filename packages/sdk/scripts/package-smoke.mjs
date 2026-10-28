@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import { build } from "vite";
 
 import {
@@ -17,7 +17,7 @@ import {
 const root = fileURLToPath(new URL("../", import.meta.url));
 
 const Manifest = Schema.Struct({
-  name: Schema.String,
+  name: Schema.Literal("@gjermundgaraba/clankerauth-sdk"),
   version: Schema.String,
   sideEffects: Schema.Boolean,
   dependencies: Schema.Record(Schema.String, Schema.String),
@@ -37,7 +37,7 @@ const decodeManifest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Manifest)
 );
 
-/** @param {string} directory The package's directory. */
+/** @param {string} directory */
 const readManifest = async (directory) =>
   decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
 
@@ -47,7 +47,7 @@ const directory = await mkdtemp(
   path.join(tmpdir(), "clankerauth-sdk-install-")
 );
 
-/** @param {string} file The file to check, in the install directory. */
+/** @param {string} file */
 const typeCheck = async (file) =>
   await execute(
     process.execPath,
@@ -66,7 +66,7 @@ const typeCheck = async (file) =>
     { cwd: directory }
   );
 
-/** @param {...string} files The files to compile, in the install directory. */
+/** @param {...string} files */
 const emitDeclarations = async (...files) =>
   await execute(
     process.execPath,
@@ -88,7 +88,66 @@ const emitDeclarations = async (...files) =>
     { cwd: directory }
   );
 
-/** @param {string} specifier The module to import from the install directory. */
+/**
+ * @typedef {{
+ *   "@gjermundgaraba/clankerauth-sdk": typeof import("@gjermundgaraba/clankerauth-sdk"),
+ *   "@gjermundgaraba/clankerauth-sdk/errors": typeof import("@gjermundgaraba/clankerauth-sdk/errors"),
+ *   "@gjermundgaraba/clankerauth-sdk/session": typeof import("@gjermundgaraba/clankerauth-sdk/session"),
+ *   "@gjermundgaraba/clankerauth-sdk/key-list": typeof import("@gjermundgaraba/clankerauth-sdk/key-list"),
+ *   "@gjermundgaraba/clankerauth-sdk/credentials": typeof import("@gjermundgaraba/clankerauth-sdk/credentials"),
+ *   "@gjermundgaraba/clankerauth-sdk/testing": typeof import("@gjermundgaraba/clankerauth-sdk/testing"),
+ *   "@gjermundgaraba/clankerauth-sdk/effect-actions": typeof import("@gjermundgaraba/clankerauth-sdk/effect-actions"),
+ *   "@gjermundgaraba/effect-actions/Authentication": typeof import("@gjermundgaraba/effect-actions/Authentication"),
+ *   effect: typeof import("effect"),
+ *   "effect/http": typeof import("effect/http"),
+ * }} Modules
+ */
+
+/** @type {{ readonly [K in keyof Modules]: ReadonlyArray<keyof Modules[K]> }} */
+const exported = {
+  "@gjermundgaraba/clankerauth-sdk": ["Verifier", "RequestPolicy"],
+  "@gjermundgaraba/clankerauth-sdk/errors": [
+    "Unauthorized",
+    "InsufficientScope",
+    "ProviderUnavailable",
+    "ConfigurationError",
+  ],
+  "@gjermundgaraba/clankerauth-sdk/session": ["CurrentPrincipal"],
+  "@gjermundgaraba/clankerauth-sdk/key-list": [
+    "seal",
+    "open",
+    "digest",
+    "type",
+    "lifetime",
+    "keyPrefix",
+    "Entry",
+    "Grant",
+    "Claims",
+  ],
+  "@gjermundgaraba/clankerauth-sdk/credentials": [
+    "signIn",
+    "token",
+    "authorizing",
+    "signOut",
+    "list",
+    "path",
+    "SignIn",
+    "SignInRequired",
+    "TokenUnavailable",
+    "SignInFailed",
+  ],
+  "@gjermundgaraba/clankerauth-sdk/testing": ["startFakeIssuer"],
+  "@gjermundgaraba/clankerauth-sdk/effect-actions": ["Resource"],
+  "@gjermundgaraba/effect-actions/Authentication": ["make"],
+  effect: ["Effect", "Layer"],
+  "effect/http": ["FetchHttpClient"],
+};
+
+/**
+ * @template {keyof Modules} K
+ * @param {K} specifier
+ * @returns {Promise<Modules[K]>}
+ */
 const load = async (specifier) => {
   const file = path.join(
     directory,
@@ -97,7 +156,18 @@ const load = async (specifier) => {
 
   await writeFile(file, `export * from "${specifier}";`);
 
-  return await import(pathToFileURL(file).href);
+  const names = exported[specifier];
+
+  const decodeModule = Schema.decodeUnknownSync(
+    Schema.declare(
+      /** @returns {module is Modules[K]} */
+      (module) =>
+        Predicate.isObject(module) && names.every((key) => key in module),
+      { expected: `${specifier} exporting ${names.join(", ")}` }
+    )
+  );
+
+  return decodeModule(await import(pathToFileURL(file).href));
 };
 
 try {
@@ -148,11 +218,7 @@ void verification;
   );
   await typeCheck("consumer.ts");
 
-  const api = await load(name);
-
-  for (const exported of ["Verifier", "RequestPolicy"]) {
-    assert.ok(exported in api, `Missing core export: ${exported}`);
-  }
+  const api = await load("@gjermundgaraba/clankerauth-sdk");
 
   for (const absent of [
     "Unauthorized",
@@ -162,22 +228,14 @@ void verification;
     assert.ok(!(absent in api), `Root re-exports an error: ${absent}`);
   }
 
-  const errors = await load(`${name}/errors`);
+  const errors = await load("@gjermundgaraba/clankerauth-sdk/errors");
 
-  for (const exported of [
-    "Unauthorized",
-    "InsufficientScope",
-    "ProviderUnavailable",
-    "ConfigurationError",
-  ]) {
-    assert.ok(exported in errors, `Missing error export: ${exported}`);
-  }
-
-  const { Effect } = await load("effect");
+  const { Effect, Layer } = await load("effect");
   const { FetchHttpClient } = await load("effect/http");
 
-  const make = (options) =>
-    Effect.runPromise(
+  /** @param {import("@gjermundgaraba/clankerauth-sdk").Verifier.Options} options */
+  const make = async (options) =>
+    await Effect.runPromise(
       api.Verifier.make(options).pipe(Effect.provide(FetchHttpClient.layer))
     );
 
@@ -193,49 +251,20 @@ void verification;
 
   assert.ok(missing instanceof errors.Unauthorized);
 
-  const keyList = await load(`${name}/key-list`);
+  await load("@gjermundgaraba/clankerauth-sdk/key-list");
 
-  for (const exported of [
-    "seal",
-    "open",
-    "digest",
-    "type",
-    "lifetime",
-    "keyPrefix",
-    "Entry",
-    "Grant",
-    "Claims",
-  ]) {
-    assert.ok(exported in keyList, `Missing key-list export: ${exported}`);
-  }
-
-  const credentials = await load(`${name}/credentials`);
-
-  for (const exported of [
-    "signIn",
-    "token",
-    "authorizing",
-    "signOut",
-    "list",
-    "path",
-    "SignIn",
-    "SignInRequired",
-    "TokenUnavailable",
-    "SignInFailed",
-  ]) {
-    assert.ok(
-      exported in credentials,
-      `Missing credentials export: ${exported}`
-    );
-  }
+  const credentials = await load("@gjermundgaraba/clankerauth-sdk/credentials");
 
   process.env.XDG_CONFIG_HOME = path.join(directory, "config");
   assert.deepEqual(await Effect.runPromise(credentials.signOut()), {
     signedOut: false,
   });
-  assert.deepEqual(await Effect.runPromise(credentials.list()), []);
+  assert.deepEqual(await Effect.runPromise(credentials.list), []);
 
-  const { startFakeIssuer } = await load(`${name}/testing`);
+  const { startFakeIssuer } = await load(
+    "@gjermundgaraba/clankerauth-sdk/testing"
+  );
+
   const notes = "http://127.0.0.1:7337/";
 
   const issuer = await startFakeIssuer({
@@ -247,8 +276,8 @@ void verification;
     const key = issuer.apiKey();
     const store = api.Verifier.store();
 
-    const listed = (held = api.Verifier.store()) =>
-      make({ issuer: issuer.issuer, resource: notes, store: held });
+    const listed = async (held = api.Verifier.store()) =>
+      await make({ issuer: issuer.issuer, resource: notes, store: held });
 
     const installedVerifier = await listed(store);
 
@@ -364,7 +393,6 @@ void protocol;
   );
   await typeCheck("integration.ts");
 
-  // why: declared-actions.ts imports no SDK name, as an application's actions module does not.
   await writeFile(
     path.join(directory, "declared-resource.ts"),
     `
@@ -416,11 +444,15 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
 `
   );
   await emitDeclarations("declared-resource.ts", "declared-actions.ts");
-  // why: alone, so no other file's imports reach the type `/session` must name itself.
   await emitDeclarations("declared-login.ts");
 
-  const { Resource } = await load(`${name}/effect-actions`);
-  const { CurrentPrincipal } = await load(`${name}/session`);
+  const { Resource } = await load(
+    "@gjermundgaraba/clankerauth-sdk/effect-actions"
+  );
+
+  const { CurrentPrincipal } = await load(
+    "@gjermundgaraba/clankerauth-sdk/session"
+  );
 
   const { make: login } = await load(
     "@gjermundgaraba/effect-actions/Authentication"
@@ -436,13 +468,15 @@ export const Login = Authentication.make("notes.Login", CurrentPrincipal, { erro
   const resource = await Effect.runPromise(
     Effect.service(Notes.service).pipe(
       Effect.provide(
-        Notes.layer({
-          issuer: "https://clankerauth.example/api/auth",
-          publicUrl: new URL("https://notes.example"),
-          store: api.Verifier.store(),
-        })
-      ),
-      Effect.provide(FetchHttpClient.layer)
+        Layer.provideMerge(
+          Notes.layer({
+            issuer: "https://clankerauth.example/api/auth",
+            publicUrl: new URL("https://notes.example"),
+            store: api.Verifier.store(),
+          }),
+          FetchHttpClient.layer
+        )
+      )
     )
   );
 

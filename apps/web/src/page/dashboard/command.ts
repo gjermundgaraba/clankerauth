@@ -8,8 +8,6 @@ import { loginRouter } from "../../route.ts";
 import { Change, Credential } from "./change.ts";
 import { Message } from "./message.ts";
 
-// SAVE
-
 const clientSecretOf = (
   credentials: typeof ClientCredentials.Type
 ): Option.Option<Credential> =>
@@ -32,7 +30,6 @@ const saveChange = (
         issuer.putResource({ identifier, name, scopes }).pipe(nothingShown),
       DeleteResource: ({ identifier }) =>
         issuer.deleteResource({ identifier }).pipe(nothingShown),
-      // why: a `datetime-local` value has no zone, so `new Date` reads it in the browser's zone
       CreateKey: ({ name, permissions, maybeExpiry }) =>
         Effect.suspend(() =>
           issuer.createApiKey({
@@ -104,8 +101,6 @@ const saveChange = (
         issuer.deleteClient({ client_id: clientId }).pipe(nothingShown),
     })
   );
-
-// COMMAND
 
 const SAVE_TIMEOUT = Duration.seconds(20);
 

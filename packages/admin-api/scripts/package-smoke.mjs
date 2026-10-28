@@ -30,7 +30,7 @@ const decodeManifest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Manifest)
 );
 
-/** @param {string} directory The package's directory. */
+/** @param {string} directory */
 const readManifest = async (directory) =>
   decodeManifest(await readFile(path.join(directory, "package.json"), "utf-8"));
 

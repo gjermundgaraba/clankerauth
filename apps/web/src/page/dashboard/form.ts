@@ -14,8 +14,6 @@ import { modifyFields } from "foldkit/struct";
 
 import { Change, splitWords } from "./change.ts";
 
-// MODEL
-
 const ResourceDraft = Schema.Struct({
   name: Schema.String,
   identifier: Schema.String,
@@ -72,8 +70,6 @@ type KeyView = typeof ApiKey.Type;
 
 type Grants = typeof KeyPermissions.Type;
 
-// MESSAGE
-
 export const Message = defineMessageUnion({
   UpdatedResourceName: { value: Schema.String },
   UpdatedResourceIdentifier: { value: Schema.String },
@@ -93,8 +89,6 @@ export const Message = defineMessageUnion({
 });
 
 export type Message = typeof Message.Type;
-
-// OPEN
 
 export const addResource = (): Model =>
   Model.Resource({
@@ -193,8 +187,6 @@ export const editAccess = (
     draft: clientDraftOf(client, allowed),
   });
 
-// UPDATE
-
 const editResourceDraft = (
   form: Model,
   edit: (draft: ResourceDraft) => ResourceDraft
@@ -292,8 +284,6 @@ export const update = (form: Model, message: Message): Model =>
         modifyFields(draft, { authMethod: () => method })
       ),
   });
-
-// SUBMIT
 
 const NO_REDIRECT = "Add at least one redirect URI.";
 

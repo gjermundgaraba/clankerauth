@@ -1,14 +1,3 @@
-/**
- * What this package fails with. This entry point is browser-safe: a shared contract
- * declares `ProviderUnavailable` on its authentication descriptor and a browser client
- * decodes it, without pulling token verification or its cryptography into the bundle.
- *
- * `ProviderUnavailable` is the one wire schema. `Unauthorized` and `InsufficientScope` are
- * what the verifier fails with in process: the effect-actions integration sends them as its
- * built-in `Unauthenticated` (401) and `Forbidden` (403), which every endpoint and tool
- * declares, so a descriptor declares only `error: ProviderUnavailable`, which every protected
- * endpoint of a binding naming it then declares, and a binding nothing.
- */
 import { Data, Schema } from "effect";
 
 import type { Principal } from "./verify.ts";
@@ -46,13 +35,10 @@ export class ProviderUnavailable extends Schema.TaggedError<
 ) {
   declare readonly cause?: unknown;
 
-  constructor(options: {
-    readonly operation: string;
-    readonly cause?: unknown;
-  }) {
-    super({ operation: options.operation });
-    Object.defineProperty(this, "cause", { value: options.cause });
-  }
+  static readonly of = (operation: string, cause: unknown) =>
+    Object.defineProperty(new ProviderUnavailable({ operation }), "cause", {
+      value: cause,
+    });
 }
 
 /**

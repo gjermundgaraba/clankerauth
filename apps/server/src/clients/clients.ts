@@ -17,7 +17,7 @@ import type {
   Connection,
 } from "@gjermundgaraba/clankerauth-admin-api";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Redacted, Schema } from "effect";
 import type { Scope } from "effect";
 
 import {
@@ -74,7 +74,6 @@ interface SecretFields {
   readonly client_secret_expires_at?: number | undefined;
 }
 
-// why: the provider leaves a public client's secret fields `undefined`, which JSON writes as `null`
 const credentials = <Registered extends SecretFields>({
   client_secret,
   client_secret_expires_at,
@@ -100,13 +99,11 @@ type Editing = ClientNotFound | ClientIsAutomatic;
 export class Clients extends Context.Service<
   Clients,
   {
-    /** Clients, resources, managed clients' access and every client's connections. */
     readonly list: Effect.Effect<
       typeof ClientListResult.Type,
       InternalServerError,
       CurrentOwner
     >;
-    /** Registers a first-party client, linked to `resources`; its secret is returned once. */
     readonly create: (
       input: typeof ClientInput.Type
     ) => Owned<typeof ClientCredentials.Type>;
@@ -116,26 +113,16 @@ export class Clients extends Context.Service<
     readonly rotate: (
       input: typeof ClientId.Type
     ) => Owned<typeof ClientCredentials.Type, Editing>;
-    /**
-     * What each client holds, per resource: a consent, a live refresh token, or both. A
-     * managed client skips consent, so only its refresh tokens show. Scopes are the
-     * consent's, else the newest token's; rotation revokes the replaced token.
-     */
     readonly connections: Effect.Effect<
       ReadonlyArray<typeof Connection.Type>,
       InternalServerError
     >;
-    /** Without a resource, every authorization the client holds. */
     readonly revoke: (
       input: typeof ClientRevokeInput.Type
     ) => Effect.Effect<
       { revoked: boolean },
       InternalServerError | ClientNotFound
     >;
-    /**
-     * Forgets any client, managed or automatic; an automatic one can register again.
-     * Its links, consents and tokens cascade with the row.
-     */
     readonly delete: (
       input: typeof ClientId.Type
     ) => Effect.Effect<
@@ -256,11 +243,10 @@ export class Clients extends Context.Service<
 
           const scopes = yield* catalog.scopesFor(input.resources);
 
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
 
           const client = yield* provider(
             async () =>
-              // why: the plain endpoint drops skip_consent; the administrative one keeps it
               await auth.api.adminCreateOAuthClient({
                 headers,
                 body: {
@@ -294,7 +280,7 @@ export class Clients extends Context.Service<
         ) {
           yield* requireManaged(input.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
 
           return yield* provider(
             async () =>
@@ -320,7 +306,7 @@ export class Clients extends Context.Service<
         ) {
           yield* requireManaged(body.client_id, sql);
           const { providerHeaders } = yield* CurrentOwner;
-          const headers = yield* providerHeaders;
+          const headers = Redacted.value(yield* providerHeaders);
 
           const rotated = yield* provider(
             async () => await auth.api.rotateClientSecret({ headers, body }),

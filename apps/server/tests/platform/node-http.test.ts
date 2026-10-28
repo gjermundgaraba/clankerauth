@@ -431,7 +431,6 @@ it.live(
         ).toString()
       ).toBe("first");
 
-      // why: shutdown may end the stream cleanly or abort its connection
       const disconnected = yield* Effect.forkChild(
         Effect.result(Effect.tryPromise(async () => await reader.read())),
         { startImmediately: true }

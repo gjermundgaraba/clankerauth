@@ -430,7 +430,6 @@ describe("the types", () => {
       declaration
     );
 
-    // why: always true, but only a `boolean` to the types, so neither branch is narrowed away.
     const declares: boolean = Math.random() < 2;
 
     Resource.make(

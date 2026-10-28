@@ -189,7 +189,6 @@ it.effect(
           concurrency: "unbounded",
         }
       );
-      // why: concurrent misses share no read, so each reads in its own verification.
       assert.equal(reads, 4);
 
       key = secondKey;
@@ -296,7 +295,6 @@ it.effect(
         .watch(`Bearer ${key}`, "write")
         .pipe(Effect.flip, Effect.forkChild);
 
-      // why: its first check opens the key with real crypto, which must finish before time moves.
       yield* TestClock.withLive(Effect.sleep("100 millis"));
 
       granted.set(key, grantOf(["read"]));
@@ -314,7 +312,6 @@ it.effect(
       granted.delete(key);
       yield* TestClock.adjust("1 minute");
       assert.ok((yield* Effect.flip(verify(key))) instanceof Unauthorized);
-      // why: the socket's check and the verification before it missed together, and each read.
       assert.equal(lists, 4);
 
       const expiring = `clankerauth_${"e".repeat(64)}`;
@@ -593,7 +590,6 @@ it.effect(
         .watch(`Bearer ${token}`)
         .pipe(Effect.flip, Effect.forkChild);
 
-      // why: admission runs on real promises, which must settle before the test clock moves.
       yield* TestClock.withLive(Effect.sleep("100 millis"));
       yield* TestClock.adjust("14 minutes");
       assert.equal(reads, 1);

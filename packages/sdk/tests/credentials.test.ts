@@ -72,7 +72,6 @@ const fakeIssuer = Effect.acquireRelease(
       }
 
       state.refreshes.push(form);
-      // why: a slow issuer widens the window a second refresh would start in.
       await sleep(state.delay);
 
       if (state.refusal !== undefined) {
@@ -179,7 +178,7 @@ const kept = (...signIns: readonly Credentials.SignIn[]) =>
   });
 
 const stored = (resource: string) =>
-  Effect.map(Credentials.list(), (signIns) => {
+  Effect.map(Credentials.list, (signIns) => {
     const signIn = signIns.find((each) => each.resource === resource);
     assert.ok(signIn !== undefined);
 
@@ -454,7 +453,7 @@ it.live(
         ).toStrictEqual(["first-refresh"]);
         expect(second.revocations).toStrictEqual([]);
         expect(
-          (yield* Credentials.list()).map((signIn) => signIn.resource)
+          (yield* Credentials.list).map((signIn) => signIn.resource)
         ).toStrictEqual([app(second)]);
 
         expect(yield* Credentials.signOut()).toStrictEqual({ signedOut: true });
@@ -516,7 +515,7 @@ it.live(
         expect(
           issuer.revocations.map((form) => form.get("token"))
         ).toStrictEqual(["refresh-1"]);
-        expect(yield* Credentials.list()).toStrictEqual([]);
+        expect(yield* Credentials.list).toStrictEqual([]);
       })
     )
 );
@@ -670,7 +669,7 @@ it.live("a file no version can read is no sign-in", () =>
         await writeFile(Credentials.path(), '{"url": "written by 0.23"}');
       });
 
-      expect(yield* Credentials.list()).toStrictEqual([]);
+      expect(yield* Credentials.list).toStrictEqual([]);
     })
   )
 );

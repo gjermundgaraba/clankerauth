@@ -7,9 +7,8 @@ import { promisify } from "node:util";
 export const execute = promisify(execFile);
 
 /**
- * Fails unless every entry point of an installed package ships declarations.
- * @param {string} installed The installed package's directory.
- * @param {Readonly<Record<string, { readonly types: string }>>} exports Its manifest's `exports`.
+ * @param {string} installed
+ * @param {Readonly<Record<string, { readonly types: string }>>} exports
  */
 export const assertDeclarations = async (installed, exports) => {
   for (const [entry, target] of Object.entries(exports)) {
@@ -26,9 +25,9 @@ export const assertDeclarations = async (installed, exports) => {
 };
 
 /**
- * @param {string} directory The directory to pack into.
- * @param {string} root The workspace package whose dependency to pack.
- * @param {string} dependency The dependency's package name.
+ * @param {string} directory
+ * @param {string} root
+ * @param {string} dependency
  */
 export const packDependency = async (directory, root, dependency) => {
   const { stdout } = await execute(
@@ -43,17 +42,15 @@ export const packDependency = async (directory, root, dependency) => {
     { cwd: directory }
   );
 
-  // why: npm prints the tarball's filename alone on stdout, its notices on stderr.
   return path.join(directory, stdout.trim());
 };
 
 /**
- * @param {string} directory The directory to install into.
- * @param {string} root The workspace package to pack and install.
- * @param {readonly string[]} peers The peer dependencies to pack beside it.
+ * @param {string} directory
+ * @param {string} root
+ * @param {readonly string[]} peers
  */
 export const installPacked = async (directory, root, peers) => {
-  // why: pnpm pack resolves the workspace catalog protocol in the manifest; npm pack would not.
   await execute("pnpm", ["pack", "--pack-destination", directory], {
     cwd: root,
   });

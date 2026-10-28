@@ -270,7 +270,6 @@ it.live(
         compensated = true;
       });
 
-      // why: served as main.ts serves, so the server's scope owns its request fibers
       const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
 
       const { port, serve } = yield* listen(0, "127.0.0.1").pipe(
@@ -317,7 +316,6 @@ it.live(
           )
         );
 
-        // why: stateless MCP has no cancellation, so the aborted call still owns its write
         yield* Effect.sleep("50 millis");
         expect(stopped).toBe(false);
         release.resolve(undefined);
@@ -611,7 +609,6 @@ it.live.each(["block", "revoke"] as const)(
 
         expect(denied.headers.get("location") ?? "").not.toContain("/consent");
       } else {
-        // why: revocation clears stored grants; an issued access token lives until it expires
         expect(afterwards.status).toBe(200);
       }
 
@@ -749,7 +746,6 @@ it.live(
           }
         );
       });
-      // why: a response may resolve before its request Scope finishes releasing
       yield* Effect.promise(async () => {
         await expect
           .poll(async () => await Effect.runPromiseWith(services)(sessions))
@@ -815,10 +811,12 @@ it.live(
     }).pipe(Effect.provide(dashboardIssuer()))
 );
 
-// why: mixed case also checks that the Basic scheme is matched case-insensitively
-it.live.each(["bAsIc", "private_key_jwt"])(
-  "%s authentication without body client_id issues usable grants after revocation",
-  (method) =>
+it.live.each([
+  { title: "case-insensitive Basic", method: "bAsIc" },
+  { title: "private_key_jwt", method: "private_key_jwt" },
+])(
+  "$title authentication without body client_id issues usable grants after revocation",
+  ({ method }) =>
     Effect.gen(function* () {
       const { handle } = yield* Dashboard;
 

@@ -1,13 +1,3 @@
-/**
- * Which callers this app answers at all. Forward auth makes a browser's credential
- * ambient: the proxy attaches an Authorization header to whatever the browser sends,
- * including a cross-site navigation. So the app checks the two headers that say where
- * a request came from, before anything reads the credential.
- *
- * Both checks are raw string comparisons on the headers as sent. Nothing is parsed,
- * so nothing throws and no normalization can widen what is accepted: `notes.example`
- * and `notes.example:443` are different hosts here, as they are to a browser's cookie.
- */
 import { Effect } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
@@ -25,11 +15,7 @@ export interface Options {
   readonly allowedOrigins?: readonly string[];
 }
 
-/**
- * The one path answered without either check. A container probe reaches the app on its
- * bind address and carries neither header, and no application has a second such path.
- */
-const probePath = "/healthz";
+const uncheckedProbePath = "/healthz";
 
 /** One request, as a Node `upgrade` handler or a router middleware sees it. */
 export interface Request {
@@ -39,7 +25,6 @@ export interface Request {
   readonly origin: string | undefined;
 }
 
-/** The path of a request target. Deliberately not `new URL`: this must not throw. */
 const pathOf = (target: string): string => {
   const authority = target.indexOf("://");
   const start = authority === -1 ? 0 : target.indexOf("/", authority + 3);
@@ -69,7 +54,7 @@ export const make = (options: Options) => {
   ]);
 
   const allows = (request: Request): boolean => {
-    if (pathOf(request.target) === probePath) {
+    if (pathOf(request.target) === uncheckedProbePath) {
       return true;
     }
 
@@ -82,7 +67,6 @@ export const make = (options: Options) => {
 
   return {
     allows,
-    /** Refuse anything `allows` rejects with a 403 (body `Forbidden`) before any handler. */
     middleware: HttpRouter.middleware((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;

@@ -52,10 +52,7 @@ import type { Model, PendingCredential } from "./model.ts";
 import type { SectionContext } from "./parts.ts";
 import { resourcesHeadView, resourcesPanels } from "./resources.ts";
 
-/** Which of the dashboard's screens is on show; the application's route decides. */
 export type ViewInputs = Readonly<{ section: DashboardRoute }>;
-
-// WAITING
 
 const waitingView = (h: HtmlBuilder<Message>): Html =>
   Deck.view(
@@ -95,8 +92,6 @@ const unavailableView = (reason: string, h: HtmlBuilder<Message>): Html =>
     },
     h
   );
-
-// CONSOLE
 
 const topBarView = (
   model: Model,

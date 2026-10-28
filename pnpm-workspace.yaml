@@ -44,6 +44,7 @@ catalog:
   oxlint: 1.89.0
   oxfmt: 0.74.0
   "@effect/tsgo": 0.57.0
+  "@clanker-stuff/oxlint-config": 0.1.0
 
 overrides:
   vite@*: "catalog:"
@@ -60,7 +61,6 @@ peerDependencyRules:
   allowAny:
     - vite
     - vitest
-# Registry releases wait one day unless explicitly approved below.
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
@@ -77,6 +77,7 @@ minimumReleaseAgeExclude:
   - "@gjermundgaraba-designs/*"
   - effect
   - "@effect/*"
+  - "@clanker-stuff/*"
 patchedDependencies:
   # The plugin reads Crypto.randomUUIDv4 as effect 4.0.0's value; from 4.0.3 it is a method,
   # so without this its DevTools MCP relay fails to start under the effect pinned here.

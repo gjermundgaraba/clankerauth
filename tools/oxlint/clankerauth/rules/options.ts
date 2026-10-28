@@ -7,7 +7,6 @@ const isObject = (value: Json | undefined): value is Settings =>
 
 const isString = (value: Json): value is string => typeof value === "string";
 
-/** The strings a rule's option object lists under `key`, if it lists any. */
 export const optionList = (
   options: readonly Json[],
   key: string

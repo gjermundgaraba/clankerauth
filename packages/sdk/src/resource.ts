@@ -21,16 +21,11 @@ import {
   ProviderUnavailable,
   Unauthorized,
 } from "./errors.ts";
-import { keyListRefresh } from "./refresh.ts";
+import { revocationDelay } from "./refresh.ts";
 import { CurrentPrincipal, Whoami } from "./session.ts";
 import type { Caller } from "./session.ts";
 import * as Verifier from "./verify.ts";
 
-/**
- * What a caller lacking `scope` is refused with, wherever the lack is found. Only an OAuth
- * client can step up, so only its `Forbidden` names the scope: an API key or the process
- * cannot re-authorize.
- */
 const forbidden = (scope: string, actor: Caller["actor"]) => {
   const message = `Requires ${scope}.`;
 
@@ -39,20 +34,11 @@ const forbidden = (scope: string, actor: Caller["actor"]) => {
     : new Action.Forbidden({ message });
 };
 
-/**
- * The one scope check, which `requires`, `admitted`, `admit` and `watch` share: what
- * `principal` is refused for lacking `scope`, if one is asked for and it lacks it.
- */
 const lacking = (principal: Caller, scope: string | undefined) =>
   scope === undefined || principal.scopes.includes(scope)
     ? undefined
     : forbidden(scope, principal.actor);
 
-/**
- * A verification failure as every effect-actions surface declares it: the built-in
- * `Unauthenticated` and `Forbidden`, which every client decodes. The issuer being
- * unreachable stays the SDK's own `ProviderUnavailable`, which the descriptor declares.
- */
 const refusalOf = (
   error: AuthenticationError
 ): Action.Refusal | ProviderUnavailable => {
@@ -115,9 +101,11 @@ export interface Refusal {
   readonly body: string;
 }
 
+export const verificationDeadline = Duration.seconds(5);
+
 const deadline = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.timeoutOrElse(effect, {
-    duration: "5 seconds",
+    duration: verificationDeadline,
     orElse: () =>
       Effect.fail(new ProviderUnavailable({ operation: "verify.timeout" })),
   });
@@ -155,11 +143,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     verifyToken: (token) => deadline(unbounded.verifyToken(token)),
   };
 
-  /**
-   * The principal an Authorization header value proves, holding `scope` if one is asked
-   * for, or what a route refuses the same request with: `admit` renders it, `watch` fails
-   * with it.
-   */
   const principalOf = Effect.fn("Resource.principal")(function* (
     authorization: string | null | undefined,
     scope: string | undefined
@@ -178,12 +161,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     return refusal === undefined ? principal : yield* refusal;
   });
 
-  /**
-   * Verify one Authorization header value outside an Effect router: a Node `upgrade`
-   * handler, a socket, a per-request endpoint. With `scope`, the credential must also hold
-   * it, so a socket that writes demands its scope before it is established. It is
-   * `admitted`'s check, given the header rather than the request.
-   */
   const admit = Effect.fn("Resource.admit")(function* (
     authorization: string | null | undefined,
     scope?: Scope
@@ -212,11 +189,6 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     } satisfies Admission;
   });
 
-  /**
-   * Hold what `admit` let in, such as a socket, to the same header value and `scope`: fails
-   * with the refusal `admit` would now answer, once a token expires or a key is revoked,
-   * expires or loses the scope. Never succeeds; race it against the connection.
-   */
   const watch = (authorization: string | null | undefined, scope?: Scope) =>
     Effect.forever(
       Effect.gen(function* () {
@@ -226,7 +198,7 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
 
         if (principal.actor.kind === "key") {
           return yield* Effect.sleep(
-            Math.min(remaining, Duration.toMillis(keyListRefresh))
+            Math.min(remaining, Duration.toMillis(revocationDelay))
           );
         }
 
@@ -237,10 +209,8 @@ const build = Effect.fn("Resource.layer")(function* <Scope extends string>(
     );
 
   return {
-    /** The resource identifier: the public origin root, which a token's audience names. */
     resource: identifier,
     issuer: options.issuer,
-    /** What `authentication` publishes and names in every challenge; none with `discovery: false`. */
     protectedResource,
     verifier,
     admit,
@@ -261,14 +231,20 @@ export interface Built<Scope extends string = string> {
   readonly protectedResource: Authentication.ProtectedResource | undefined;
   readonly verifier: Verifier.Verifier;
   /**
-   * What an Authorization header value amounts to, for a caller outside the router: any
-   * verified caller, or with `scope`, one that also holds it.
+   * What an Authorization header value amounts to, for a caller outside the router, such as a
+   * Node `upgrade` handler, a socket or a per-request endpoint: any verified caller, or with
+   * `scope`, one that also holds it, so a socket that writes demands its scope before it is
+   * established.
    */
   readonly admit: (
     authorization: string | null | undefined,
     scope?: Scope
   ) => Effect.Effect<Admission>;
-  /** Fails, with the refusal `admit` would now answer, once the credential it admitted stops being valid. */
+  /**
+   * Fails, with the refusal `admit` would now answer, once the credential it admitted stops
+   * being valid: a token expires, or a key is revoked, expires or loses the scope. Never
+   * succeeds; race it against the connection.
+   */
   readonly watch: (
     authorization: string | null | undefined,
     scope?: Scope
@@ -283,7 +259,6 @@ export interface Resource<Name extends string> {
   readonly "~@clankerauth/Resource": Name;
 }
 
-/** What `make` requires a descriptor to declare: the issuer being unreachable. */
 type Unavailable = readonly [typeof ProviderUnavailable];
 
 /**
@@ -303,12 +278,6 @@ export type Login<
   E
 >;
 
-/**
- * `unknown` when every alternative of `E` declares `ProviderUnavailable`, by what its schemas
- * decode (one of them, or a `Schema.Union` holding it), and what names the omission otherwise:
- * a descriptor that may declare it, such as `error: cond ? ProviderUnavailable : undefined`,
- * does not.
- */
 type DeclaresUnavailable<E extends Action.Errors> = [
   E extends unknown
     ? ProviderUnavailable extends E[number]["Type"]
@@ -370,17 +339,37 @@ export interface Declared<
     never,
     Resource<Name> | HttpRouter.HttpRouter
   >;
-  /** Refuses a caller without `scope`, for an authorizer the application writes. */
+  /**
+   * Refuses a caller without `scope`, for an authorizer the application writes:
+   * `Action.implement(actions, handlers, { authorize: (action) => action.readOnly ? Effect.void : Notes.requires("notes:write") })`.
+   * The `Forbidden` names the scope for an OAuth client, which steps up to it; an API key or
+   * the process cannot, so theirs names none.
+   */
   readonly requires: (
     scope: Scope
   ) => Effect.Effect<void, Action.Forbidden, CurrentPrincipal>;
-  /** The host's own routes, admitted as the resource's actions are, holding `scope` if given. */
+  /**
+   * The host's own routes, admitted as the resource's actions are, holding `scope` if given:
+   * `HttpRouter.add("GET", "/frame", frame).pipe(Layer.provide(Notes.admitted().layer))`.
+   * effect-actions' `Authentication.protect` authenticates them with the descriptor's provider
+   * and answers them as it answers an action's route; `scope` is checked inside it with
+   * `requires`. An admitted route reads its caller from `CurrentPrincipal`.
+   */
   readonly admitted: (
     scope?: Scope
   ) => Authentication.Protection<CurrentPrincipal, Name>;
-  /** The process itself as a principal, for a trusted local surface. */
+  /**
+   * The process itself as a principal, for a trusted local surface such as stdio MCP or a
+   * local command, where no credential exists to verify: every scope the resource declares,
+   * no expiry. The application's authorizer runs against it as against a verified caller:
+   * `Effect.provideService(CurrentPrincipal, Notes.local("owner"))`.
+   */
   readonly local: (subject: string) => Caller;
-  /** `Whoami`, answered from the verified credential. */
+  /**
+   * `Whoami`, answered from the verified credential. A process surface has no credential, so
+   * serve it over HTTP alone, `ActionHttp.layer(Http, [app, Notes.session])`, and leave it out
+   * of MCP.
+   */
   readonly session: Action.Implementation<
     typeof Whoami,
     { readonly whoami: CurrentPrincipal },
@@ -456,12 +445,6 @@ export const make = <
     }
   );
 
-  /**
-   * Refuse a caller that lacks `scope`, as the application's authorizer decides:
-   * `Action.implement(actions, handlers, { authorize: (action) => action.readOnly ? Effect.void : Notes.requires("notes:write") })`.
-   * The `Forbidden` names the scope for an OAuth client, which steps up to it; an API key or
-   * the process cannot, so theirs names none.
-   */
   const requires = (
     scope: Scope
   ): Effect.Effect<void, Action.Forbidden, CurrentPrincipal> =>
@@ -471,13 +454,6 @@ export const make = <
       return refusal === undefined ? Effect.void : Effect.fail(refusal);
     });
 
-  /**
-   * The host's own routes behind the resource, provided around them:
-   * `HttpRouter.add("GET", "/frame", frame).pipe(Layer.provide(Notes.admitted().layer))`.
-   * effect-actions' `Authentication.protect` authenticates them with the descriptor's provider,
-   * as it does an action's route, and answers them as one; `scope`, if given, is checked
-   * inside it with `requires`. An admitted route reads its caller from `CurrentPrincipal`.
-   */
   const admitted = (
     scope?: Scope
   ): Authentication.Protection<CurrentPrincipal, Name> =>
@@ -487,12 +463,6 @@ export const make = <
           Effect.andThen(requires(scope), route)
         ).combine(Authentication.protect(authentication));
 
-  /**
-   * The process itself as the caller of a trusted local surface, such as stdio MCP or a local
-   * command, where no credential exists to verify: every scope the resource declares, no
-   * expiry. The application's authorizer runs against it as against a verified caller.
-   * `Effect.provideService(CurrentPrincipal, Notes.local("owner"))`.
-   */
   const local = (subject: string): Caller => ({
     subject,
     scopes: [...scopes],
@@ -500,11 +470,6 @@ export const make = <
     expiresAt: undefined,
   });
 
-  /**
-   * `whoami` of `@gjermundgaraba/clankerauth-sdk/session`, already answered. The credential
-   * is a transport concern: a process surface has none, so serve it over HTTP alone,
-   * `ActionHttp.layer(Http, [app, Notes.session])`, and leave it out of MCP.
-   */
   const session = Action.implement(
     Whoami,
     Effect.map(

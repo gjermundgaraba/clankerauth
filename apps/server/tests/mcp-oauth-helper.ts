@@ -14,10 +14,6 @@ export const administrationResource = (baseURL: string) => ({
 
 export type TestHandler = (request: Request) => Promise<Response>;
 
-/**
- * A response's JSON body, decoded with `schema`. `Schema.Json` keeps the whole value, for a test
- * to assert it entire.
- */
 export const decodeJson =
   <S extends Schema.Decoder<unknown>>(schema: S) =>
   (response: Response) =>
@@ -26,7 +22,6 @@ export const decodeJson =
       Schema.decodeUnknownEffect(Schema.fromJsonString(schema))
     );
 
-/** The token endpoint's grant, for an authorization that includes `offline_access`. */
 export const Tokens = Schema.Struct({
   access_token: Schema.String,
   expires_in: Schema.Finite,
@@ -34,14 +29,12 @@ export const Tokens = Schema.Struct({
   scope: Schema.String,
 });
 
-/** The issuer's signing keys, as `jose`'s `createLocalJWKSet` takes them. */
 export const Jwks = Schema.Struct({
   keys: Schema.mutable(
     Schema.Array(Schema.Record(Schema.String, Schema.Unknown))
   ),
 });
 
-/** `granted` is what the owner leaves ticked at consent; by default everything requested. */
 interface GrantOptions {
   resource?: string;
   scope?: string;
@@ -49,7 +42,6 @@ interface GrantOptions {
   clientId?: string;
 }
 
-/** The consent page's submission; without `scope`, the owner approves everything requested. */
 interface ConsentDecision {
   accept: boolean;
   oauth_query: string;

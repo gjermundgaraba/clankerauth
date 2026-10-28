@@ -71,7 +71,6 @@ export class SignInFailed extends Data.TaggedError("SignInFailed")<{
   readonly message: string;
 }> {}
 
-/** The issuer's RFC 8414 metadata a sign-in, a refresh and a revocation use, under its RFC names. */
 const Server = Schema.Struct({
   issuer: Schema.String,
   authorization_endpoint: Schema.String,
@@ -104,7 +103,6 @@ export const SignIn = Schema.Struct({
 
 export type SignIn = typeof SignIn.Type;
 
-/** The file: each sign-in, by its resource. */
 const SignIns = Schema.Struct({
   signIns: Schema.Record(Schema.String, SignIn),
 });
@@ -146,18 +144,18 @@ const hasCode = (code: string) => (error: { readonly cause?: unknown }) =>
   "code" in error.cause &&
   error.cause.code === code;
 
-const read = () =>
-  Effect.tryPromise(async () => await readFile(path(), "utf-8")).pipe(
-    Effect.map((json) =>
-      Option.getOrElse(Schema.decodeOption(SignInsJson)(json), () => none)
-    ),
-    Effect.catchIf(hasCode("ENOENT"), () => Effect.succeed(none)),
-    Effect.mapError(failed("Cannot read"))
-  );
+const read = Effect.tryPromise(
+  async () => await readFile(path(), "utf-8")
+).pipe(
+  Effect.map((json) =>
+    Option.getOrElse(Schema.decodeOption(SignInsJson)(json), () => none)
+  ),
+  Effect.catchIf(hasCode("ENOENT"), () => Effect.succeed(none)),
+  Effect.mapError(failed("Cannot read"))
+);
 
 /** Every sign-in kept; none when there is no file, or one no version of it can be read from. */
-export const list = () =>
-  Effect.map(read(), ({ signIns }) => Object.values(signIns));
+export const list = Effect.map(read, ({ signIns }) => Object.values(signIns));
 
 const persist = Effect.fn("Credentials.persist")(
   function* (signIns: SignIns) {
@@ -172,7 +170,6 @@ const persist = Effect.fn("Credentials.persist")(
     }
 
     const json = yield* Schema.encodeEffect(SignInsJson)(signIns);
-    // why: staged and renamed, so an interrupted write never leaves a refresh token half-saved.
     const staging = `${file}.${randomBytes(6).toString("hex")}`;
 
     yield* Effect.tryPromise(async () => {
@@ -190,7 +187,6 @@ const persist = Effect.fn("Credentials.persist")(
   Effect.mapError(failed("Cannot write"))
 );
 
-/** Wait this long for another process to let the file go: well past a refresh's deadline. */
 const lockRetries = {
   retries: 150,
   factor: 1,
@@ -198,20 +194,13 @@ const lockRetries = {
   maxTimeout: 100,
 };
 
-/** Read the file, write what `change` makes of it, and give what it held before. */
 type Save = (
   change: (signIns: SignIns) => SignIns
 ) => Effect.Effect<SignIns, TokenUnavailable>;
 
 const rewrite: Save = (change) =>
-  Effect.tap(read(), (before) => persist(change(before)));
+  Effect.tap(read, (before) => persist(change(before)));
 
-/**
- * Run `use` holding the file's lock, `sign-ins.json.lock` beside it, given the one way to write
- * the file. Each write reads the file again and changes only its own sign-in, so even one whose
- * lock another process took over, as one stalled past the lock's ten seconds loses it, keeps
- * what that process saved.
- */
 const locked = <A, E, R>(use: (save: Save) => Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     Effect.tryPromise(async () => {
@@ -221,7 +210,6 @@ const locked = <A, E, R>(use: (save: Save) => Effect.Effect<A, E, R>) =>
         realpath: false,
         retries: lockRetries,
         update: 1000,
-        // why: throwing here would crash the program, and the writes need the lock no longer.
         onCompromised: constVoid,
       });
     }).pipe(Effect.mapError(failed("Cannot lock"))),
@@ -232,22 +220,18 @@ const locked = <A, E, R>(use: (save: Save) => Effect.Effect<A, E, R>) =>
       })
   );
 
-/** How long one request to an application or an issuer may take: well under a lock's wait. */
 const requestDeadline = 10_000;
 
 const requestOptions = (url: string | URL) => ({
-  // why: plain HTTP only for an address named with `http:`, such as one on loopback.
   [oauth.allowInsecureRequests]: new URL(url).protocol === "http:",
   signal: AbortSignal.timeout(requestDeadline),
 });
 
-/** The RFC 9728 check's failure: the metadata names another resource than the one asked for. */
 const NamedElsewhere = Schema.Struct({
   attribute: Schema.Literal("resource"),
   body: Schema.Struct({ resource: Schema.String }),
 });
 
-/** Why `oauth4webapi` failed, for a person. */
 const reason = (error: Error) => {
   if (
     error instanceof oauth.ResponseBodyError ||
@@ -275,11 +259,9 @@ const reason = (error: Error) => {
 
 const refreshScope = "offline_access";
 
-/** The scopes of `scope` a sign-in asks for, beside `offline_access`, which every one asks for. */
 const asked = (scope: string) =>
   scope.split(" ").filter((named) => named !== "" && named !== refreshScope);
 
-/** `url` as a resource is matched against: without its query or fragment. */
 const located = (url: string | URL) =>
   Effect.try({
     try: () => {
@@ -297,7 +279,6 @@ const holds = (resource: string, url: URL) =>
   url.href === resource ||
   url.href.startsWith(resource.endsWith("/") ? resource : `${resource}/`);
 
-/** The sign-in whose resource holds `url`, the most specific when several do. */
 const signInFor = (signIns: SignIns, url: URL) =>
   Object.values(signIns.signIns)
     .filter((signIn) => holds(signIn.resource, url))
@@ -305,7 +286,7 @@ const signInFor = (signIns: SignIns, url: URL) =>
     .at(0);
 
 const held = Effect.fn("Credentials.held")(function* (url: URL) {
-  const signIn = signInFor(yield* read(), url);
+  const signIn = signInFor(yield* read, url);
 
   if (signIn !== undefined) {
     return signIn;
@@ -380,8 +361,10 @@ const refresh = (signIn: SignIn) =>
     },
   });
 
-/** A token is refreshed this long before it expires, so none expires on its way. */
 const refreshMargin = 60_000;
+
+const unchangedSince = (signIn: SignIn, signIns: SignIns["signIns"]) =>
+  signIns[signIn.resource]?.refreshToken === signIn.refreshToken;
 
 const current = (signIn: SignIn) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
@@ -417,17 +400,13 @@ const accessToken = Effect.fn("Credentials.accessToken")(function* (url: URL) {
       );
 
       yield* save(({ signIns }) =>
-        // why: a sign-in another process changed meanwhile, having taken the lock over, is newer.
-        signIns[signIn.resource]?.refreshToken === signIn.refreshToken
+        unchangedSince(signIn, signIns)
           ? { signIns: { ...signIns, [signIn.resource]: refreshed } }
           : { signIns }
       );
 
       return Redacted.make(refreshed.accessToken);
-    }).pipe(
-      // why: the issuer rotates the refresh token as it answers, so an interrupted refresh would lose the only one left.
-      Effect.uninterruptible
-    )
+    }).pipe(Effect.uninterruptible)
   );
 });
 
@@ -562,7 +541,7 @@ const discover = Effect.fn("Credentials.discover")(function* (url: string) {
   };
 });
 
-// why: loopback redirects match without their port (RFC 8252), so one registration serves all.
+// https://www.rfc-editor.org/rfc/rfc8252#section-7.3
 const registeredRedirect = "http://127.0.0.1/callback";
 
 const register = (server: Server) =>

@@ -119,7 +119,6 @@ describe("server process", () => {
       await expect(health.json()).resolves.toStrictEqual({ status: "ok" });
       expect(existsSync(`${server.database}-wal`)).toBe(true);
 
-      // why: the 100-continue handshake proves the server admitted the request before the signal
       const pending = request(`${server.url}/healthz`, {
         method: "GET",
         headers: {
@@ -145,9 +144,7 @@ describe("server process", () => {
 
       await server.waitForExit();
       await disconnected;
-      // why: NodeRuntime exits with Effect's interruption code for either signal
       expect(server.child.exitCode).toBe(130);
-      // why: SQLite removes the WAL when the connection closes, not when the process dies
       expect(existsSync(`${server.database}-wal`)).toBe(false);
     }
   );

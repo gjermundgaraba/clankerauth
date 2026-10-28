@@ -11,7 +11,7 @@ import {
 } from "./errors.ts";
 import type { AuthenticationError } from "./errors.ts";
 import * as KeyList from "./key-list.ts";
-import { keyListRefresh } from "./refresh.ts";
+import { revocationDelay } from "./refresh.ts";
 import { execute } from "./transport.ts";
 
 /**
@@ -72,7 +72,6 @@ const Claims = Schema.Struct({
   exp: Schema.Finite,
 });
 
-/** The list document as the issuer's `keyList` action answers it. */
 const KeyListResponse = Schema.Struct({ list: Schema.String });
 
 const KeyListClaims = KeyList.Claims.pipe(
@@ -124,22 +123,17 @@ export const store = (): Store => ({ jwks: new Map(), keyLists: new Map() });
 const unauthorized = (cause?: unknown) => new Unauthorized({ cause });
 
 const listRejected = (cause: unknown) =>
-  new ProviderUnavailable({ operation: "key-list.verify", cause });
+  ProviderUnavailable.of("key-list.verify", cause);
 
-/** How long a JWKS document answers verification before it is read again. */
 const documentLifetime = Duration.minutes(1);
 
-/**
- * How long a read holds off the next one: a failed read of either document, and any read
- * of the key list, so a key the held list does not name reaches the issuer at most this often.
- */
 const cooldown = Duration.seconds(5);
 
-/**
- * How long each fetch of a key list read may take: the list, and the JWKS it is verified with
- * when none is held. Under `Resource`'s five-second deadline, so an issuer that stops answering
- * fails the read, not the request, and a held list still decides.
- */
+const settledSince = (
+  read: { readonly readAt: number } | undefined,
+  startedAt: number
+) => read !== undefined && read.readAt >= startedAt;
+
 const listReadTimeout = Duration.seconds(3);
 
 const deadline =
@@ -178,16 +172,13 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     );
 
     if (response.status !== 200) {
-      return yield* new ProviderUnavailable({
-        operation: "jwks.fetch",
-        cause: { status: response.status },
+      return yield* ProviderUnavailable.of("jwks.fetch", {
+        status: response.status,
       });
     }
 
     const jwks = yield* HttpClientResponse.schemaBodyJson(Jwks)(response).pipe(
-      Effect.mapError(
-        (cause) => new ProviderUnavailable({ operation: "jwks.decode", cause })
-      )
+      Effect.mapError((cause) => ProviderUnavailable.of("jwks.decode", cause))
     );
 
     return jwks.keys.map(({ key_ops, ...key }): JWK =>
@@ -195,7 +186,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     );
   }, Effect.scoped);
 
-  /** The keys read within their lifetime, a failed read's failure within its cooldown, or a read now. */
   const keys = Effect.gen(function* () {
     const settled = options.store.jwks.get(options.issuer);
     const startedAt = yield* Clock.currentTimeMillis;
@@ -219,10 +209,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       return read.success;
     }
 
-    // why: a failure never replaces an outcome that ended after it began.
-    if (
-      (options.store.jwks.get(options.issuer)?.readAt ?? -Infinity) >= startedAt
-    ) {
+    if (settledSince(options.store.jwks.get(options.issuer), startedAt)) {
       return yield* read.failure;
     }
 
@@ -246,12 +233,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     });
   });
 
-  /**
-   * A document this issuer signed for this resource: EdDSA under a key it names, with the
-   * expected `typ`, issuer and audience, and not expired. Which claims it must carry is
-   * its schema's to say. `Unauthorized` means it is not to be trusted; what that amounts
-   * to is the caller's to say. Its signing keys are `held`'s, the store's JWKS by default.
-   */
   const verifySigned = Effect.fn("Verifier.signed")(function* (
     jws: string,
     typ: string,
@@ -262,7 +243,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       catch: unauthorized,
     });
 
-    // why: refused before any JWKS read, so an unauthenticated request causes no issuer traffic.
     if (header.alg !== "EdDSA" || header.kid === undefined) {
       return yield* unauthorized();
     }
@@ -313,23 +293,20 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       const response = yield* execute(client, request);
 
       if (response.status !== 200) {
-        return yield* new ProviderUnavailable({
-          operation: "key-list.fetch",
-          cause: { status: response.status },
+        return yield* ProviderUnavailable.of("key-list.fetch", {
+          status: response.status,
         });
       }
 
       return yield* HttpClientResponse.schemaBodyJson(KeyListResponse)(
         response
       ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailable({ operation: "key-list.decode", cause })
+        Effect.mapError((cause) =>
+          ProviderUnavailable.of("key-list.decode", cause)
         )
       );
     });
 
-    // why: the JWKS read runs beside the list's, on its own deadline, so neither spends the other's.
     const signing = yield* Effect.forkScoped(
       keys.pipe(deadline("jwks.timeout"))
     );
@@ -357,11 +334,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     } satisfies Keys;
   }, Effect.scoped);
 
-  /**
-   * Read the key list, unless a read ended within the cooldown: then that read's outcome
-   * stands. A list that verified is always written back; a failure is not, over a read that
-   * ended after it began. A failure is logged once until a read succeeds again.
-   */
   const readList = Effect.gen(function* () {
     const settled = options.store.keyLists.get(listed);
     const startedAt = yield* Clock.currentTimeMillis;
@@ -395,7 +367,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
       return;
     }
 
-    if ((before?.readAt ?? -Infinity) >= startedAt) {
+    if (settledSince(before, startedAt)) {
       return yield* read.failure;
     }
 
@@ -416,7 +388,6 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
     return yield* read.failure;
   });
 
-  /** The list read now, or within the cooldown, or else the held one, while inside its window. */
   const latest = Effect.gen(function* () {
     const fetched = yield* Effect.result(readList);
     const list = options.store.keyLists.get(listed)?.held;
@@ -446,7 +417,7 @@ export const make = Effect.fn("Verifier.make")(function* (options: Options) {
 
     const list =
       current !== undefined &&
-      now - current.readAt < Duration.toMillis(keyListRefresh) &&
+      now - current.readAt < Duration.toMillis(revocationDelay) &&
       current.expiresAt > now
         ? current
         : yield* latest;
