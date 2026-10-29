@@ -12,11 +12,7 @@ export default defineConfig(({ command, mode }) => {
       setupFiles: ["./src/vitest-setup.ts"],
       server: {
         deps: {
-          inline: [
-            "foldkit",
-            "@foldkit/ui",
-            "@gjermundgaraba-designs/pixel-paper",
-          ],
+          inline: ["foldkit", "@foldkit/ui", "@gjermundgaraba/pixel-paper"],
         },
       },
     },

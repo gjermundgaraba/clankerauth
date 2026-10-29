@@ -1,4 +1,4 @@
-import { Tips } from "@gjermundgaraba-designs/pixel-paper";
+import { Tips } from "@gjermundgaraba/pixel-paper";
 import { Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 import { Url } from "foldkit/url";

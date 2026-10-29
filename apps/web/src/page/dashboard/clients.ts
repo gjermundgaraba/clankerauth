@@ -1,3 +1,4 @@
+import type { Client, Connection } from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Button,
   Chip,
@@ -6,8 +7,7 @@ import {
   Panel,
   PropsList,
   Table,
-} from "@gjermundgaraba-designs/pixel-paper";
-import type { Client, Connection } from "@gjermundgaraba/clankerauth-admin-api";
+} from "@gjermundgaraba/pixel-paper";
 import { Array, Option, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 

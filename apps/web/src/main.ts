@@ -1,5 +1,5 @@
 import type { Clipboard } from "@effect/platform-browser";
-import { SkipLink, Tips } from "@gjermundgaraba-designs/pixel-paper";
+import { SkipLink, Tips } from "@gjermundgaraba/pixel-paper";
 import { Effect, Option, Schema, String } from "effect";
 import { Command, Subscription } from "foldkit";
 import type { Runtime } from "foldkit";

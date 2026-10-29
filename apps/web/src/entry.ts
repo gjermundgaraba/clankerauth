@@ -1,7 +1,7 @@
 import { Clipboard } from "@effect/platform-browser";
 import { Runtime } from "foldkit";
 
-import "@gjermundgaraba-designs/pixel-paper/pixel-paper.css";
+import "@gjermundgaraba/pixel-paper/pixel-paper.css";
 import { init, subscriptions, update } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model } from "./model.ts";

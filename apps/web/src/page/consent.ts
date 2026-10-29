@@ -8,7 +8,7 @@ import {
   Outcome,
   PropsList,
   Rows,
-} from "@gjermundgaraba-designs/pixel-paper";
+} from "@gjermundgaraba/pixel-paper";
 import { Array, Effect, Option, Schema, String, pipe } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

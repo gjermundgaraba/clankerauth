@@ -7,7 +7,7 @@ import {
   Outcome,
   SkipLink,
   Tips,
-} from "@gjermundgaraba-designs/pixel-paper";
+} from "@gjermundgaraba/pixel-paper";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "./message.ts";

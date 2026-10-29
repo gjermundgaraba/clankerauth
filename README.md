@@ -122,7 +122,7 @@ Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with 
 
 - `packages/admin-api`: the issuer administration contract defined with effect-actions, shared by server and dashboard.
 - `apps/server`: the service. `vp pack` emits a single `dist/main.mjs`.
-- `apps/web`: the dashboard and the sign-in, setup and consent pages, a [Foldkit](https://foldkit.dev) application styled with [pixel-paper](https://www.npmjs.com/package/@gjermundgaraba-designs/pixel-paper). Clients, resources and API keys are its sections at `/`, `/resources` and `/keys`.
+- `apps/web`: the dashboard and the sign-in, setup and consent pages, a [Foldkit](https://foldkit.dev) application styled with [pixel-paper](https://github.com/gjermundgaraba/clankersuite/tree/main/packages/pixel-paper). Clients, resources and API keys are its sections at `/`, `/resources` and `/keys`.
 - `packages/sdk`: the `@gjermundgaraba/clankerauth-sdk` npm package for services that authenticate against an issuer. Its tests run against the in-repo server.
 - `packages/dev`: the `@gjermundgaraba/clankerauth-dev` npm package. Its tests also install the packed tarball and run against it.
 - `apps/cli`: the `@gjermundgaraba/clankerauth` npm package, the `clankerauth` command. Its tests run the packed binary against a development issuer.

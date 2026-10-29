@@ -1,4 +1,4 @@
-import { Card, Focus } from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Focus } from "@gjermundgaraba/pixel-paper";
 import { Option } from "effect";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vite-plus/test";

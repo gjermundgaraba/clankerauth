@@ -1,4 +1,4 @@
-import { Card, Focus } from "@gjermundgaraba-designs/pixel-paper";
+import { Card, Focus } from "@gjermundgaraba/pixel-paper";
 import { Option } from "effect";
 import {
   Command,

@@ -1,11 +1,11 @@
+import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
 import {
   Card,
   Field,
   Focus,
   Notice,
   PasswordField,
-} from "@gjermundgaraba-designs/pixel-paper";
-import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
+} from "@gjermundgaraba/pixel-paper";
 import { Boolean, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

@@ -1,4 +1,4 @@
-import { Button, Format, Wrap } from "@gjermundgaraba-designs/pixel-paper";
+import { Button, Format, Wrap } from "@gjermundgaraba/pixel-paper";
 import { Array, DateTime } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 

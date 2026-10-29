@@ -1,11 +1,11 @@
+import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Button,
   EmptyState,
   PageHead,
   Panel,
   PropsList,
-} from "@gjermundgaraba-designs/pixel-paper";
-import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
+} from "@gjermundgaraba/pixel-paper";
 import { Array, flow, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 

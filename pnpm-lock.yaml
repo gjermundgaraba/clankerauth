@@ -206,12 +206,12 @@ catalogs:
     '@foldkit/vite-plugin':
       specifier: 0.28.0
       version: 0.28.0
-    '@gjermundgaraba-designs/pixel-paper':
-      specifier: 0.26.0
-      version: 0.26.0
     '@gjermundgaraba/effect-actions':
       specifier: 0.23.0
       version: 0.23.0
+    '@gjermundgaraba/pixel-paper':
+      specifier: 0.1.0
+      version: 0.1.0
     '@opentelemetry/api':
       specifier: 1.10.0
       version: 1.10.0
@@ -431,9 +431,6 @@ importers:
       '@foldkit/vite-plugin':
         specifier: 'catalog:'
         version: 0.28.0(patch_hash=a60b8a7876f70ae558dcdf4a556af699871c76e6ce1d54aae75efee463dbb02c)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2)(yaml@2.9.1))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))(redis@6.2.1(@opentelemetry/api@1.10.0))
-      '@gjermundgaraba-designs/pixel-paper':
-        specifier: 'catalog:'
-        version: 0.26.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       '@gjermundgaraba/clankerauth-admin-api':
         specifier: workspace:*
         version: link:../../packages/admin-api
@@ -443,6 +440,9 @@ importers:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.23.0(effect@4.0.6)
+      '@gjermundgaraba/pixel-paper':
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       better-auth:
         specifier: 'catalog:'
         version: 1.7.13(@opentelemetry/api@1.10.0)(vitest@5.0.5)
@@ -811,23 +811,19 @@ packages:
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba-designs/pixel-paper@0.26.0':
-    resolution: {integrity: sha512-rsK130A92fe4Ajg2U18ocN+E//WRGD95nADdqT7ZuVIPsTXUSx3+1C+I5VEek4G9h8gM3ULGLZ5KKtaXAJitaA==}
-    peerDependencies:
-      '@effect/platform-browser': ^4.0.0
-      '@foldkit/ui': ^0.169.0
-      effect: ^4.0.0
-      foldkit: ^0.169.0
-      mermaid: ^12
-    peerDependenciesMeta:
-      mermaid:
-        optional: true
-
   '@gjermundgaraba/effect-actions@0.23.0':
     resolution: {integrity: sha512-VfTR7eQQnmnH9wQ3t601C+ANAh8cZ2ZQ6Rmh0UQ2sRFs3Pe02ONxgRcU+23m+lynuMoINnOW+pkfjrj406x3rg==}
     engines: {node: '>=26.12.0'}
     peerDependencies:
       effect: ~4.0.5
+
+  '@gjermundgaraba/pixel-paper@0.1.0':
+    resolution: {integrity: sha512-MK47IwtX1mhgxIyWHdgUuJX5cwruT2nOE1mfBpT6aUaHJwy+3NqxOydRKkAGG62/exWolgO88AJ52Ya7iyRlbg==}
+    peerDependencies:
+      '@effect/platform-browser': ^4.0.0
+      '@foldkit/ui': ^0.169.0
+      effect: ^4.0.0
+      foldkit: ^0.169.0
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -2680,17 +2676,17 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba-designs/pixel-paper@0.26.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
+  '@gjermundgaraba/effect-actions@0.23.0(effect@4.0.6)':
+    dependencies:
+      effect: 4.0.6
+
+  '@gjermundgaraba/pixel-paper@0.1.0(@effect/platform-browser@4.0.6(effect@4.0.6))(@foldkit/ui@0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)))(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))':
     dependencies:
       '@effect/platform-browser': 4.0.6(effect@4.0.6)
       '@foldkit/ui': 0.169.0(effect@4.0.6)(foldkit@0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6))
       diff: 9.0.0
       effect: 4.0.6
       foldkit: 0.169.0(@effect/platform-browser@4.0.6(effect@4.0.6))(effect@4.0.6)
-
-  '@gjermundgaraba/effect-actions@0.23.0(effect@4.0.6)':
-    dependencies:
-      effect: 4.0.6
 
   '@jridgewell/resolve-uri@3.1.2': {}
 

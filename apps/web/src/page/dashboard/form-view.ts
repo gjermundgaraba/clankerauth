@@ -1,3 +1,5 @@
+import { ClientAuthMethod } from "@gjermundgaraba/clankerauth-admin-api";
+import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Choice,
   Field,
@@ -7,10 +9,8 @@ import {
   SelectField,
   Stack,
   TextareaField,
-} from "@gjermundgaraba-designs/pixel-paper";
-import type { Dialog } from "@gjermundgaraba-designs/pixel-paper";
-import { ClientAuthMethod } from "@gjermundgaraba/clankerauth-admin-api";
-import type { ResourceSummary } from "@gjermundgaraba/clankerauth-admin-api";
+} from "@gjermundgaraba/pixel-paper";
+import type { Dialog } from "@gjermundgaraba/pixel-paper";
 import { Array, Option, Record, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";

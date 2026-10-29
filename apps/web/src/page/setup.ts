@@ -1,12 +1,12 @@
+import { passwordRule } from "@gjermundgaraba/clankerauth-admin-api";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   Card,
   Field,
   Focus,
   Notice,
   PasswordField,
-} from "@gjermundgaraba-designs/pixel-paper";
-import { passwordRule } from "@gjermundgaraba/clankerauth-admin-api";
-import type * as Action from "@gjermundgaraba/effect-actions/Action";
+} from "@gjermundgaraba/pixel-paper";
 import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

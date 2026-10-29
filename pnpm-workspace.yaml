@@ -35,7 +35,7 @@ catalog:
   "@opentelemetry/api": 1.10.0
   "@oxlint/plugins": 1.89.0
   "@gjermundgaraba/effect-actions": 0.23.0
-  "@gjermundgaraba-designs/pixel-paper": 0.26.0
+  "@gjermundgaraba/pixel-paper": 0.1.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2
   "@types/proper-lockfile": 4.1.4
@@ -73,7 +73,6 @@ minimumReleaseAgeExclude:
   - vitest
   - "@vitest/*"
   - "@gjermundgaraba/*"
-  - "@gjermundgaraba-designs/*"
   - effect
   - "@effect/*"
   - "@clanker-stuff/*"

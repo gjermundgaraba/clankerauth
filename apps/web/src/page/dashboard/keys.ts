@@ -1,3 +1,4 @@
+import type { ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Button,
   Chip,
@@ -5,8 +6,7 @@ import {
   PageHead,
   Panel,
   PropsList,
-} from "@gjermundgaraba-designs/pixel-paper";
-import type { ApiKey } from "@gjermundgaraba/clankerauth-admin-api";
+} from "@gjermundgaraba/pixel-paper";
 import { Array, Option, Record } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
