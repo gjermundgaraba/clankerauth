@@ -207,8 +207,8 @@ catalogs:
       specifier: 0.29.0
       version: 0.29.0
     '@gjermundgaraba/effect-actions':
-      specifier: 0.25.0
-      version: 0.25.0
+      specifier: 0.26.1
+      version: 0.26.1
     '@gjermundgaraba/pixel-paper':
       specifier: 0.3.0
       version: 0.3.0
@@ -317,7 +317,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.25.0(effect@4.1.1)
+        version: 0.26.1(effect@4.1.1)
       effect:
         specifier: 'catalog:'
         version: 4.1.1
@@ -372,7 +372,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.25.0(effect@4.1.1)
+        version: 0.26.1(effect@4.1.1)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.13(@opentelemetry/api@1.10.0)(vitest@5.0.5)
@@ -436,7 +436,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.25.0(effect@4.1.1)
+        version: 0.26.1(effect@4.1.1)
       '@gjermundgaraba/pixel-paper':
         specifier: 'catalog:'
         version: 0.3.0(@effect/platform-browser@4.1.1(effect@4.1.1))(@foldkit/ui@0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)))(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
@@ -469,7 +469,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.25.0(effect@4.1.1)
+        version: 0.26.1(effect@4.1.1)
       effect:
         specifier: 'catalog:'
         version: 4.1.1
@@ -524,7 +524,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.25.0(effect@4.1.1)
+        version: 0.26.1(effect@4.1.1)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
@@ -831,8 +831,8 @@ packages:
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba/effect-actions@0.25.0':
-    resolution: {integrity: sha512-JSaAcTzzh9tqFVGa9nPWGH46YUQgiLGW1kejiz+uchnA2ZHk7CwEvRxemxxiEgu+9n/j3k7TptdYtWDWUhT2pQ==}
+  '@gjermundgaraba/effect-actions@0.26.1':
+    resolution: {integrity: sha512-+qLKEr+1bv7YOA8Xl8SPy9AJEiTDgfIQsVEQ/LSAn/a1uDm4rbrrVaa6lF5SD+pO344bTppfDayGlCeOPplgOw==}
     engines: {node: '>=26.12.0'}
     peerDependencies:
       effect: ~4.1.1
@@ -2797,7 +2797,7 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba/effect-actions@0.25.0(effect@4.1.1)':
+  '@gjermundgaraba/effect-actions@0.26.1(effect@4.1.1)':
     dependencies:
       effect: 4.1.1
 
