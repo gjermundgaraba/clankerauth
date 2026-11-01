@@ -57,7 +57,7 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/client": "catalog:",
     "@types/node": "catalog:",
     "@types/proper-lockfile": "catalog:",
     "effect": "catalog:",
