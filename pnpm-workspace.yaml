@@ -5,23 +5,23 @@ packages:
 catalogMode: prefer
 saveExact: true
 catalog:
-  "@effect/platform-browser": 4.0.6
-  "@effect/platform-node": 4.0.6
+  "@effect/platform-browser": 4.1.1
+  "@effect/platform-node": 4.1.1
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.0.6
-  "@effect/vitest": 4.0.6
+  "@effect/platform-node-shared": 4.1.1
+  "@effect/vitest": 4.1.1
   foldkit: 0.169.0
   "@foldkit/ui": 0.169.0
-  "@foldkit/vite-plugin": 0.28.0
+  "@foldkit/vite-plugin": 0.29.0
   "@foldkit/oxlint-plugin": 0.15.3
   happy-dom: 21.0.4
   "@better-auth/oauth-provider": 1.7.13
   "@better-auth/api-key": 1.7.13
   better-auth: 1.7.13
   better-call: 1.4.4
-  effect: 4.0.6
+  effect: 4.1.1
   "@types/node": 26.6.5
   jose: 6.2.13
   typescript: 7.0.2
@@ -34,7 +34,7 @@ catalog:
   "@better-auth/kysely-adapter": 1.7.13
   "@opentelemetry/api": 1.10.0
   "@oxlint/plugins": 1.89.0
-  "@gjermundgaraba/effect-actions": 0.23.0
+  "@gjermundgaraba/effect-actions": 0.25.0
   "@gjermundgaraba/pixel-paper": 0.1.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2
@@ -52,10 +52,9 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     vite: "*"
-    # Foldkit 0.169 pins effect 4.0.0 as an exact peer; one effect 4.0.6 instance serves all.
-    effect: 4.0.6
-    "@effect/platform-browser": 4.0.6
-    "@effect/platform-node": 4.0.6
+    # Foldkit 0.169 pins effect 4.0.0 as an exact peer; one effect 4.1.1 instance serves all.
+    effect: 4.1.1
+    "@effect/platform-browser": 4.1.1
     vitest: "*"
   allowAny:
     - vite
@@ -76,10 +75,6 @@ minimumReleaseAgeExclude:
   - effect
   - "@effect/*"
   - "@clanker-stuff/*"
-patchedDependencies:
-  # The plugin reads Crypto.randomUUIDv4 as effect 4.0.0's value; from 4.0.3 it is a method,
-  # so without this its DevTools MCP relay fails to start under the effect pinned here.
-  "@foldkit/vite-plugin@0.28.0": patches/@foldkit__vite-plugin@0.28.0.patch
 permissions:
   ultracite:
     skills: true
