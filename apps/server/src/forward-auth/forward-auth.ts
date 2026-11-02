@@ -2,6 +2,8 @@ import {
   returnToParameter,
   signOutPath,
 } from "@gjermundgaraba/clankerauth-sdk/session";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
 import { Clock, Effect, Layer, Option, Redacted } from "effect";
 import {
   Cookies,
@@ -31,6 +33,20 @@ export const forwardCookie = "clankerauth_forward";
 const json = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status });
 
+const unauthenticated = (issuer: string, resource: string) => {
+  const { headers } = Authentication.refusalResponse(
+    new Action.Unauthenticated({
+      message: "A forward-auth session is required.",
+    }),
+    { protectedResource: { resource, authorizationServers: [issuer] } }
+  );
+
+  return HttpServerResponse.setHeaders(json(401, "unauthenticated"), {
+    "cache-control": headers["cache-control"],
+    "www-authenticate": headers["www-authenticate"],
+  });
+};
+
 export const forwardAuthRoutes = (cookieDomain: string) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -55,6 +71,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
       const secret = Redacted.value(settings.secret);
       const loginPage = new URL("/login", settings.baseURL);
+      const issuer = `${settings.baseURL}/api/auth`;
 
       const cookieOptions = {
         domain: cookieDomain,
@@ -128,7 +145,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
             ? HttpServerResponse.redirect(
                 withReturn("/forward-auth/continue", returnTo)
               )
-            : json(401, "unauthenticated");
+            : unauthenticated(issuer, resource.identifier);
         }
 
         const iat = Math.floor((yield* Clock.currentTimeMillis) / 1000);

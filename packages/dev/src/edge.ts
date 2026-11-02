@@ -29,6 +29,8 @@ export interface Decision {
   readonly status: number;
   readonly authorization: string | undefined;
   readonly location: string | undefined;
+  /** The issuer's `WWW-Authenticate` on a 401, naming the resource's metadata. */
+  readonly challenge: string | undefined;
   /** The issuer's own response body, relayed verbatim so a refusal reads the same here. */
   readonly body: Buffer;
   readonly contentType: string | undefined;
@@ -89,7 +91,12 @@ export const check = (options: CheckOptions) => {
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
-        const { authorization, location } = answer.headers;
+
+        const {
+          authorization,
+          location,
+          "www-authenticate": challenge,
+        } = answer.headers;
 
         if (status === 204 && authorization === undefined) {
           answer.resume();
@@ -112,6 +119,7 @@ export const check = (options: CheckOptions) => {
             status,
             authorization,
             location,
+            challenge,
             body: Buffer.concat(chunks),
             contentType: answer.headers["content-type"],
           });
@@ -210,6 +218,10 @@ export const middleware = (options: EdgeOptions) => {
 
       if (decision.location !== undefined) {
         headers["location"] = decision.location;
+      }
+
+      if (decision.challenge !== undefined) {
+        headers["www-authenticate"] = decision.challenge;
       }
 
       if (decision.contentType !== undefined) {

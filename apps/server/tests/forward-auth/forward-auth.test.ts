@@ -215,6 +215,10 @@ it.live(
 
       const scripted = yield* forward("", resource, page, "cors");
       expect(scripted.status).toBe(401);
+      expect(scripted.headers.get("www-authenticate")).toBe(
+        'Bearer resource_metadata="https://notes.home.example/.well-known/oauth-protected-resource/api"'
+      );
+      expect(scripted.headers.get("cache-control")).toBe("no-store");
       expect(yield* decodeJson(Schema.Json)(scripted)).toHaveProperty(
         "error",
         "unauthenticated"

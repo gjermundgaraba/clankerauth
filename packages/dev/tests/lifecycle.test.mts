@@ -950,6 +950,10 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     assert.ok(contentType !== undefined);
     assert.match(contentType, /application\/json/u);
     assert.deepEqual(JSON.parse(anonymous.body), { error: "unauthenticated" });
+    assert.equal(
+      anonymous.headers["www-authenticate"],
+      `Bearer resource_metadata="${app}/.well-known/oauth-protected-resource"`
+    );
     assert.deepEqual<Array<string | null>>(seen, []);
 
     const probe = await get("/healthz");
