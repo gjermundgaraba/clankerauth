@@ -145,7 +145,10 @@ export interface SocketOptions {
   readonly backend: string;
   /**
    * Paths whose upgrades this edge owns. Everything else, including a development
-   * server's own hot-reload socket, is left untouched.
+   * server's own hot-reload socket, is left untouched and unchecked: another listener
+   * answers an upgrade as it arrives, before the issuer could. Vite refuses a hot-reload
+   * upgrade that sends an `Origin` without its token, so no page opens one; a client
+   * that sends no `Origin` can, and reads which modules changed.
    */
   readonly paths: readonly string[];
 }
