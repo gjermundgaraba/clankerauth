@@ -165,13 +165,18 @@ export interface EdgeOptions extends CheckOptions {
 const isUnder = (path: string, prefixes: readonly string[]) =>
   prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 
+const isPlain = (path: string) =>
+  path.startsWith("/") &&
+  !/%2e|%2f|%5c|\\/iu.test(path) &&
+  new URL(path, "http://edge.invalid").pathname === path;
+
 const toError = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
 
 /**
  * Connect-style middleware: an unauthenticated navigation is redirected through the
  * issuer and back, anything else is refused in place, and a request that already
- * carries a credential passes straight through.
+ * carries a credential passes straight through. Only a plain path passes unchecked.
  */
 export const middleware = (options: EdgeOptions) => {
   const ask = check(options);
@@ -185,8 +190,9 @@ export const middleware = (options: EdgeOptions) => {
     const path = pathOf(request.url ?? "/");
 
     if (
-      request.headers.authorization !== undefined ||
-      isUnder(path, publicPaths)
+      isPlain(path) &&
+      (request.headers.authorization !== undefined ||
+        isUnder(path, publicPaths))
     ) {
       next();
 
@@ -247,7 +253,9 @@ const copyHeaders = (headers: IncomingHttpHeaders) =>
 
 /**
  * Handle one `upgrade`. Returns `false` for a path this edge does not own, so a
- * development server keeps its own hot-reload socket. An upgrade is never a
+ * development server keeps its own hot-reload socket. With `sockets` given, an upgrade
+ * whose path is not plain is refused, since a listener after this one could resolve
+ * it to a path the edge owns. An upgrade is never a
  * navigation, so an unauthenticated one is refused in place: the page signs in and
  * the client reconnects.
  */
@@ -257,12 +265,11 @@ export const upgrade = (options: EdgeOptions) => {
   return (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
     const path = pathOf(request.url ?? "/");
     const { sockets } = options;
+    const plain = isPlain(path);
 
-    if (sockets === undefined || !isUnder(path, sockets.paths)) {
+    if (sockets === undefined || (plain && !isUnder(path, sockets.paths))) {
       return false;
     }
-
-    const backend = new URL(sockets.backend);
 
     const fail = (status: number, reason: string, error?: Error) => {
       if (error) {
@@ -276,6 +283,14 @@ export const upgrade = (options: EdgeOptions) => {
       options.onError?.(error);
       socket.destroy();
     });
+
+    if (!plain) {
+      fail(400, "Bad Request");
+
+      return true;
+    }
+
+    const backend = new URL(sockets.backend);
 
     const proxy = (authorization: string) => {
       const upstream = httpRequest({

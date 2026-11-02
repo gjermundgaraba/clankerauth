@@ -919,7 +919,10 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     }
 
     track(socket);
-    socket.end("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+
+    if (socket.writable) {
+      socket.end("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
+    }
   });
 
   const edgeListening = once(edge, "listening");
@@ -927,7 +930,12 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
   await edgeListening;
 
   const get = async (target: string, headers: OutgoingHttpHeaders = {}) => {
-    const attempt = request(`http://127.0.0.1:${port}${target}`, { headers });
+    const attempt = request({
+      host: "127.0.0.1",
+      port,
+      path: target,
+      headers,
+    });
 
     const {
       promise: answered,
@@ -964,6 +972,18 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     assert.equal(probe.status, 200);
     assert.deepEqual<Array<string | null>>(seen, [null]);
 
+    for (const target of [
+      "/healthz/../docs",
+      "/healthz/%2e%2e/docs",
+      "/healthz/..%2fdocs",
+      "/healthz\\..\\docs",
+    ]) {
+      const traversal = await get(target, { authorization: "Bearer forged" });
+      assert.equal(traversal.status, 401, target);
+    }
+
+    assert.deepEqual<Array<string | null>>(seen, [null]);
+
     const { cookie } = await issuer.ownerSession(app);
     const admitted = await get("/docs", { cookie });
     assert.equal(admitted.status, 200);
@@ -982,7 +1002,10 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
       const { promise, resolve, reject } =
         Promise.withResolvers<SocketAnswer>();
 
-      const attempt = request(`http://127.0.0.1:${port}${target}`, {
+      const attempt = request({
+        host: "127.0.0.1",
+        port,
+        path: target,
         headers: { connection: "Upgrade", upgrade: "websocket", ...headers },
       });
 
@@ -1019,6 +1042,15 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
 
     const untouched = await openSocket("/hmr", { cookie });
     assert.equal(untouched.status, 200);
+
+    for (const target of [
+      "/sync/../sync",
+      "/hmr/../sync",
+      "/hmr/%2e%2e/sync",
+    ]) {
+      const resolved = await openSocket(target, { cookie });
+      assert.equal(resolved.status, 400, target);
+    }
 
     await issuer.close();
     const broken = await get("/docs", { cookie });
