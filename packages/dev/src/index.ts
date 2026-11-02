@@ -31,12 +31,7 @@ import {
   Schema,
   Scope,
 } from "effect";
-import {
-  Cookies,
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-} from "effect/http";
+import { Cookies, FetchHttpClient, HttpClient } from "effect/http";
 
 import type {
   DisposableIssuer,
@@ -112,10 +107,10 @@ const provisioningFailed = (cause: unknown) =>
 
 const decodeResources = Schema.decodeEffect(Schema.Array(ResourceInput));
 
-const ownerSession = Effect.fn("Dev.ownerSession")(function* (
+const ownerSession = Effect.fn("Dev.ownerSession")(function* <E>(
   issuerUrl: string,
   forwardOrigin: string | undefined,
-  owner: { readonly email: string; readonly password: string },
+  signedIn: Effect.Effect<string, E>,
   appOrigin: string
 ) {
   if (forwardOrigin === undefined) {
@@ -126,30 +121,23 @@ const ownerSession = Effect.fn("Dev.ownerSession")(function* (
   }
 
   const client = yield* HttpClient.HttpClient;
-
-  const signIn = yield* client.execute(
-    HttpClientRequest.post(`${issuerUrl}/api/auth/sign-in/email`, {
-      headers: { origin: issuerUrl },
-    }).pipe(HttpClientRequest.bodyJsonUnsafe(owner))
-  );
-
-  yield* signIn.text;
-
-  if (signIn.status !== 200) {
-    return yield* new ForwardAuthError({
-      message: `Owner sign-in failed with HTTP ${signIn.status}`,
-    });
-  }
-
+  const session = yield* signedIn;
   const destination = new URL("/", appOrigin).href;
 
   const sealed = yield* client.get(
     `${issuerUrl}/forward-auth/continue?rd=${encodeURIComponent(destination)}`,
-    { headers: { cookie: Cookies.toCookieHeader(signIn.cookies) } }
+    { headers: { cookie: session } }
   );
 
   yield* sealed.text;
-  const jar = Cookies.merge(signIn.cookies, sealed.cookies);
+
+  const jar = Cookies.merge(
+    Cookies.setAllUnsafe(
+      Cookies.empty,
+      Object.entries(Cookies.parseHeader(session))
+    ),
+    sealed.cookies
+  );
 
   return {
     cookie: Cookies.toCookieHeader(jar),
@@ -341,6 +329,16 @@ const makeWorkspace = Effect.fnUntraced(function* (
 
   const forwardOrigin = options.cookieDomain === undefined ? undefined : url;
 
+  const signedIn = Effect.gen(function* () {
+    const userId = yield* account.find;
+
+    if (userId === undefined) {
+      return yield* Effect.die(new Error("Owner setup failed"));
+    }
+
+    return Redacted.value(yield* account.session(userId));
+  }).pipe(Effect.mapError(({ message }) => new ForwardAuthError({ message })));
+
   return {
     details: {
       issuer: `${url}/api/auth`,
@@ -366,7 +364,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
         )
       ),
     ownerSession: (appOrigin: string) =>
-      ownerSession(url, forwardOrigin, owner, appOrigin),
+      ownerSession(url, forwardOrigin, signedIn, appOrigin),
     ownerToken: Effect.fn("Dev.ownerToken")(function* (input: {
       readonly resource: string;
       readonly appOrigin: string;
@@ -374,7 +372,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
       const { cookie } = yield* ownerSession(
         url,
         forwardOrigin,
-        owner,
+        signedIn,
         input.appOrigin
       );
 

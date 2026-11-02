@@ -4,8 +4,9 @@ import type {
   Owner,
   ProviderRefused,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
+import { Context, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
 
+import { signedSessionCookie } from "../issuer/cookies.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
@@ -30,6 +31,13 @@ export class OwnerAccount extends Context.Service<
       email: string,
       writable: boolean
     ) => Owner;
+    /**
+     * A full-length session for the owner, as its `Cookie` header, minted without the
+     * rate-limited sign-in; for the embedding development issuer, never served over HTTP.
+     */
+    readonly session: (
+      userId: string
+    ) => Effect.Effect<Redacted.Redacted, InternalServerError>;
   }
 >()("clankerauth/OwnerAccount") {
   static readonly layer = Layer.effect(
@@ -85,6 +93,17 @@ export class OwnerAccount extends Context.Service<
           writable,
           providerHeaders: providerSession(userId),
         }),
+        session: Effect.fn("OwnerAccount.session")(function* (userId: string) {
+          const { token } = yield* provider(
+            async () => await context.internalAdapter.createSession(userId)
+          );
+
+          return Redacted.make(
+            yield* provider(
+              async () => await signedSessionCookie(context, token)
+            )
+          );
+        }, Effect.uninterruptible),
       };
     })
   );

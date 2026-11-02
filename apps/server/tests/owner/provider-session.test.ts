@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Context, Data, Effect, Exit, Fiber, Scope } from "effect";
+import { Context, Data, Effect, Exit, Fiber, Redacted, Scope } from "effect";
 import { expect, vi } from "vite-plus/test";
 
 import { Issuer } from "../../src/issuer/issuer.ts";
@@ -124,5 +124,29 @@ it.live(
       expect(yield* sql`SELECT id FROM session ORDER BY id`).toStrictEqual(
         before
       );
+    }).pipe(Effect.provide(testIssuer({ baseURL })))
+);
+
+it.live(
+  "an owner session minted without sign-in resolves to the owner and outlives its caller",
+  () =>
+    Effect.gen(function* () {
+      const owner = yield* createOwner;
+      const { auth } = yield* Issuer;
+      const owners = yield* OwnerAccount;
+
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        const cookie = Redacted.value(yield* owners.session(owner));
+
+        const session = yield* Effect.promise(
+          async () =>
+            await auth.api.getSession({ headers: new Headers({ cookie }) })
+        );
+
+        expect(session?.user.id).toBe(owner);
+        expect(session?.session.expiresAt.getTime()).toBeGreaterThan(
+          Date.now() + 7 * 24 * 60 * 60 * 1000
+        );
+      }
     }).pipe(Effect.provide(testIssuer({ baseURL })))
 );

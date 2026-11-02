@@ -53,7 +53,7 @@ const token = await issuer.ownerToken({
 });
 ```
 
-`apiKey` returns the secret once. `ownerSession` signs the owner in and seals the forward cookie exactly as `/forward-auth/continue` does for a browser; `cookies` is the name/value form a browser-automation context takes. `ownerToken` runs the same forward-auth check and returns the access token, so a test never assembles a cookie jar. A refused `apiKey` rejects with `ProvisioningError`, and a refused `ownerSession` or `ownerToken` with `ForwardAuthError`. Both classes are exported, and each one's `_tag` is its name.
+`apiKey` returns the secret once. `ownerSession` mints a session for the owner in process, without the rate-limited sign-in endpoint, so any number of calls and restarts never meet a 429, and seals the forward cookie exactly as `/forward-auth/continue` does for a browser; `cookies` is the name/value form a browser-automation context takes. `ownerToken` runs the same forward-auth check and returns the access token, so a test never assembles a cookie jar. A refused `apiKey` rejects with `ProvisioningError`, and a refused `ownerSession` or `ownerToken` with `ForwardAuthError`. Both classes are exported, and each one's `_tag` is its name.
 
 ## A workspace that survives a restart
 

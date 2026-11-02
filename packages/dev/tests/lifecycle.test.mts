@@ -800,6 +800,10 @@ await test("owner sessions and tokens are provisioned without a hand-rolled cook
   });
 
   try {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await issuer.ownerSession(app);
+    }
+
     const session = await issuer.ownerSession(app);
     assert.match(session.cookie, /clankerauth_forward=/u);
     assert.ok(
