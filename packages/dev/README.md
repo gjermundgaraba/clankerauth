@@ -110,6 +110,7 @@ export default defineConfig({
       appOrigin: "http://app.notes.localhost:5173",
       resource: "http://app.notes.localhost:5173/",
       sockets: { backend: "http://127.0.0.1:8080", paths: ["/eventlog"] },
+      verifiesAuthorization: (path) => path.startsWith("/api/"),
       onError: (error) => console.error("[forward-auth]", error.message),
     }),
   ],
@@ -121,7 +122,7 @@ Nothing in this package imports Vite, at run time or in its types: the plugin is
 - The check uses `node:http`, never `fetch`: `fetch` owns `Sec-Fetch-Mode`, and that header is what tells the issuer whether a request may be redirected through sign-in. The browser's own header is relayed, along with its cookie, plus `x-forwarded-proto`, `-host` and `-uri`.
 - It has a timeout (5 s by default) and **rejects** rather than deciding when the issuer is unreachable, too slow, or answers `204` with no `Authorization` to forward. `middleware` turns a rejection into a 502 and passes the error to `onError`; an empty credential is never forwarded upstream.
 - A refusal is relayed as the issuer wrote it: its status, its `Location`, its `WWW-Authenticate`, its body and its content type. A script that is not signed in reads `{"error":"unauthenticated"}` rather than an empty 401, and the challenge names the resource's metadata, so an OAuth client can discover where to sign in.
-- `publicPaths` defaults to `/mcp`, `/.well-known` and `/healthz`, and a request that already carries an `Authorization` header is never checked: agents onboard themselves and probes run.
+- `publicPaths` defaults to `/mcp`, `/.well-known` and `/healthz`, and a request that already carries an `Authorization` header is not checked where `verifiesAuthorization(path)` says the server behind the edge verifies one, by default every path: agents onboard themselves and probes run. A development server verifies nothing, so an edge in front of Vite answers `false` for the paths Vite serves; otherwise any `Authorization` value, even `x`, reaches its pages and modules. Where it answers `false`, the header is ignored and the issuer's token replaces it.
 - Only a plain path passes unchecked. A path with a dot segment, an encoded `.`, `/` or `\`, or a backslash goes through the check like any other, so a server behind the edge cannot resolve `/mcp/../src/main.ts` into a page the check never saw. With `sockets` given, an upgrade on such a path is refused with 400.
 - `upgrade` only takes the paths in `sockets.paths`, so a development server keeps its own hot-reload socket; it returns `false` for everything else, which on a plain Node server means another listener must answer them. Omit `sockets` and it takes none. A checked upgrade is proxied to `sockets.backend`; a half closing normally ends the other half, and only an error destroys. A client that gives up while the issuer is deciding is not proxied at all. A socket error is reported through `onError` and never crashes the server.
 - `reserveLoopbackPort()` claims a free port before anything that must know its own origin up front.

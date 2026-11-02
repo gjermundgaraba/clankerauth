@@ -156,6 +156,13 @@ export interface EdgeOptions extends CheckOptions {
    * credential or must work without one. Defaults to `/mcp`, `/.well-known`, `/healthz`.
    */
   readonly publicPaths?: readonly string[];
+  /**
+   * Whether the server behind the edge verifies an `Authorization` header at a path, so
+   * a request carrying one passes unchecked. Every path by default. Answer `false` where
+   * it does not, such as a development server's pages and modules: there the header is
+   * ignored, the request is checked, and the issuer's token replaces it.
+   */
+  readonly verifiesAuthorization?: (path: string) => boolean;
   /** Omit it and every upgrade is left to whoever else listens. */
   readonly sockets?: SocketOptions;
   /** Called with anything this edge swallowed, so a dev server can print it. */
@@ -181,6 +188,7 @@ const toError = (cause: unknown) =>
 export const middleware = (options: EdgeOptions) => {
   const ask = check(options);
   const publicPaths = options.publicPaths ?? [...defaultPublicPaths];
+  const verifies = options.verifiesAuthorization ?? (() => true);
 
   return (
     request: CheckedRequest,
@@ -191,7 +199,7 @@ export const middleware = (options: EdgeOptions) => {
 
     if (
       isPlain(path) &&
-      (request.headers.authorization !== undefined ||
+      ((request.headers.authorization !== undefined && verifies(path)) ||
         isUnder(path, publicPaths))
     ) {
       next();

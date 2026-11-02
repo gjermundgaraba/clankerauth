@@ -889,6 +889,7 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     appOrigin: app,
     resource: forwarded.identifier,
     sockets: { backend: backendUrl, paths: ["/sync"] },
+    verifiesAuthorization: (at) => at === "/api" || at.startsWith("/api/"),
     onError: (error) => {
       errors.push(error.message);
     },
@@ -991,6 +992,23 @@ await test("the forward-auth edge checks requests, proxies a socket and survives
     const checked = seen.at(-1);
     assert.ok(isString(checked));
     assert.match(checked, /^Bearer /u);
+
+    const agent = { authorization: "Bearer agent" };
+    const verified = await get("/api/notes", agent);
+    assert.equal(verified.status, 200);
+    assert.equal(seen.at(-1), "Bearer agent");
+
+    const before = seen.length;
+    const unverified = await get("/docs", agent);
+    assert.equal(unverified.status, 401);
+    assert.equal(seen.length, before);
+
+    const replaced = await get("/docs", { ...agent, cookie });
+    assert.equal(replaced.status, 200);
+    const minted = seen.at(-1);
+    assert.ok(isString(minted));
+    assert.match(minted, /^Bearer /u);
+    assert.notEqual(minted, "Bearer agent");
 
     const navigation = await get("/docs", { "sec-fetch-mode": "navigate" });
     assert.equal(navigation.status, 302);
