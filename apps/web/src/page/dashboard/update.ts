@@ -6,7 +6,7 @@ import {
   CopyButton,
   Dialog,
   Focus,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Array, Option, Result } from "effect";
 import { AsyncData } from "foldkit";
 import { modifyFields } from "foldkit/struct";

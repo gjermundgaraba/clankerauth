@@ -1,4 +1,4 @@
-import { Card, Wall, Wordmark } from "@gjermundgaraba/pixel-paper";
+import { Card, Wall, Wordmark } from "@gjermundgaraba/components";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 export const PRODUCT = "clankerauth";

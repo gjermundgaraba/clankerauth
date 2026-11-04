@@ -17,7 +17,7 @@ import {
   Secret,
   TopBar,
   Wordmark,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Array, Match, Option } from "effect";
 import { AsyncData } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -131,7 +131,7 @@ const topBarView = (
         ),
       ],
       tools: [
-        h.span([h.Class("meta")], [listing.overview.email]),
+        h.span([h.Class("gg-meta")], [listing.overview.email]),
         IconButton.view(
           {
             glyph: "log-out",
@@ -261,10 +261,10 @@ const credentialsView = (
               credentialView(pending, h)
             ),
             h.div(
-              [h.Class("save-row")],
+              [h.Class("gg-save-row")],
               [
                 h.span(
-                  [h.Class("push")],
+                  [h.Class("gg-push")],
                   [
                     Button.view(
                       {

@@ -1,4 +1,4 @@
-import { SkipLink } from "@gjermundgaraba/pixel-paper";
+import { SkipLink } from "@gjermundgaraba/components";
 import { Option } from "effect";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";

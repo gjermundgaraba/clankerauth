@@ -1,4 +1,4 @@
-import { ConfirmDialog, CopyButton, Dialog } from "@gjermundgaraba/pixel-paper";
+import { ConfirmDialog, CopyButton, Dialog } from "@gjermundgaraba/components";
 import { Option, Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";

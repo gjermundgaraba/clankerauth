@@ -279,13 +279,15 @@ try {
   });
 
   const dialog = page.locator("dialog[open]");
-  const headAction = page.locator(".page-head .page-acts button");
+  const headAction = page.locator(".gg-page-head .gg-page-acts button");
   /** @param {string} name */
   const button = (name) => page.getByRole("button", { name, exact: true });
 
   const waitForIdle = async () =>
     await page.waitForFunction(() => {
-      const action = document.querySelector(".page-head .page-acts button");
+      const action = document.querySelector(
+        ".gg-page-head .gg-page-acts button"
+      );
 
       return action && action.getAttribute("aria-disabled") !== "true";
     });
@@ -297,7 +299,7 @@ try {
 
       return (
         open?.contains(document.activeElement) === true &&
-        document.querySelector(".page-head")?.closest("[inert]") !== null
+        document.querySelector(".gg-page-head")?.closest("[inert]") !== null
       );
     });
   };
@@ -321,7 +323,7 @@ try {
   /** @param {string} label */
   const openForm = async (label) => {
     await page
-      .locator(".page-head")
+      .locator(".gg-page-head")
       .getByRole("button", { name: label, exact: true })
       .click();
     await assertModalWithFocus();

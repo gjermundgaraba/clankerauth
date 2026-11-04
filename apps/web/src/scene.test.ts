@@ -1,5 +1,5 @@
 import { Dialog as UiDialog } from "@foldkit/ui";
-import { Card, Dialog, Focus, TopBar } from "@gjermundgaraba/pixel-paper";
+import { Card, Dialog, Focus, TopBar } from "@gjermundgaraba/components";
 import {
   Command,
   Mount,

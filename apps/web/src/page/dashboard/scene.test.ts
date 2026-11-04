@@ -5,7 +5,7 @@ import {
   Dialog,
   Focus,
   TopBar,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Option } from "effect";
 import {
   Command,

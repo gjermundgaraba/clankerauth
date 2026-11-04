@@ -1,4 +1,4 @@
-import { Button, Format, Wrap } from "@gjermundgaraba/pixel-paper";
+import { Button, Format, Wrap } from "@gjermundgaraba/components";
 import { Array, DateTime } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
@@ -24,7 +24,7 @@ export const momentOf = (moment: DateTime.Utc): string =>
 export const noteView = <Message>(
   text: string,
   h: HtmlBuilder<Message>
-): Html => h.p([h.Class("note-line")], [text]);
+): Html => h.p([h.Class("gg-note-line")], [text]);
 
 export const footView = <Message>(
   buttons: readonly Html[],
@@ -32,7 +32,9 @@ export const footView = <Message>(
 ): readonly Html[] =>
   Array.match(buttons, {
     onEmpty: () => [],
-    onNonEmpty: (body) => [h.span([h.Class("push")], [Wrap.view({ body }, h)])],
+    onNonEmpty: (body) => [
+      h.span([h.Class("gg-push")], [Wrap.view({ body }, h)]),
+    ],
   });
 
 export const itemButtonView = <Message>(

@@ -1,12 +1,12 @@
 import { passwordRule } from "@gjermundgaraba/clankerauth-admin-api";
-import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   Card,
   Field,
   Focus,
   Notice,
   PasswordField,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -239,7 +239,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
       onSubmit: Message.SubmittedSetup(),
       body: [
         h.p(
-          [h.Class("note-line")],
+          [h.Class("gg-note-line")],
           [
             "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
           ]

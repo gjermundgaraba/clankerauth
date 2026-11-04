@@ -3,7 +3,7 @@ import {
   CopyButton,
   Dialog,
   TopBar,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 

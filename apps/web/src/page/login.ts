@@ -5,7 +5,7 @@ import {
   Focus,
   Notice,
   PasswordField,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Boolean, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -229,7 +229,7 @@ export const view = defineView<Model, Message>((model, h): Html =>
       onSubmit: Message.SubmittedSignIn(),
       body: [
         h.p(
-          [h.Class("note-line")],
+          [h.Class("gg-note-line")],
           [
             "Use your local account to continue. Password sign-in only: there is no external identity provider.",
           ]

@@ -8,7 +8,7 @@ import {
   Outcome,
   PropsList,
   Rows,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Array, Effect, Option, Schema, String, pipe } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -265,7 +265,7 @@ const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
   Array.match(asking.request.scopes, {
     onEmpty: () =>
       h.p(
-        [h.Class("note-line")],
+        [h.Class("gg-note-line")],
         ["No permissions requested beyond signing in."]
       ),
     onNonEmpty: (scopes) =>
@@ -353,7 +353,7 @@ const requestDetailsView = (
     h
   ),
   h.p(
-    [h.Class("note-line")],
+    [h.Class("gg-note-line")],
     [
       "The client supplies its display name. Review the identifier and callback before approving.",
     ]
@@ -404,7 +404,7 @@ const askingView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
         ),
         scopesView(asking, h),
         h.p(
-          [h.Class("note-line")],
+          [h.Class("gg-note-line")],
           [
             "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
           ]

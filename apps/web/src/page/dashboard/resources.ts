@@ -5,7 +5,7 @@ import {
   PageHead,
   Panel,
   PropsList,
-} from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
 import { Array, flow, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 

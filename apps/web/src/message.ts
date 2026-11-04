@@ -1,4 +1,4 @@
-import { Tips } from "@gjermundgaraba/pixel-paper";
+import { Tips } from "@gjermundgaraba/components";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";

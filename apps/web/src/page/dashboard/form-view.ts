@@ -9,8 +9,8 @@ import {
   SelectField,
   Stack,
   TextareaField,
-} from "@gjermundgaraba/pixel-paper";
-import type { Dialog } from "@gjermundgaraba/pixel-paper";
+} from "@gjermundgaraba/components";
+import type { Dialog } from "@gjermundgaraba/components";
 import { Array, Option, Record, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineView } from "foldkit/submodel";
