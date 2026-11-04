@@ -154,9 +154,7 @@ const grantsView = (
   h: HtmlBuilder<Message>
 ): readonly Html[] =>
   Array.match(resources, {
-    onEmpty: () => [
-      Text.view({ tone: "Note", body: ["Add a Resource to grant access."] }, h),
-    ],
+    onEmpty: () => [Text.note(["Add a Resource to grant access."], h)],
     onNonEmpty: (grantable) =>
       Array.map(grantable, ({ identifier, name, scopes }) =>
         Fieldset.view(
@@ -234,13 +232,10 @@ const keyFields = (
     Rename: () => [name],
     Grants: () => [
       ...grantsView(draft.grants, inputs.resources, h),
-      Text.view(
-        {
-          tone: "Note",
-          body: [
-            "Saving replaces all grants, including any not currently available, with the selected scopes.",
-          ],
-        },
+      Text.note(
+        [
+          "Saving replaces all grants, including any not currently available, with the selected scopes.",
+        ],
         h
       ),
     ],
@@ -254,13 +249,8 @@ const resourceChoicesView = (
 ): Html =>
   Array.match(resources, {
     onEmpty: () =>
-      Text.view(
-        {
-          tone: "Note",
-          body: [
-            "There are no Resources yet; add one to give this Client access.",
-          ],
-        },
+      Text.note(
+        ["There are no Resources yet; add one to give this Client access."],
         h
       ),
     onNonEmpty: (choices) =>
@@ -377,13 +367,10 @@ const clientFields = (
       resourceChoicesView(draft.resources, inputs.resources, h),
       nativeChoice(draft.isNative, h),
       authMethodField(draft.authMethod, h),
-      Text.view(
-        {
-          tone: "Note",
-          body: [
-            "Clients you register here are first party and skip the consent screen.",
-          ],
-        },
+      Text.note(
+        [
+          "Clients you register here are first party and skip the consent screen.",
+        ],
         h
       ),
     ],
@@ -391,23 +378,14 @@ const clientFields = (
       name,
       redirectUrisField(draft.redirectUris, h),
       nativeChoice(draft.isNative, h),
-      Text.view(
-        {
-          tone: "Note",
-          body: ["The authentication method is fixed at registration."],
-        },
-        h
-      ),
+      Text.note(["The authentication method is fixed at registration."], h),
     ],
     Access: () => [
       resourceChoicesView(draft.resources, inputs.resources, h),
-      Text.view(
-        {
-          tone: "Note",
-          body: [
-            "This Client skips consent for the Resources ticked here. Unticking one revokes its authorization for it.",
-          ],
-        },
+      Text.note(
+        [
+          "This Client skips consent for the Resources ticked here. Unticking one revokes its authorization for it.",
+        ],
         h
       ),
     ],

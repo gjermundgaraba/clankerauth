@@ -229,13 +229,10 @@ export const view = defineView<Model, Message>((model, h): Html =>
       isBusy: model.isSigningIn,
       onSubmit: Message.SubmittedSignIn(),
       body: [
-        Text.view(
-          {
-            tone: "Note",
-            body: [
-              "Use your local account to continue. Password sign-in only: there is no external identity provider.",
-            ],
-          },
+        Text.note(
+          [
+            "Use your local account to continue. Password sign-in only: there is no external identity provider.",
+          ],
           h
         ),
         ...refusalView(model, h),

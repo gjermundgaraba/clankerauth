@@ -97,15 +97,12 @@ const connectionsView = (
     Array.filter(({ client_id }) => client_id === client.client_id),
     Array.match({
       onEmpty: () =>
-        Text.view(
-          {
-            tone: "Note",
-            body: [
-              isManaged(client)
-                ? "Holds no refresh token."
-                : "No Resource approved yet.",
-            ],
-          },
+        Text.note(
+          [
+            isManaged(client)
+              ? "Holds no refresh token."
+              : "No Resource approved yet.",
+          ],
           h
         ),
       onNonEmpty: (clientConnections) =>
@@ -278,15 +275,12 @@ const clientPanel = (
           h
         ),
         connectionsView(context, client, h),
-        Text.view(
-          {
-            tone: "Note",
-            body: [
-              isManaged(client)
-                ? "Skips consent for its allowed Resources. Removing one revokes its authorization for it."
-                : "May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.",
-            ],
-          },
+        Text.note(
+          [
+            isManaged(client)
+              ? "Skips consent for its allowed Resources. Removing one revokes its authorization for it."
+              : "May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.",
+          ],
           h
         ),
       ],
@@ -300,7 +294,7 @@ export const clientsPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  Text.view({ tone: "Note", body: [INTRO] }, h),
+  Text.note([INTRO], h),
   ...Array.match(context.listing.overview.clients, {
     onEmpty: () => [
       Panel.view(

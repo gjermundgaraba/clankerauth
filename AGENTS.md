@@ -64,10 +64,9 @@ unwrap it only to hand it to the provider.
 Foldkit's layout: the root files at `src/`, pages in `page/`, the dashboard in `page/dashboard/`.
 `api.ts` is the issuer client.
 
-It is styled with the clankersuite design system (`@gjermundgaraba/components`). The app writes no `gg-`
-class or `data-gg-` attribute itself: a component's config prints them. A Scene finds an element
-by its role, label or text, and by a `gg-` selector only to check a class a config field
-promises (a Card's `isNarrow`).
+It is styled with the clankersuite design system (`@gjermundgaraba/components`). Follow "In an
+application" in its README (`apps/web/node_modules/@gjermundgaraba/components/README.md`), the
+rules an application on it keeps.
 
 ## Packages
 

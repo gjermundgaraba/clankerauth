@@ -137,7 +137,7 @@ export const keysPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  Text.view({ tone: "Note", body: [INTRO] }, h),
+  Text.note([INTRO], h),
   ...Array.match(context.listing.keys, {
     onEmpty: () => [
       Panel.view(

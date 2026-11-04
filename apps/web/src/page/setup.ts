@@ -239,13 +239,10 @@ export const view = defineView<Model, Message>((model, h): Html =>
       isBusy: model.isCreating,
       onSubmit: Message.SubmittedSetup(),
       body: [
-        Text.view(
-          {
-            tone: "Note",
-            body: [
-              "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
-            ],
-          },
+        Text.note(
+          [
+            "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
+          ],
           h
         ),
         ...refusalView(model, h),

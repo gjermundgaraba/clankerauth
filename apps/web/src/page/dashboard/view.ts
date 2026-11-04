@@ -132,7 +132,7 @@ const topBarView = (
         ),
       ],
       tools: [
-        Text.view({ tone: "Meta", body: [listing.overview.email] }, h),
+        Text.meta([listing.overview.email], h),
         IconButton.view(
           {
             glyph: "log-out",

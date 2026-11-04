@@ -97,9 +97,7 @@ const resourcePanel = (
           },
           h
         ),
-        ...(builtIn
-          ? [Text.view({ tone: "Note", body: [BUILT_IN_NOTE] }, h)]
-          : []),
+        ...(builtIn ? [Text.note([BUILT_IN_NOTE], h)] : []),
       ],
       footActions: builtIn
         ? []
@@ -136,13 +134,7 @@ export const resourcesPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  Text.view(
-    {
-      tone: "Note",
-      body: ["Protected APIs and MCP servers, and the scopes they define."],
-    },
-    h
-  ),
+  Text.note(["Protected APIs and MCP servers, and the scopes they define."], h),
   ...Array.match(context.listing.overview.resources, {
     onEmpty: () => [
       Panel.view(

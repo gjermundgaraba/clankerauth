@@ -265,10 +265,7 @@ const loadingView = (h: HtmlBuilder<Message>): Html =>
 const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
   Array.match(asking.request.scopes, {
     onEmpty: () =>
-      Text.view(
-        { tone: "Note", body: ["No permissions requested beyond signing in."] },
-        h
-      ),
+      Text.note(["No permissions requested beyond signing in."], h),
     onNonEmpty: (scopes) =>
       Rows.view(
         {
@@ -353,13 +350,10 @@ const requestDetailsView = (
     },
     h
   ),
-  Text.view(
-    {
-      tone: "Note",
-      body: [
-        "The client supplies its display name. Review the identifier and callback before approving.",
-      ],
-    },
+  Text.note(
+    [
+      "The client supplies its display name. Review the identifier and callback before approving.",
+    ],
     h
   ),
 ];
@@ -407,13 +401,10 @@ const askingView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
           h
         ),
         scopesView(asking, h),
-        Text.view(
-          {
-            tone: "Note",
-            body: [
-              "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
-            ],
-          },
+        Text.note(
+          [
+            "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
+          ],
           h
         ),
         ...claimsView(asking, h),
