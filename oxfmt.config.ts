@@ -1,13 +1,13 @@
-import { defineConfig } from "oxfmt";
 import ultracite from "ultracite/oxfmt";
+import type { OxfmtConfig } from "vite-plus/fmt";
 
 import { ignorePatterns } from "./oxlint.config.ts";
 
-export default defineConfig({
+export default {
   ...ultracite,
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     ...ignorePatterns,
     "AGENTS.md",
   ],
-});
+} satisfies OxfmtConfig;

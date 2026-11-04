@@ -19,7 +19,6 @@
     "@effect/tsgo": "catalog:",
     "@foldkit/oxlint-plugin": "catalog:",
     "@types/node": "catalog:",
-    "oxfmt": "catalog:",
     "typescript": "catalog:",
     "ultracite": "catalog:",
     "vite": "catalog:",
