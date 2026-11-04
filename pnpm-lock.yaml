@@ -207,17 +207,11 @@ catalogs:
       specifier: 0.29.0
       version: 0.29.0
     '@gjermundgaraba/components':
-      specifier: 0.5.0
-      version: 0.5.0
-    '@gjermundgaraba/design-tokens':
-      specifier: 0.5.0
-      version: 0.5.0
+      specifier: 0.6.0
+      version: 0.6.0
     '@gjermundgaraba/effect-actions':
       specifier: 0.26.1
       version: 0.26.1
-    '@gjermundgaraba/fonts':
-      specifier: 0.5.0
-      version: 0.5.0
     '@modelcontextprotocol/client':
       specifier: 2.4.0
       version: 2.4.0
@@ -445,16 +439,10 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/components':
         specifier: 'catalog:'
-        version: 0.5.0(@effect/platform-browser@4.1.1(effect@4.1.1))(@foldkit/ui@0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)))(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
-      '@gjermundgaraba/design-tokens':
-        specifier: 'catalog:'
-        version: 0.5.0
+        version: 0.6.0(@effect/platform-browser@4.1.1(effect@4.1.1))(@foldkit/ui@0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)))(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.26.1(effect@4.1.1)
-      '@gjermundgaraba/fonts':
-        specifier: 'catalog:'
-        version: 0.5.0
       better-auth:
         specifier: 'catalog:'
         version: 1.7.14(@opentelemetry/api@1.10.0)(vitest@5.0.5)
@@ -846,16 +834,16 @@ packages:
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba/components@0.5.0':
-    resolution: {integrity: sha512-o1BW/7GPIP7zh9HfGhqzSzdEZRyEgfHmjEnWQbJgTj99RIe6Zcss2WbdvC7uIxhBzN42t0++gqDhE87op78xPw==}
+  '@gjermundgaraba/components@0.6.0':
+    resolution: {integrity: sha512-gz8ZPNvzLxgfbDVlES7wOsYuA+ja0Qe1583E3DbKs5XoOWFGIASStmB0Xk8/QzYFTk2OjXGR+cCsSnl+29tO7A==}
     peerDependencies:
       '@effect/platform-browser': ^4.0.0
       '@foldkit/ui': ^0.170.0
       effect: ^4.0.0
       foldkit: ^0.170.0
 
-  '@gjermundgaraba/design-tokens@0.5.0':
-    resolution: {integrity: sha512-isjACTTIoLGlpvejJTH+apvtYK3uSJRxqUn3FwOV4v9ZPLoLnZcb0j+41E0rtVH82j/JMNIniASY1/4ZT9FxwA==}
+  '@gjermundgaraba/design-tokens@0.6.0':
+    resolution: {integrity: sha512-F0PwDtMus+CIr4Hl7yGG1EPULiSUn8DKkksXelkG0YDom1oOJKDs4oeEEupE4AeJtjdcGHFqvJPnS6/Svguj0A==}
 
   '@gjermundgaraba/effect-actions@0.26.1':
     resolution: {integrity: sha512-+qLKEr+1bv7YOA8Xl8SPy9AJEiTDgfIQsVEQ/LSAn/a1uDm4rbrrVaa6lF5SD+pO344bTppfDayGlCeOPplgOw==}
@@ -863,11 +851,11 @@ packages:
     peerDependencies:
       effect: ~4.1.1
 
-  '@gjermundgaraba/fonts@0.5.0':
-    resolution: {integrity: sha512-kQxLcFFRaI8tvxcaHRBj/rJDpOC5p9YXe1d1ew16TWEl7a99pStzkzOxvYiQBwE2AgI4mM0RsvTIZcxXZ4Dc4Q==}
+  '@gjermundgaraba/fonts@0.6.0':
+    resolution: {integrity: sha512-ZE+XD43HvIHhnxbcGoEi7agdcQ3KhuNdNUmh+7gCAnwBTyXlq6j62QcAr8hGsYa+EGc4wvVcZbXSbcYYGJ2E9Q==}
 
-  '@gjermundgaraba/icons@0.5.0':
-    resolution: {integrity: sha512-6/qBPVq5WizN7L9PgsaQx3iOZIhttJEiaqhizMqJvIa/ChO685yQr+PYmtaXsuPfLIK/fb20BTi4NAIwDafZkA==}
+  '@gjermundgaraba/icons@0.6.0':
+    resolution: {integrity: sha512-1SjHIMuaE8fT+6zLzsbHQ82UC3wuPfD+2F/UoOhc4BQd+2Mnzpp9MPNwX3hDzi1dylAPRDYVBm1PCp1xDPDmXw==}
     peerDependencies:
       effect: ^4.0.0
       foldkit: ^0.170.0
@@ -2821,7 +2809,7 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba/components@0.5.0(@effect/platform-browser@4.1.1(effect@4.1.1))(@foldkit/ui@0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)))(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))':
+  '@gjermundgaraba/components@0.6.0(@effect/platform-browser@4.1.1(effect@4.1.1))(@foldkit/ui@0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)))(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))':
     dependencies:
       '@codemirror/commands': 6.11.1
       '@codemirror/lang-markdown': 6.5.2
@@ -2831,22 +2819,24 @@ snapshots:
       '@codemirror/view': 6.43.15
       '@effect/platform-browser': 4.1.1(effect@4.1.1)
       '@foldkit/ui': 0.170.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
-      '@gjermundgaraba/icons': 0.5.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
+      '@gjermundgaraba/design-tokens': 0.6.0
+      '@gjermundgaraba/fonts': 0.6.0
+      '@gjermundgaraba/icons': 0.6.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))
       '@lezer/common': 1.5.5
       '@lezer/markdown': 1.8.1
       diff: 9.0.0
       effect: 4.1.1
       foldkit: 0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)
 
-  '@gjermundgaraba/design-tokens@0.5.0': {}
+  '@gjermundgaraba/design-tokens@0.6.0': {}
 
   '@gjermundgaraba/effect-actions@0.26.1(effect@4.1.1)':
     dependencies:
       effect: 4.1.1
 
-  '@gjermundgaraba/fonts@0.5.0': {}
+  '@gjermundgaraba/fonts@0.6.0': {}
 
-  '@gjermundgaraba/icons@0.5.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))':
+  '@gjermundgaraba/icons@0.6.0(effect@4.1.1)(foldkit@0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1))':
     dependencies:
       effect: 4.1.1
       foldkit: 0.170.0(@effect/platform-browser@4.1.1(effect@4.1.1))(effect@4.1.1)
