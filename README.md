@@ -130,7 +130,7 @@ Linting and formatting are [Ultracite](https://www.ultracite.ai)'s presets with 
 
 The packages are public on npm. To release, bump the versions you want to publish, commit, then tag `v<version>` and push the tag: `.github/workflows/npm.yml` publishes every package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish` from its directory; then run `npm trust github <package> --repo <repo> --file npm.yml` so the workflow can publish the next one.
 
-CI builds the Docker image on every run and pushes it to `ghcr.io/<owner>/<repo>` only from `main`, tagged `sha-<short>` and `latest`.
+The same tag builds the Docker image and pushes it to `ghcr.io/<owner>/<repo>:<version>`; CI checks that the tag names `apps/server`'s version. Only a version tag builds an image.
 
 ### effect-actions integration
 
