@@ -19,7 +19,7 @@ describe("consent view", () => {
     scene(
       { update, view },
       given(asking),
-      expect(selector(".gg-card.gg-narrow")).toBeAbsent(),
+      expect(selector(".gg-card")).not.toHaveClass("gg-narrow"),
       expect(text("Fixture client", { exact: false })).toExist(),
       expect(role("checkbox", { name: "offline_access" })).toBeChecked(),
       expect(role("checkbox", { name: "fixture:read" })).toBeChecked(),
@@ -65,7 +65,7 @@ describe("consent view", () => {
     scene(
       { update, view },
       given(Model.Stopped({ reason: "The request was not signed." })),
-      expect(selector(".gg-card.gg-narrow")).toExist(),
+      expect(selector(".gg-card")).toHaveClass("gg-narrow"),
       expect(text("Unable to continue")).toExist(),
       expect(text("The request was not signed.")).toExist(),
       expect(role("button", { name: "allow access" })).toBeAbsent()

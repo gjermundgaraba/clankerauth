@@ -279,7 +279,6 @@ try {
   });
 
   const dialog = page.locator("dialog[open]");
-  const headAction = page.locator(".gg-page-head .gg-page-acts button");
   /** @param {string} name */
   const button = (name) => page.getByRole("button", { name, exact: true });
 
@@ -299,7 +298,7 @@ try {
 
       return (
         open?.contains(document.activeElement) === true &&
-        document.querySelector(".gg-page-head")?.closest("[inert]") !== null
+        document.querySelector("h1")?.closest("[inert]") !== null
       );
     });
   };
@@ -322,10 +321,7 @@ try {
 
   /** @param {string} label */
   const openForm = async (label) => {
-    await page
-      .locator(".gg-page-head")
-      .getByRole("button", { name: label, exact: true })
-      .click();
+    await button(label).click();
     await assertModalWithFocus();
   };
 
@@ -394,7 +390,7 @@ try {
   await submitForm("register client");
   await listStarted;
   await dialog.waitFor({ state: "detached" });
-  await pressHeld(headAction);
+  await pressHeld(button("register client"));
   releaseList.resolve();
   listResponse = async () => ok(data);
   await credentials.filter({ hasText: "fixture-first-secret" }).waitFor();
