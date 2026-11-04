@@ -7,6 +7,7 @@ import {
   Panel,
   PropsList,
   Table,
+  Text,
 } from "@gjermundgaraba/components";
 import { Array, Option, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -15,7 +16,7 @@ import { codesView } from "../codes.ts";
 import { Change } from "./change.ts";
 import { editAccess, editClient, registerClient } from "./form.ts";
 import { Message } from "./message.ts";
-import { footView, itemButtonView, momentOf, noteView } from "./parts.ts";
+import { itemButtonView, momentOf } from "./parts.ts";
 import type { SectionContext } from "./parts.ts";
 
 type ClientView = typeof Client.Type;
@@ -96,10 +97,15 @@ const connectionsView = (
     Array.filter(({ client_id }) => client_id === client.client_id),
     Array.match({
       onEmpty: () =>
-        noteView(
-          isManaged(client)
-            ? "Holds no refresh token."
-            : "No Resource approved yet.",
+        Text.view(
+          {
+            tone: "Note",
+            body: [
+              isManaged(client)
+                ? "Holds no refresh token."
+                : "No Resource approved yet.",
+            ],
+          },
           h
         ),
       onNonEmpty: (clientConnections) =>
@@ -272,14 +278,19 @@ const clientPanel = (
           h
         ),
         connectionsView(context, client, h),
-        noteView(
-          isManaged(client)
-            ? "Skips consent for its allowed Resources. Removing one revokes its authorization for it."
-            : "May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.",
+        Text.view(
+          {
+            tone: "Note",
+            body: [
+              isManaged(client)
+                ? "Skips consent for its allowed Resources. Removing one revokes its authorization for it."
+                : "May ask for any Resource; each needs your consent. Revoke a connection, or block the Client to keep it out.",
+            ],
+          },
           h
         ),
       ],
-      foot: footView(clientButtons(context, client, allowed, h), h),
+      footActions: clientButtons(context, client, allowed, h),
     },
     h
   );
@@ -289,7 +300,7 @@ export const clientsPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  noteView(INTRO, h),
+  Text.view({ tone: "Note", body: [INTRO] }, h),
   ...Array.match(context.listing.overview.clients, {
     onEmpty: () => [
       Panel.view(

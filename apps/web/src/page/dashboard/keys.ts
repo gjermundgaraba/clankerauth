@@ -6,6 +6,7 @@ import {
   PageHead,
   Panel,
   PropsList,
+  Text,
 } from "@gjermundgaraba/components";
 import { Array, Option, Record } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -13,7 +14,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Change } from "./change.ts";
 import { createKey, editGrants, renameKey } from "./form.ts";
 import { Message } from "./message.ts";
-import { footView, itemButtonView, momentOf, noteView } from "./parts.ts";
+import { itemButtonView, momentOf } from "./parts.ts";
 import type { SectionContext } from "./parts.ts";
 
 type KeyView = typeof ApiKey.Type;
@@ -105,31 +106,28 @@ const keyPanel = (
           h
         ),
       ],
-      foot: footView(
-        [
-          smallButton(
-            "rename",
-            Message.ClickedOpenForm({ form: renameKey(key) })
-          ),
-          smallButton(
-            "edit grants",
-            Message.ClickedOpenForm({
-              form: editGrants(key, context.listing.overview.resources),
-            })
-          ),
-          smallButton(
-            enabled ? "disable" : "enable",
-            Message.ClickedChange({
-              change: Change.SetKeyEnabled({ keyId, isEnabled: !enabled }),
-            })
-          ),
-          smallButton(
-            "delete",
-            Message.ClickedChange({ change: Change.DeleteKey({ keyId, name }) })
-          ),
-        ],
-        h
-      ),
+      footActions: [
+        smallButton(
+          "rename",
+          Message.ClickedOpenForm({ form: renameKey(key) })
+        ),
+        smallButton(
+          "edit grants",
+          Message.ClickedOpenForm({
+            form: editGrants(key, context.listing.overview.resources),
+          })
+        ),
+        smallButton(
+          enabled ? "disable" : "enable",
+          Message.ClickedChange({
+            change: Change.SetKeyEnabled({ keyId, isEnabled: !enabled }),
+          })
+        ),
+        smallButton(
+          "delete",
+          Message.ClickedChange({ change: Change.DeleteKey({ keyId, name }) })
+        ),
+      ],
     },
     h
   );
@@ -139,7 +137,7 @@ export const keysPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  noteView(INTRO, h),
+  Text.view({ tone: "Note", body: [INTRO] }, h),
   ...Array.match(context.listing.keys, {
     onEmpty: () => [
       Panel.view(

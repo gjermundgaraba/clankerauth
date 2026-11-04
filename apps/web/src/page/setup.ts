@@ -5,6 +5,7 @@ import {
   Focus,
   Notice,
   PasswordField,
+  Text,
 } from "@gjermundgaraba/components";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Array, Boolean, Effect, Match, Option, Schema } from "effect";
@@ -238,11 +239,14 @@ export const view = defineView<Model, Message>((model, h): Html =>
       isBusy: model.isCreating,
       onSubmit: Message.SubmittedSetup(),
       body: [
-        h.p(
-          [h.Class("gg-note-line")],
-          [
-            "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
-          ]
+        Text.view(
+          {
+            tone: "Note",
+            body: [
+              "Create the owner account for your private applications. It manages Clients and Resources and approves access, and it stays on your infrastructure.",
+            ],
+          },
+          h
         ),
         ...refusalView(model, h),
         Field.view(

@@ -8,6 +8,7 @@ import {
   Outcome,
   PropsList,
   Rows,
+  Text,
 } from "@gjermundgaraba/components";
 import { Array, Effect, Option, Schema, String, pipe } from "effect";
 import { Command } from "foldkit";
@@ -264,9 +265,9 @@ const loadingView = (h: HtmlBuilder<Message>): Html =>
 const scopesView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
   Array.match(asking.request.scopes, {
     onEmpty: () =>
-      h.p(
-        [h.Class("gg-note-line")],
-        ["No permissions requested beyond signing in."]
+      Text.view(
+        { tone: "Note", body: ["No permissions requested beyond signing in."] },
+        h
       ),
     onNonEmpty: (scopes) =>
       Rows.view(
@@ -352,11 +353,14 @@ const requestDetailsView = (
     },
     h
   ),
-  h.p(
-    [h.Class("gg-note-line")],
-    [
-      "The client supplies its display name. Review the identifier and callback before approving.",
-    ]
+  Text.view(
+    {
+      tone: "Note",
+      body: [
+        "The client supplies its display name. Review the identifier and callback before approving.",
+      ],
+    },
+    h
   ),
 ];
 
@@ -403,11 +407,14 @@ const askingView = (asking: Asking, h: HtmlBuilder<Message>): Html =>
           h
         ),
         scopesView(asking, h),
-        h.p(
-          [h.Class("gg-note-line")],
-          [
-            "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
-          ]
+        Text.view(
+          {
+            tone: "Note",
+            body: [
+              "Untick anything this Client should not get. It receives only what stays ticked. Access tokens expire after fifteen minutes; offline access lets the Client renew them until you revoke its authorization.",
+            ],
+          },
+          h
         ),
         ...claimsView(asking, h),
         ...refusalView(asking, h),

@@ -15,6 +15,7 @@ import {
   Panel,
   PropsList,
   Secret,
+  Text,
   TopBar,
   Wordmark,
 } from "@gjermundgaraba/components";
@@ -131,7 +132,7 @@ const topBarView = (
         ),
       ],
       tools: [
-        h.span([h.Class("gg-meta")], [listing.overview.email]),
+        Text.view({ tone: "Meta", body: [listing.overview.email] }, h),
         IconButton.view(
           {
             glyph: "log-out",
@@ -260,23 +261,15 @@ const credentialsView = (
             ...Array.flatMap(credentials, (pending) =>
               credentialView(pending, h)
             ),
-            h.div(
-              [h.Class("gg-save-row")],
-              [
-                h.span(
-                  [h.Class("gg-push")],
-                  [
-                    Button.view(
-                      {
-                        label: "I've stored them",
-                        variant: "Primary",
-                        onClick: Message.ClickedDismissCredentials(),
-                      },
-                      h
-                    ),
-                  ]
-                ),
-              ]
+          ],
+          footActions: [
+            Button.view(
+              {
+                label: "I've stored them",
+                variant: "Primary",
+                onClick: Message.ClickedDismissCredentials(),
+              },
+              h
             ),
           ],
         },

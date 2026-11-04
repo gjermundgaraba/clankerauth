@@ -5,6 +5,7 @@ import {
   PageHead,
   Panel,
   PropsList,
+  Text,
 } from "@gjermundgaraba/components";
 import { Array, flow, pipe } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -13,7 +14,7 @@ import { codesView } from "../codes.ts";
 import { Change } from "./change.ts";
 import { addResource, editResource } from "./form.ts";
 import { Message } from "./message.ts";
-import { footView, itemButtonView, noteView } from "./parts.ts";
+import { itemButtonView } from "./parts.ts";
 import type { SectionContext } from "./parts.ts";
 
 type ResourceView = typeof ResourceSummary.Type;
@@ -96,37 +97,36 @@ const resourcePanel = (
           },
           h
         ),
-        ...(builtIn ? [noteView(BUILT_IN_NOTE, h)] : []),
+        ...(builtIn
+          ? [Text.view({ tone: "Note", body: [BUILT_IN_NOTE] }, h)]
+          : []),
       ],
-      foot: footView(
-        builtIn
-          ? []
-          : [
-              itemButtonView(
-                {
-                  label: "edit",
-                  itemName: name,
-                  onClick: Message.ClickedOpenForm({
-                    form: editResource(resource),
-                  }),
-                  isHeld: context.isHeld,
-                },
-                h
-              ),
-              itemButtonView(
-                {
-                  label: "delete",
-                  itemName: name,
-                  onClick: Message.ClickedChange({
-                    change: Change.DeleteResource({ identifier }),
-                  }),
-                  isHeld: context.isHeld,
-                },
-                h
-              ),
-            ],
-        h
-      ),
+      footActions: builtIn
+        ? []
+        : [
+            itemButtonView(
+              {
+                label: "edit",
+                itemName: name,
+                onClick: Message.ClickedOpenForm({
+                  form: editResource(resource),
+                }),
+                isHeld: context.isHeld,
+              },
+              h
+            ),
+            itemButtonView(
+              {
+                label: "delete",
+                itemName: name,
+                onClick: Message.ClickedChange({
+                  change: Change.DeleteResource({ identifier }),
+                }),
+                isHeld: context.isHeld,
+              },
+              h
+            ),
+          ],
     },
     h
   );
@@ -136,7 +136,13 @@ export const resourcesPanels = (
   context: SectionContext,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  noteView("Protected APIs and MCP servers, and the scopes they define.", h),
+  Text.view(
+    {
+      tone: "Note",
+      body: ["Protected APIs and MCP servers, and the scopes they define."],
+    },
+    h
+  ),
   ...Array.match(context.listing.overview.resources, {
     onEmpty: () => [
       Panel.view(

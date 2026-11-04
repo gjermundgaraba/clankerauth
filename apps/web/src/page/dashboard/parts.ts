@@ -1,5 +1,5 @@
-import { Button, Format, Wrap } from "@gjermundgaraba/components";
-import { Array, DateTime } from "effect";
+import { Button, Format } from "@gjermundgaraba/components";
+import { DateTime } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import type { Listing } from "./listing.ts";
@@ -20,22 +20,6 @@ const MOMENT_FORMAT = new Intl.DateTimeFormat(Format.LOCALE, {
 
 export const momentOf = (moment: DateTime.Utc): string =>
   MOMENT_FORMAT.format(DateTime.toDateUtc(moment));
-
-export const noteView = <Message>(
-  text: string,
-  h: HtmlBuilder<Message>
-): Html => h.p([h.Class("gg-note-line")], [text]);
-
-export const footView = <Message>(
-  buttons: readonly Html[],
-  h: HtmlBuilder<Message>
-): readonly Html[] =>
-  Array.match(buttons, {
-    onEmpty: () => [],
-    onNonEmpty: (body) => [
-      h.span([h.Class("gg-push")], [Wrap.view({ body }, h)]),
-    ],
-  });
 
 export const itemButtonView = <Message>(
   config: Readonly<{
