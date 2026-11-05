@@ -5,13 +5,13 @@ packages:
 catalogMode: prefer
 saveExact: true
 catalog:
-  "@effect/platform-browser": 4.1.1
-  "@effect/platform-node": 4.1.1
+  "@effect/platform-browser": 4.1.2
+  "@effect/platform-node": 4.1.2
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.1.1
-  "@effect/vitest": 4.1.1
+  "@effect/platform-node-shared": 4.1.2
+  "@effect/vitest": 4.1.2
   foldkit: 0.170.0
   "@foldkit/ui": 0.170.0
   "@foldkit/vite-plugin": 0.29.0
@@ -21,7 +21,7 @@ catalog:
   "@better-auth/api-key": 1.7.14
   better-auth: 1.7.14
   better-call: 1.4.4
-  effect: 4.1.1
+  effect: 4.1.2
   "@types/node": 26.6.6
   jose: 6.2.14
   typescript: 7.0.2
@@ -35,7 +35,7 @@ catalog:
   "@modelcontextprotocol/client": 2.4.0
   "@opentelemetry/api": 1.10.0
   "@oxlint/plugins": 1.89.0
-  "@gjermundgaraba/effect-actions": 0.26.1
+  "@gjermundgaraba/effect-actions": 0.29.0
   "@gjermundgaraba/components": 0.7.0
   oauth4webapi: 3.8.8
   proper-lockfile: 4.1.2

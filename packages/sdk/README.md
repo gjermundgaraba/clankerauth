@@ -17,14 +17,14 @@ vp add effect
 The `/session` and `/effect-actions` entry points also need effect-actions, an optional peer. Install this range: the SDK's declarations are built against it, and under `skipLibCheck` they silently degrade to `any` with another.
 
 ```sh
-vp add @gjermundgaraba/effect-actions@^0.26.0
+vp add @gjermundgaraba/effect-actions@^0.29.0
 ```
 
 ## Entry points
 
 | Import | Needs effect-actions | Browser safe | What it holds |
 | --- | --- | --- | --- |
-| `…/clankerauth-sdk` | no | no | `Verifier`, `RequestPolicy` |
+| `…/clankerauth-sdk` | no | no | `Verifier` |
 | `…/clankerauth-sdk/errors` | no | **yes** | the verifier's errors; `ProviderUnavailable` is the one a descriptor declares |
 | `…/clankerauth-sdk/session` | yes | **yes** | `CurrentPrincipal` and its `Caller`, the `Whoami` contract, `Principal`, `signOutUrl`, `signOutPath`, `returnToParameter` |
 | `…/clankerauth-sdk/effect-actions` | yes | no | `Resource` |
@@ -281,10 +281,10 @@ The resource also exposes `verifier.verifyToken(token)` as an Effect for callers
 
 ## Request policy
 
-Forward auth makes a browser's credential ambient: the proxy attaches an `Authorization` header to whatever the browser sends, including a cross-site navigation. So an application behind it checks where a request came from before anything reads the credential.
+Forward auth makes a browser's credential ambient: the proxy attaches an `Authorization` header to whatever the browser sends, including a cross-site navigation. So an application behind it checks where a request came from before anything reads the credential. effect-actions' `RequestPolicy` makes that check, with exact Host and Origin comparisons and `/healthz` left unchecked for a container probe:
 
 ```ts
-import { RequestPolicy } from "@gjermundgaraba/clankerauth-sdk";
+import * as RequestPolicy from "@gjermundgaraba/effect-actions/RequestPolicy";
 
 const policy = RequestPolicy.make({
   publicUrl: new URL("https://notes.internal"),
@@ -292,20 +292,9 @@ const policy = RequestPolicy.make({
 });
 
 const routes = protectedRoutes.pipe(Layer.provide(policy.middleware.layer));
-
-// The same decision from a Node upgrade handler, with no services:
-if (
-  !policy.allows({
-    target: request.url,
-    host: request.headers.host,
-    origin: request.headers.origin,
-  })
-) {
-  socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-}
 ```
 
-Both checks are raw string comparisons on the headers as sent. Nothing is parsed, so nothing throws and no normalization widens what is accepted: `notes.internal` and `notes.internal:443` are different hosts here, as they are to a browser's cookie. A request with no `Host` is refused. An absent `Origin` is allowed; a present one must match exactly. `/healthz` is the one path answered without either check, because a container probe reaches the app on its bind address and carries neither header; it is fixed, not configurable. This is not authentication, and it does not set body limits or security headers — those stay the application's.
+Its `policy.allows({ target, host, origin })` gives the same decision to a Node upgrade handler, with no services. The SDK exported this policy as `RequestPolicy` until 0.34.0; the effect-actions one takes the same options and decides the same way. This is not authentication, and it does not set body limits or security headers — those stay the application's.
 
 ## Browser applications
 

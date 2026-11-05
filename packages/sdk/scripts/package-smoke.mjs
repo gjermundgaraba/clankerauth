@@ -105,7 +105,7 @@ const emitDeclarations = async (...files) =>
 
 /** @type {{ readonly [K in keyof Modules]: ReadonlyArray<keyof Modules[K]> }} */
 const exported = {
-  "@gjermundgaraba/clankerauth-sdk": ["Verifier", "RequestPolicy"],
+  "@gjermundgaraba/clankerauth-sdk": ["Verifier"],
   "@gjermundgaraba/clankerauth-sdk/errors": [
     "Unauthorized",
     "InsufficientScope",
