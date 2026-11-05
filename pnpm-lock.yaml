@@ -210,8 +210,8 @@ catalogs:
       specifier: 0.7.0
       version: 0.7.0
     '@gjermundgaraba/effect-actions':
-      specifier: 0.29.0
-      version: 0.29.0
+      specifier: 0.30.0
+      version: 0.30.0
     '@modelcontextprotocol/client':
       specifier: 2.4.0
       version: 2.4.0
@@ -314,7 +314,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.29.0(effect@4.1.2)
+        version: 0.30.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -369,7 +369,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.29.0(effect@4.1.2)
+        version: 0.30.0(effect@4.1.2)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.14(@opentelemetry/api@1.10.0)(vitest@5.1.0)
@@ -436,7 +436,7 @@ importers:
         version: 0.7.0(@effect/platform-browser@4.1.2(effect@4.1.2))(@foldkit/ui@0.170.0(effect@4.1.2)(foldkit@0.170.0(@effect/platform-browser@4.1.2(effect@4.1.2))(effect@4.1.2)))(effect@4.1.2)(foldkit@0.170.0(@effect/platform-browser@4.1.2(effect@4.1.2))(effect@4.1.2))
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.29.0(effect@4.1.2)
+        version: 0.30.0(effect@4.1.2)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.14(@opentelemetry/api@1.10.0)(vitest@5.1.0)
@@ -466,7 +466,7 @@ importers:
     devDependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.29.0(effect@4.1.2)
+        version: 0.30.0(effect@4.1.2)
       effect:
         specifier: 'catalog:'
         version: 4.1.2
@@ -521,7 +521,7 @@ importers:
         version: 4.1.2(effect@4.1.2)(vitest@5.1.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.29.0(effect@4.1.2)
+        version: 0.30.0(effect@4.1.2)
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.4.0
@@ -838,8 +838,8 @@ packages:
   '@gjermundgaraba/design-tokens@0.7.0':
     resolution: {integrity: sha512-h/Z//KMEmbyvEJydsddbb5Dx0uDnJJES4UD6TvDOzM273MgIuzTq2yczs2bFIQ6kH7Vu/YdPKYj/+VXjRJUMyg==}
 
-  '@gjermundgaraba/effect-actions@0.29.0':
-    resolution: {integrity: sha512-WzuGBnrNR4yR7C7OVQkK3Wln3zH/FI7G9zf/5EtWsDUOVg/X/6mEutcYNnl2/QjAT4ugFYdhILQhEgUhxt1a7w==}
+  '@gjermundgaraba/effect-actions@0.30.0':
+    resolution: {integrity: sha512-oHiZfWIqZJ7AKGWTpteaTIN/2w1/+gDJ7n7ECl1SX/zZGX7FzIRG0Zg7GXXHVIEbY5+4kWsI8c4dbHhPAUKg6g==}
     engines: {node: '>=26.13.0'}
     peerDependencies:
       effect: ~4.1.1
@@ -2838,7 +2838,7 @@ snapshots:
 
   '@gjermundgaraba/design-tokens@0.7.0': {}
 
-  '@gjermundgaraba/effect-actions@0.29.0(effect@4.1.2)':
+  '@gjermundgaraba/effect-actions@0.30.0(effect@4.1.2)':
     dependencies:
       effect: 4.1.2
 
