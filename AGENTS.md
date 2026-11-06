@@ -105,8 +105,8 @@ file on every install, so the formatter skips `AGENTS.md`.
 
 What Better Auth, its plugins and the platform force on the code:
 
-- Provider calls cannot be cancelled. HTTP routes run them uninterruptibly, and migration and
-  initialization finish before the database closes.
+- Provider calls cannot be cancelled. HTTP routes and MCP tool calls run them
+  uninterruptibly, and migration and initialization finish before the database closes.
 - Provider APIs own their transactions: never hold one around them on the shared connection.
   The sign-up hook runs inside the provider's transaction, so it reads through that adapter,
   and the provider refuses an existing email before the hook can answer a conflict.

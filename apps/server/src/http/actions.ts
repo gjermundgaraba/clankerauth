@@ -11,6 +11,7 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import * as ActionMcp from "@gjermundgaraba/effect-actions/ActionMcp";
 import { Effect, Layer } from "effect";
+import { McpServer } from "effect/ai";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { OpenApi } from "effect/http-api";
 
@@ -28,12 +29,9 @@ import { setupActions } from "../owner/setup.ts";
 import { Resources } from "../resources/resources.ts";
 import { responseCookies } from "./response-cookies.ts";
 
-const uninterruptibleForMcp =
-  <A extends readonly unknown[], B, E, R>(
-    handler: (...args: A) => Effect.Effect<B, E, R>
-  ) =>
-  (...args: A) =>
-    Effect.uninterruptible(handler(...args));
+const uninterruptibleTools = McpServer.middleware((effect) =>
+  Effect.uninterruptible(effect)
+).layer;
 
 export const actionRoutes = (mcpAllowedOrigins: readonly string[]) =>
   Layer.unwrap(
@@ -47,21 +45,21 @@ export const actionRoutes = (mcpAllowedOrigins: readonly string[]) =>
       const owner = Action.implement(
         Administration,
         {
-          listClients: uninterruptibleForMcp(() => clients.list),
-          createClient: uninterruptibleForMcp(clients.create),
-          updateClient: uninterruptibleForMcp(clients.update),
-          deleteClient: uninterruptibleForMcp(clients.delete),
-          revokeClient: uninterruptibleForMcp(clients.revoke),
-          blockClient: uninterruptibleForMcp(clients.block),
-          rotateClientSecret: uninterruptibleForMcp(clients.rotate),
-          setClientAccess: uninterruptibleForMcp(resources.setAccess),
-          getResource: uninterruptibleForMcp(resources.get),
-          putResource: uninterruptibleForMcp(resources.put),
-          deleteResource: uninterruptibleForMcp(resources.delete),
-          listApiKeys: uninterruptibleForMcp(() => keys.list),
-          createApiKey: uninterruptibleForMcp(keys.create),
-          updateApiKey: uninterruptibleForMcp(keys.update),
-          deleteApiKey: uninterruptibleForMcp(keys.delete),
+          listClients: () => clients.list,
+          createClient: clients.create,
+          updateClient: clients.update,
+          deleteClient: clients.delete,
+          revokeClient: clients.revoke,
+          blockClient: clients.block,
+          rotateClientSecret: clients.rotate,
+          setClientAccess: resources.setAccess,
+          getResource: resources.get,
+          putResource: resources.put,
+          deleteResource: resources.delete,
+          listApiKeys: () => keys.list,
+          createApiKey: keys.create,
+          updateApiKey: keys.update,
+          deleteApiKey: keys.delete,
         },
         { authorize: authorizeOwner }
       );
@@ -98,7 +96,7 @@ export const actionRoutes = (mcpAllowedOrigins: readonly string[]) =>
           allowedOrigins: mcpAllowedOrigins,
           instructions: `Owner administration. Listing needs ${administrationScopes.read} or ${administrationScopes.write}; every other action changes authorization policy and needs ${administrationScopes.write}. Create and rotate actions return secrets once.`,
           authentication: OwnerToken,
-        }),
+        }).pipe(Layer.provide(uninterruptibleTools)),
         ActionHttp.layer(OwnerHttp, owner)
       ).pipe(Layer.provide(bearerOwner(adminResource)));
 
