@@ -80,7 +80,11 @@ const created = Change.PutResource({
 });
 
 const submittingCreated = [
-  message(Message.ClickedOpenForm({ form: Form.addResource() })),
+  message(
+    Message.ClickedOpenForm({
+      form: Form.addResource(listing.overview.resources),
+    })
+  ),
   Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
   message(
     editing(Form.Message.UpdatedResourceName({ value: " Fixture API " }))
@@ -288,7 +292,8 @@ describe("dashboard update", () => {
         saving(
           modifyFields(listed, {
             editor: (editor) => Dialog.open(editor).model,
-            maybeForm: () => Option.some(Form.addResource()),
+            maybeForm: () =>
+              Option.some(Form.addResource(listing.overview.resources)),
           })
         )
       ),
@@ -356,7 +361,11 @@ describe("dashboard update", () => {
     story(
       update,
       given(listed),
-      message(Message.ClickedOpenForm({ form: Form.addResource() })),
+      message(
+        Message.ClickedOpenForm({
+          form: Form.addResource(listing.overview.resources),
+        })
+      ),
       Command.resolve(
         UiDialog.ShowDialog,
         UiDialog.Message.SucceededShowDialog()
@@ -519,7 +528,11 @@ describe("dashboard update", () => {
     story(
       update,
       given(rereading(listed)),
-      message(Message.ClickedOpenForm({ form: Form.addResource() })),
+      message(
+        Message.ClickedOpenForm({
+          form: Form.addResource(listing.overview.resources),
+        })
+      ),
       Command.expectNone(),
       model((next) => {
         expect(next.maybeForm).toStrictEqual(Option.none());

@@ -40,7 +40,10 @@ const ClientDraft = Schema.Struct({
 
 type ClientDraft = typeof ClientDraft.Type;
 
-export const ResourceMode = defineTaggedUnion({ Add: {}, Edit: {} });
+export const ResourceMode = defineTaggedUnion({
+  Add: { existing: Schema.Array(Schema.String) },
+  Edit: {},
+});
 
 export const KeyMode = defineTaggedUnion({
   Create: {},
@@ -90,9 +93,11 @@ export const Message = defineMessageUnion({
 
 export type Message = typeof Message.Type;
 
-export const addResource = (): Model =>
+export const addResource = (resources: readonly ResourceView[]): Model =>
   Model.Resource({
-    mode: ResourceMode.Add(),
+    mode: ResourceMode.Add({
+      existing: Array.map(resources, ({ identifier }) => identifier),
+    }),
     draft: { name: "", identifier: "", scopes: "" },
   });
 
@@ -320,8 +325,7 @@ const DUPLICATE_RESOURCE =
 
 const resourceChangeOf = (
   mode: typeof ResourceMode.Type,
-  draft: ResourceDraft,
-  existing: readonly string[]
+  draft: ResourceDraft
 ): Result.Result<Change, string> => {
   const fields = {
     identifier: draft.identifier.trim(),
@@ -330,7 +334,7 @@ const resourceChangeOf = (
   };
 
   return ResourceMode.match(mode, {
-    Add: () =>
+    Add: ({ existing }) =>
       Array.contains(existing, fields.identifier)
         ? Result.fail(DUPLICATE_RESOURCE)
         : Result.succeed(Change.PutResource(fields)),
@@ -391,12 +395,9 @@ const clientChangeOf = (
       ),
   });
 
-export const changeOf = (
-  form: Model,
-  resources: readonly string[]
-): Result.Result<Change, string> =>
+export const changeOf = (form: Model): Result.Result<Change, string> =>
   Model.match(form, {
-    Resource: ({ mode, draft }) => resourceChangeOf(mode, draft, resources),
+    Resource: ({ mode, draft }) => resourceChangeOf(mode, draft),
     Key: ({ mode, draft }) => keyChangeOf(mode, draft),
     Client: ({ mode, draft }) => clientChangeOf(mode, draft),
   });

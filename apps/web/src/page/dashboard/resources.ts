@@ -36,7 +36,9 @@ export const resourcesHeadView = (
             label: "add resource",
             glyph: "plus",
             isDisabled: isHeld,
-            onClick: Message.ClickedOpenForm({ form: addResource() }),
+            onClick: Message.ClickedOpenForm({
+              form: addResource(listing.overview.resources),
+            }),
           },
           h
         ),
