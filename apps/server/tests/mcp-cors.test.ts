@@ -2,11 +2,14 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
 
-import { OwnerAccount } from "../src/owner/owner.ts";
 import { mcpOAuthGrant } from "./mcp-oauth-helper.ts";
-import type { TestHandler } from "./mcp-oauth-helper.ts";
 import { webMcpRequest } from "./mcp.ts";
-import { signIn, testWebApplication, WebApplication } from "./test-issuer.ts";
+import {
+  signedInOwner,
+  testWebApplication,
+  WebApplication,
+} from "./test-issuer.ts";
+import type { TestHandler } from "./test-issuer.ts";
 
 const baseURL = "http://localhost:3000";
 
@@ -167,14 +170,7 @@ it.live(
     Effect.gen(function* () {
       const handle = yield* WebApplication;
 
-      const credentials = {
-        email: "owner@example.internal",
-        password: "test-only password123",
-      };
-
-      yield* (yield* OwnerAccount).create(credentials);
-
-      const cookie = yield* signIn(handle, baseURL, credentials);
+      const cookie = yield* signedInOwner(handle, baseURL);
 
       const { tokens } = yield* Effect.promise(
         async () => await mcpOAuthGrant(handle, baseURL, cookie)

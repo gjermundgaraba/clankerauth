@@ -4,13 +4,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
-import { Context, Effect, Layer, Option, Redacted, Scope } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Schema,
+  Scope,
+} from "effect";
 import { Cookies, HttpRouter, HttpServerRequest } from "effect/http";
 import { expect, vi } from "vite-plus/test";
 
 import { application } from "../src/http/application.ts";
 import { Settings } from "../src/issuer/settings.ts";
 import type { IssuerSettings } from "../src/issuer/settings.ts";
+import { OwnerAccount } from "../src/owner/owner.ts";
 import { CimdTransport } from "../src/platform/cimd-transport.ts";
 import { peerHeader } from "../src/platform/node-http.ts";
 import { issuerServices } from "../src/services.ts";
@@ -73,9 +82,11 @@ export const startGeneration = (cimdTransport?: ClientMetadataResourceFetch) =>
     return { context, scope };
   });
 
+export type TestHandler = (request: Request) => Promise<Response>;
+
 export class WebApplication extends Context.Service<
   WebApplication,
-  (request: Request) => Promise<Response>
+  TestHandler
 >()("test-issuer/WebApplication") {
   static readonly layer = Layer.effect(
     WebApplication,
@@ -141,8 +152,24 @@ export const cookieJar = () => {
   };
 };
 
+export const owner = {
+  email: "owner@example.internal",
+  password: "test-only password123",
+};
+
+export const text = (response: Response) =>
+  Effect.promise(async () => await response.clone().text());
+
+export const decodeJson =
+  <S extends Schema.Decoder<unknown>>(schema: S) =>
+  (response: Response) =>
+    Effect.flatMap(
+      text(response),
+      Schema.decodeUnknownEffect(Schema.fromJsonString(schema))
+    );
+
 export const signIn = (
-  handle: (request: Request) => Promise<Response>,
+  handle: TestHandler,
   origin: string,
   credentials: { readonly email: string; readonly password: string }
 ) =>
@@ -162,12 +189,17 @@ export const signIn = (
         )
     );
 
-    expect(
-      response.status,
-      yield* Effect.promise(async () => await response.clone().text())
-    ).toBe(200);
+    expect(response.status, yield* text(response)).toBe(200);
 
     return cookieHeader(response);
+  });
+
+/** Create the owner and sign it in, returning its session cookie. */
+export const signedInOwner = (handle: TestHandler, origin: string) =>
+  Effect.gen(function* () {
+    yield* (yield* OwnerAccount).create(owner);
+
+    return yield* signIn(handle, origin, owner);
   });
 
 export const advanceDate = (millis: number) =>
@@ -182,7 +214,6 @@ export const advanceDate = (millis: number) =>
 export const requireStatus = (response: Response, status: number) =>
   response.status === status
     ? Effect.void
-    : Effect.flatMap(
-        Effect.promise(async () => await response.clone().text()),
-        (body) => Effect.die(`${response.status}: ${body}`)
+    : Effect.flatMap(text(response), (body) =>
+        Effect.die(`${response.status}: ${body}`)
       );

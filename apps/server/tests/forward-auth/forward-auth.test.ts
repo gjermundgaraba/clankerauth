@@ -9,10 +9,13 @@ import {
   forwardCookie,
 } from "../../src/forward-auth/forward-auth.ts";
 import { OwnerAccount } from "../../src/owner/owner.ts";
-import { decodeJson, Jwks } from "../mcp-oauth-helper.ts";
+import { Jwks } from "../mcp-oauth-helper.ts";
 import {
   cookieHeader,
+  decodeJson,
+  owner,
   testWebApplication,
+  text,
   WebApplication,
 } from "../test-issuer.ts";
 
@@ -21,11 +24,6 @@ const origin = "https://clankerauth.home.example";
 const resource = "https://notes.home.example/api";
 
 const page = "https://notes.home.example/docs?x=1";
-
-const owner = {
-  email: "owner@example.internal",
-  password: "test-only password123",
-};
 
 class Session extends Context.Service<Session, string>()(
   "forward-auth.test/Session"
@@ -61,9 +59,6 @@ const call = (
   body?: Schema.Json,
   headers: Record<string, string> = {}
 ) => Effect.flatMap(Session, (session) => send(session, path, body, headers));
-
-const text = (response: Response) =>
-  Effect.promise(async () => await response.clone().text());
 
 const continueTo = (rd: string, cookie?: string) =>
   call(

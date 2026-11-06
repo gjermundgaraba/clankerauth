@@ -11,8 +11,7 @@ import { FetchHttpClient } from "effect/http";
 import { forwardClientId } from "../src/forward-auth/forward-auth.ts";
 import { nodeHandler } from "../src/http/application.ts";
 import { listen } from "../src/platform/node-http.ts";
-import { decodeJson } from "./mcp-oauth-helper.ts";
-import { cookieJar, testIssuer } from "./test-issuer.ts";
+import { cookieJar, decodeJson, testIssuer, text } from "./test-issuer.ts";
 
 const owner = {
   email: "owner@example.internal",
@@ -82,9 +81,6 @@ const startServer = Effect.gen(function* () {
 
   return { url, issuer: `${url}/api/auth`, call, forward };
 });
-
-const text = (response: Response) =>
-  Effect.promise(async () => await response.text());
 
 it.live(
   "forward-auth tokens and API keys verify with the SDK against the real issuer, until logout",

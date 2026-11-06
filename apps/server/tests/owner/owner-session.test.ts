@@ -3,13 +3,12 @@ import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { OwnerAccount } from "../../src/owner/owner.ts";
-import { decodeJson } from "../mcp-oauth-helper.ts";
-import { testWebApplication, WebApplication } from "../test-issuer.ts";
-
-const owner = {
-  email: "owner@example.internal",
-  password: "test-only password123",
-};
+import {
+  decodeJson,
+  owner,
+  testWebApplication,
+  WebApplication,
+} from "../test-issuer.ts";
 
 const OpenApi = Schema.Struct({
   components: Schema.Struct({
