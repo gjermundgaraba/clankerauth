@@ -488,6 +488,9 @@ importers:
       '@gjermundgaraba/clankerauth-admin-api':
         specifier: workspace:*
         version: link:../admin-api
+      '@gjermundgaraba/clankerauth-sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.10.0

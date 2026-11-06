@@ -34,6 +34,7 @@
     "@clankerauth/web": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerauth-admin-api": "workspace:*",
+    "@gjermundgaraba/clankerauth-sdk": "workspace:*",
     "@opentelemetry/api": "catalog:",
     "effect": "catalog:",
     "jose": "catalog:",

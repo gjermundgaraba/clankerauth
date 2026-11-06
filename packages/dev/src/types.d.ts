@@ -62,9 +62,10 @@ export interface DisposableIssuer {
     permissions: Record<string, string[]>;
   }) => Promise<string>;
   /**
-   * Sign the owner in and seal the forward cookie for `appOrigin`, exactly as a browser
-   * does through `/forward-auth/continue`. Needs `cookieDomain`. The `cookies` array is
-   * what a browser automation harness adds to a context.
+   * Mint an owner session in-process, without the rate-limited sign-in, and seal the
+   * forward cookie for `appOrigin` as `/forward-auth/continue` does for a browser. Needs
+   * `cookieDomain`. The `cookies` array is what a browser automation harness adds to a
+   * context.
    */
   ownerSession: (appOrigin: string) => Promise<OwnerSession>;
   /** An access token for one resource, obtained through the same forward-auth check. */
