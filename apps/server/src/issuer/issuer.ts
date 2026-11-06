@@ -34,7 +34,7 @@ import {
   ResourceCatalog,
 } from "../resources/catalog.ts";
 import { SchemaRepairRequired } from "./errors.ts";
-import { Settings } from "./settings.ts";
+import { issuerIdentifier, Settings } from "./settings.ts";
 import type { IssuerSettings } from "./settings.ts";
 import { signer } from "./signing.ts";
 
@@ -55,7 +55,7 @@ const providerOptions = (
 ) => {
   const jwtOptions = {
     disableSettingJwtHeader: true,
-    jwt: { issuer: `${settings.baseURL}/api/auth` },
+    jwt: { issuer: issuerIdentifier(settings.baseURL) },
     jwks: { keyPairConfig: { alg: "EdDSA", crv: "Ed25519" } },
   } satisfies JwtOptions;
 

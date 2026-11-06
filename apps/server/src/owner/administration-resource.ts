@@ -8,7 +8,7 @@ import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 
 import { Issuer } from "../issuer/issuer.ts";
-import { Settings } from "../issuer/settings.ts";
+import { issuerIdentifier, Settings } from "../issuer/settings.ts";
 import { peerHeader } from "../platform/node-http.ts";
 import { protocolScopes } from "../resources/catalog.ts";
 
@@ -16,7 +16,7 @@ export const administrationResource = Effect.fn("AdministrationResource.make")(
   function* () {
     const { auth } = yield* Issuer;
     const { baseURL } = yield* Settings;
-    const issuer = `${baseURL}/api/auth`;
+    const issuer = issuerIdentifier(baseURL);
     const resource = administrationIdentifier(baseURL);
 
     const protectedResource = {

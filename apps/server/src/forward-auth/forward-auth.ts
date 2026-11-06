@@ -20,7 +20,12 @@ import {
   unavailability,
 } from "../issuer/errors.ts";
 import { accessTokenLifetime, Issuer } from "../issuer/issuer.ts";
-import { allowedScheme, Settings, withinDomain } from "../issuer/settings.ts";
+import {
+  allowedScheme,
+  issuerIdentifier,
+  Settings,
+  withinDomain,
+} from "../issuer/settings.ts";
 import { ResourceCatalog } from "../resources/catalog.ts";
 
 const nonEmpty = (value: string | null | undefined): value is string =>
@@ -71,7 +76,7 @@ export const forwardAuthRoutes = (cookieDomain: string) =>
 
       const secret = Redacted.value(settings.secret);
       const loginPage = new URL("/login", settings.baseURL);
-      const issuer = `${settings.baseURL}/api/auth`;
+      const issuer = issuerIdentifier(settings.baseURL);
 
       const cookieOptions = {
         domain: cookieDomain,

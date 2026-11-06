@@ -6,6 +6,7 @@ import {
   ApiKeys,
   CimdTransport,
   Clients,
+  issuerIdentifier,
   issuerServices,
   listen,
   nodeHandler,
@@ -331,7 +332,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
 
   return {
     details: {
-      issuer: `${url}/api/auth`,
+      issuer: issuerIdentifier(url),
       clientId: registered.client_id,
       clientSecret,
       owner,
