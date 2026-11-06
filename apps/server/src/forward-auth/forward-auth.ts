@@ -47,7 +47,6 @@ const unauthenticated = (issuer: string, resource: string) => {
   );
 
   return HttpServerResponse.setHeaders(json(401, "unauthenticated"), {
-    "cache-control": headers["cache-control"],
     "www-authenticate": headers["www-authenticate"],
   });
 };
