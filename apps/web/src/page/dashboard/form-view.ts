@@ -365,7 +365,7 @@ const clientFields = (
       name,
       redirectUrisField(draft.redirectUris, h),
       resourceChoicesView(draft.resources, inputs.resources, h),
-      nativeChoice(draft.isNative, h),
+      nativeChoice(draft.applicationType === "native", h),
       authMethodField(draft.authMethod, h),
       Text.note(
         [
@@ -377,7 +377,7 @@ const clientFields = (
     Edit: () => [
       name,
       redirectUrisField(draft.redirectUris, h),
-      nativeChoice(draft.isNative, h),
+      nativeChoice(draft.applicationType === "native", h),
       Text.note(["The authentication method is fixed at registration."], h),
     ],
     Access: () => [

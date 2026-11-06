@@ -1,4 +1,5 @@
 import {
+  ApplicationType,
   ClientAuthMethod,
   KeyPermissions,
 } from "@gjermundgaraba/clankerauth-admin-api";
@@ -34,7 +35,7 @@ const ClientDraft = Schema.Struct({
   name: Schema.String,
   redirectUris: Schema.String,
   resources: Schema.Array(Schema.String),
-  isNative: Schema.Boolean,
+  applicationType: ApplicationType,
   authMethod: ClientAuthMethod,
 });
 
@@ -161,7 +162,7 @@ const clientDraftOf = (
   name: client.client_name ?? "",
   redirectUris: Array.join(client.redirect_uris, "\n"),
   resources,
-  isNative: client.application_type === "native",
+  applicationType: client.application_type === "native" ? "native" : "web",
   authMethod: "none",
 });
 
@@ -172,7 +173,7 @@ export const registerClient = (): Model =>
       name: "",
       redirectUris: "",
       resources: [],
-      isNative: false,
+      applicationType: "web",
       authMethod: "none",
     },
   });
@@ -282,7 +283,9 @@ export const update = (form: Model, message: Message): Model =>
       ),
     ToggledClientNative: ({ isChecked }) =>
       editClientDraft(form, (draft) =>
-        modifyFields(draft, { isNative: () => isChecked })
+        modifyFields(draft, {
+          applicationType: () => (isChecked ? "native" : "web"),
+        })
       ),
     SelectedClientAuthMethod: ({ method }) =>
       editClientDraft(form, (draft) =>
@@ -316,9 +319,6 @@ const expiryOf = (
           : Result.succeed(Option.some(moment)),
     })
   );
-
-const applicationTypeOf = (draft: ClientDraft) =>
-  draft.isNative ? "native" : "web";
 
 const DUPLICATE_RESOURCE =
   "A Resource with this identifier exists already: edit it instead.";
@@ -372,7 +372,7 @@ const clientChangeOf = (
           name: draft.name.trim(),
           redirectUris,
           resources: draft.resources,
-          applicationType: applicationTypeOf(draft),
+          applicationType: draft.applicationType,
           authMethod: draft.authMethod,
         })
       ),
@@ -382,7 +382,7 @@ const clientChangeOf = (
           clientId,
           name: draft.name.trim(),
           redirectUris,
-          applicationType: applicationTypeOf(draft),
+          applicationType: draft.applicationType,
         })
       ),
     Access: ({ clientId, allowed }) =>
