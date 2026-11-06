@@ -14,7 +14,7 @@ const clientOwners = persisted(
   Schema.Array(Schema.Struct({ userId: Schema.NullOr(Schema.String) }))
 );
 
-export const requireManaged = Effect.fn("Clients.requireManaged")(function* (
+export const requireClient = Effect.fn("Clients.require")(function* (
   clientId: string,
   query: Sql
 ) {
@@ -22,11 +22,14 @@ export const requireManaged = Effect.fn("Clients.requireManaged")(function* (
     yield* query`SELECT userId FROM oauthClient WHERE clientId = ${clientId}`
   );
 
-  if (!client) {
-    return yield* ClientNotFound.of(clientId);
-  }
+  return client ?? (yield* ClientNotFound.of(clientId));
+});
 
-  if (isAutomatic(client)) {
+export const requireManaged = Effect.fn("Clients.requireManaged")(function* (
+  clientId: string,
+  query: Sql
+) {
+  if (isAutomatic(yield* requireClient(clientId, query))) {
     return yield* ClientIsAutomatic.of(clientId);
   }
 });

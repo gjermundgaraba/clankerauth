@@ -27,12 +27,12 @@ import {
 } from "../authorization/authorization.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
-import { Settings } from "../issuer/settings.ts";
+import { issuerIdentifier, Settings } from "../issuer/settings.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
 import type { Sql } from "../platform/sqlite.ts";
 import { protocolScopes, ResourceCatalog } from "../resources/catalog.ts";
 import { Resources } from "../resources/resources.ts";
-import { isAutomatic, requireManaged } from "./managed.ts";
+import { isAutomatic, requireClient, requireManaged } from "./managed.ts";
 
 const decodeConnections = persisted(
   Schema.Array(
@@ -146,24 +146,12 @@ export class Clients extends Context.Service<
       const catalog = yield* ResourceCatalog;
       const resources = yield* Resources;
 
-      const exists = Effect.fn("Clients.exists")(function* (
-        clientId: string,
-        query: Sql
-      ) {
-        if (
-          !(yield* query`SELECT 1 FROM oauthClient WHERE clientId = ${clientId}`)
-            .length
-        ) {
-          return yield* ClientNotFound.of(clientId);
-        }
-      });
-
       const revoke = Effect.fn("Clients.revoke")(function* (
         clientId: string,
         resource: string | undefined,
         query: Sql
       ) {
-        yield* exists(clientId, query);
+        yield* requireClient(clientId, query);
         yield* clearAuthorization(query, { clientId, resource });
 
         return { revoked: true };
@@ -233,7 +221,7 @@ export class Clients extends Context.Service<
             clientAccess: listed.clientAccess,
             connections: listed.connections,
             email,
-            issuer: `${baseURL}/api/auth`,
+            issuer: issuerIdentifier(baseURL),
           };
         }).pipe(Effect.withSpan("Clients.list")),
         create: Effect.fn("Clients.create")(function* (
@@ -323,7 +311,7 @@ export class Clients extends Context.Service<
         delete: ({ client_id }) =>
           transaction((query) =>
             Effect.gen(function* () {
-              yield* exists(client_id, query);
+              yield* requireClient(client_id, query);
               yield* clearCodes(query, client_id, null);
               yield* query`DELETE FROM oauthClient WHERE clientId = ${client_id}`;
 
@@ -335,7 +323,7 @@ export class Clients extends Context.Service<
             Effect.gen(function* () {
               yield* blocked
                 ? revoke(client_id, undefined, query)
-                : exists(client_id, query);
+                : requireClient(client_id, query);
 
               yield* query`UPDATE oauthClient SET disabled = ${blocked ? 1 : 0}, updatedAt = ${yield* Clock.currentTimeMillis} WHERE clientId = ${client_id}`;
 
