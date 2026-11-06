@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { Schema } from "effect";
 import {
   assertDeclarations,
   execute,
+  installPacked,
 } from "../../../scripts/package-install.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -47,26 +48,7 @@ const directory = await mkdtemp(
 );
 
 try {
-  await execute("npm", ["pack", "--pack-destination", directory], {
-    cwd: root,
-  });
-  const [tarball] = await readdir(directory);
-  await writeFile(
-    path.join(directory, "package.json"),
-    JSON.stringify({ private: true, type: "module" })
-  );
-  await execute(
-    "npm",
-    [
-      "install",
-      "--offline",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      path.join(directory, tarball),
-    ],
-    { cwd: directory }
-  );
+  await installPacked(directory, root, [], { offline: true });
   const installed = path.join(directory, "node_modules", name);
 
   const manifest = await readManifest(installed);

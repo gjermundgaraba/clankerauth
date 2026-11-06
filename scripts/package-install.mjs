@@ -49,8 +49,14 @@ export const packDependency = async (directory, root, dependency) => {
  * @param {string} directory
  * @param {string} root
  * @param {readonly string[]} peers
+ * @param {{ readonly offline?: boolean }} [options] `offline` proves the install fetches nothing.
  */
-export const installPacked = async (directory, root, peers) => {
+export const installPacked = async (
+  directory,
+  root,
+  peers,
+  { offline = false } = {}
+) => {
   await execute("pnpm", ["pack", "--pack-destination", directory], {
     cwd: root,
   });
@@ -77,6 +83,7 @@ export const installPacked = async (directory, root, peers) => {
     "npm",
     [
       "install",
+      ...(offline ? ["--offline"] : []),
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
