@@ -10,9 +10,14 @@ export const seal = (key: string, data: string) =>
 export const unseal = (key: string, data: string) =>
   Effect.tryPromise(async () => await symmetricDecrypt({ key, data }));
 
+/**
+ * The `Cookie` header that presents a session. A session created not to be remembered
+ * carries the provider's don't-remember cookie too, so `getSession` never extends it.
+ */
 export const signedSessionCookie = async (
   context: ProviderContext,
-  token: string
+  token: string,
+  remembered: boolean
 ) => {
   const cookies = await Promise.all([
     serializeSignedCookie(
@@ -20,11 +25,15 @@ export const signedSessionCookie = async (
       token,
       context.secret
     ),
-    serializeSignedCookie(
-      context.authCookies.dontRememberToken.name,
-      "true",
-      context.secret
-    ),
+    ...(remembered
+      ? []
+      : [
+          serializeSignedCookie(
+            context.authCookies.dontRememberToken.name,
+            "true",
+            context.secret
+          ),
+        ]),
   ]);
 
   return cookies.map((cookie) => cookie.split(";")[0]).join("; ");

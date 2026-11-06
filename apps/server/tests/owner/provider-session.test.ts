@@ -137,6 +137,7 @@ it.live(
 
       for (let attempt = 0; attempt < 7; attempt += 1) {
         const cookie = Redacted.value(yield* owners.session(owner));
+        expect(cookie).not.toContain("dont_remember");
 
         const session = yield* Effect.promise(
           async () =>

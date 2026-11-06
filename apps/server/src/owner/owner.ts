@@ -4,14 +4,14 @@ import type {
   Owner,
   ProviderRefused,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Context, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
+import type { Redacted } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
 
-import { signedSessionCookie } from "../issuer/cookies.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
-import { providerSessionFor } from "./provider-session.ts";
+import { ownerSessionFor, providerSessionFor } from "./provider-session.ts";
 
 const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
 
@@ -93,17 +93,7 @@ export class OwnerAccount extends Context.Service<
           writable,
           providerHeaders: providerSession(userId),
         }),
-        session: Effect.fn("OwnerAccount.session")(function* (userId: string) {
-          const { token } = yield* provider(
-            async () => await context.internalAdapter.createSession(userId)
-          );
-
-          return Redacted.make(
-            yield* provider(
-              async () => await signedSessionCookie(context, token)
-            )
-          );
-        }, Effect.uninterruptible),
+        session: ownerSessionFor(context),
       };
     })
   );
