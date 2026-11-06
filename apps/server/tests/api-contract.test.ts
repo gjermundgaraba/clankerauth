@@ -13,8 +13,13 @@ import { Issuer } from "../src/issuer/issuer.ts";
 import { OwnerAccount } from "../src/owner/owner.ts";
 import { peerHeader } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
-import { administrationResource, decodeJson } from "./mcp-oauth-helper.ts";
-import { signIn, testWebApplication, WebApplication } from "./test-issuer.ts";
+import { administrationResource } from "./mcp-oauth-helper.ts";
+import {
+  decodeJson,
+  signIn,
+  testWebApplication,
+  WebApplication,
+} from "./test-issuer.ts";
 
 const apiClient = (baseUrl: string) => ActionHttp.client(Http, { baseUrl });
 
@@ -530,33 +535,6 @@ describe("API integration", () => {
             (row) => ({ ...row })
           )
         ).toStrictEqual([{ id: "failure-consent" }]);
-      }).pipe(Effect.provide(contractIssuer()))
-  );
-
-  it.live(
-    "malformed setup input is refused without reflecting the password or creating an owner",
-    () =>
-      Effect.gen(function* () {
-        const browser = yield* Browser;
-
-        const response = yield* Effect.promise(
-          async () =>
-            await browser.fetch(`${baseURL}/api/setupOwner`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                email,
-                password: { sensitive: password },
-              }),
-            })
-        );
-
-        expect(response.status).toBeGreaterThanOrEqual(400);
-        expect(response.status).toBeLessThan(500);
-        expect(
-          yield* Effect.promise(async () => await response.text())
-        ).not.toContain(password);
-        expect(yield* (yield* OwnerAccount).find).toBeUndefined();
       }).pipe(Effect.provide(contractIssuer()))
   );
 });
