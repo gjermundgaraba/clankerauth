@@ -57,6 +57,14 @@ const decodeOwnerRow = persisted(
   Schema.Struct({ id: Schema.String, email: Schema.String })
 );
 
+const accessOf = (scopes: readonly string[]) => {
+  if (scopes.includes(administrationScopes.write)) {
+    return "write";
+  }
+
+  return scopes.includes(administrationScopes.read) ? "read" : undefined;
+};
+
 const rejected = () =>
   new Action.Unauthenticated({ message: "Owner authorization required" });
 
@@ -71,7 +79,7 @@ export const bearerOwner = (resource: AdministrationResource) =>
 
       const caller = Effect.fnUntraced(function* (
         rows: readonly SqliteRow[],
-        writable: boolean
+        access: "read" | "write"
       ) {
         if (!rows[0]) {
           return yield* rejected();
@@ -79,25 +87,22 @@ export const bearerOwner = (resource: AdministrationResource) =>
 
         const row = yield* decodeOwnerRow(rows[0]);
 
-        return owner.caller(row.id, row.email, writable);
+        return owner.caller(row.id, row.email, access === "write");
       });
 
       const liveKeyOwner = Effect.fnUntraced(function* (
         key: Redacted.Redacted
       ) {
         const holder = yield* keys.holder(key, identifier);
+        const access = holder && accessOf(holder.scopes);
 
-        if (
-          !holder ||
-          (!holder.scopes.includes(administrationScopes.read) &&
-            !holder.scopes.includes(administrationScopes.write))
-        ) {
+        if (!holder || !access) {
           return yield* rejected();
         }
 
         return yield* caller(
           yield* sql`SELECT id, email FROM user WHERE id = ${holder.ownerId}`,
-          holder.scopes.includes(administrationScopes.write)
+          access
         );
       });
 
@@ -121,12 +126,9 @@ export const bearerOwner = (resource: AdministrationResource) =>
           return yield* rejected();
         }
 
-        const writable = principal.scopes.includes(administrationScopes.write);
+        const access = accessOf(principal.scopes);
 
-        if (
-          !writable &&
-          !principal.scopes.includes(administrationScopes.read)
-        ) {
+        if (!access) {
           return yield* new Action.Forbidden({
             message: "Insufficient scope",
             scopes: [administrationScopes.read],
@@ -137,7 +139,7 @@ export const bearerOwner = (resource: AdministrationResource) =>
           yield* sql`SELECT u.id, u.email FROM user u
       JOIN oauthClient c ON c.clientId = ${principal.actor.clientId}
       WHERE u.id = ${principal.subject} AND c.disabled IS NOT 1`,
-          writable
+          access
         );
       });
 
