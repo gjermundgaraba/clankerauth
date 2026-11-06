@@ -1,6 +1,7 @@
 import { Result, Schema } from "effect";
 import { modifyFields } from "foldkit/struct";
 
+import { Change } from "./change.ts";
 import { Listing, listingQuery } from "./listing.ts";
 import { Message } from "./message.ts";
 import type { Model } from "./model.ts";
@@ -60,6 +61,11 @@ export const listing = Schema.decodeSync(Listing)({
       createdAt: "2026-01-01T00:00:00.000Z",
     },
   ],
+});
+
+export const deleteKey = Change.DeleteKey({
+  keyId: "fixture-key",
+  name: "Automation",
 });
 
 export const listed = settled(init().model, readOf(FIRST_READ, listing));

@@ -19,6 +19,7 @@ import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import {
   SECOND_READ,
   THIRD_READ,
+  deleteKey,
   failedReadOf,
   listed,
   listing,
@@ -52,11 +53,6 @@ const saving = (current: Model): Model =>
 const disable = Change.SetKeyEnabled({
   keyId: "fixture-key",
   isEnabled: false,
-});
-
-const deleteKey = Change.DeleteKey({
-  keyId: "fixture-key",
-  name: "Automation",
 });
 
 const editing = (formMessage: Form.Message) =>

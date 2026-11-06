@@ -32,6 +32,7 @@ import {
   SECOND_READ,
   THIRD_READ,
   cataloged,
+  deleteKey,
   listed,
   listing,
   readOf,
@@ -47,11 +48,6 @@ const clientsView = withViewInputs(view, { section: AppRoute.Clients() })();
 const keysView = withViewInputs(view, { section: AppRoute.Keys() })();
 
 const resourcesView = withViewInputs(view, { section: AppRoute.Resources() })();
-
-const deleteKey = Change.DeleteKey({
-  keyId: "fixture-key",
-  name: "Automation",
-});
 
 const showDialog = [
   Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
