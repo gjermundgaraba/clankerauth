@@ -81,6 +81,8 @@ export const catalog = Schema.decodeSync(Listing)({
         client_name: "Managed client",
         redirect_uris: ["https://fixture.invalid/callback"],
         token_endpoint_auth_method: "client_secret_basic",
+        onboarding: "managed",
+        blocked: false,
       },
       {
         client_id: "https://client.fixture.invalid/metadata.json",
@@ -88,6 +90,7 @@ export const catalog = Schema.decodeSync(Listing)({
         redirect_uris: ["https://fixture.invalid/callback"],
         token_endpoint_auth_method: "none",
         onboarding: "cimd",
+        blocked: false,
       },
     ],
     resources: [
