@@ -5,7 +5,7 @@ import { load } from "foldkit/navigation";
 
 import { issuer, signOut, toOwnerSentence } from "../../api.ts";
 import { loginRouter } from "../../route.ts";
-import { Change, Credential } from "./change.ts";
+import { announcementOf, Change, Credential } from "./change.ts";
 import { Message } from "./message.ts";
 
 const clientSecretOf = (
@@ -19,15 +19,31 @@ const clientSecretOf = (
     })
   );
 
-const nothingShown = Effect.as(Option.none<Credential>());
+interface Saved {
+  readonly maybeCredential: Option.Option<Credential>;
+  readonly announcement: string;
+}
 
-const saveChange = (
-  change: Change
-): Effect.Effect<Option.Option<Credential>, string> =>
-  toOwnerSentence<Option.Option<Credential>, unknown>(
+const saveChange = (change: Change): Effect.Effect<Saved, string> => {
+  const saved = (
+    maybeCredential: Option.Option<Credential>,
+    announcement = announcementOf(change)
+  ): Saved => ({ maybeCredential, announcement });
+
+  const nothingShown = Effect.as(saved(Option.none()));
+
+  return toOwnerSentence<Saved, unknown>(
     Change.match(change, {
       PutResource: ({ identifier, name, scopes }) =>
-        issuer.putResource({ identifier, name, scopes }).pipe(nothingShown),
+        issuer
+          .putResource({ identifier, name, scopes })
+          .pipe(
+            Effect.map(({ created }) =>
+              created
+                ? saved(Option.none(), "Resource created.")
+                : saved(Option.none())
+            )
+          ),
       DeleteResource: ({ identifier }) =>
         issuer.deleteResource({ identifier }).pipe(nothingShown),
       CreateKey: ({ name, permissions, maybeExpiry }) =>
@@ -43,7 +59,7 @@ const saveChange = (
           })
         ).pipe(
           Effect.map(({ keyId, name: keyName, key }) =>
-            Option.some(Credential.ApiKey({ keyId, name: keyName, key }))
+            saved(Option.some(Credential.ApiKey({ keyId, name: keyName, key })))
           )
         ),
       RenameKey: ({ keyId, name }) =>
@@ -69,7 +85,9 @@ const saveChange = (
             application_type: applicationType,
             token_endpoint_auth_method: authMethod,
           })
-          .pipe(Effect.map(clientSecretOf)),
+          .pipe(
+            Effect.map((credentials) => saved(clientSecretOf(credentials)))
+          ),
       UpdateClient: ({ clientId, name, redirectUris, applicationType }) =>
         issuer
           .updateClient({
@@ -96,11 +114,14 @@ const saveChange = (
       RotateSecret: ({ clientId }) =>
         issuer
           .rotateClientSecret({ client_id: clientId })
-          .pipe(Effect.map(clientSecretOf)),
+          .pipe(
+            Effect.map((credentials) => saved(clientSecretOf(credentials)))
+          ),
       DeleteClient: ({ clientId }) =>
         issuer.deleteClient({ client_id: clientId }).pipe(nothingShown),
     })
   );
+};
 
 const SAVE_TIMEOUT = Duration.seconds(20);
 
@@ -111,8 +132,12 @@ export const SaveChange = Command.define("SaveChange", {
     saveChange(change).pipe(
       Effect.match({
         onFailure: (reason) => Message.FailedSaveChange({ reason }),
-        onSuccess: (maybeCredential) =>
-          Message.SucceededSaveChange({ change, maybeCredential }),
+        onSuccess: ({ maybeCredential, announcement }) =>
+          Message.SucceededSaveChange({
+            change,
+            maybeCredential,
+            announcement,
+          }),
       }),
       Effect.timeoutOrElse({
         duration: SAVE_TIMEOUT,

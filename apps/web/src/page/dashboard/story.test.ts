@@ -78,7 +78,7 @@ const created = Change.PutResource({
 const submittingCreated = [
   message(
     Message.ClickedOpenForm({
-      form: Form.addResource(listing.overview.resources),
+      form: Form.addResource(),
     })
   ),
   Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
@@ -130,6 +130,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: disable,
           maybeCredential: Option.none(),
+          announcement: "Key disabled.",
         })
       ),
       model((next) => {
@@ -193,6 +194,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: deleteKey,
           maybeCredential: Option.none(),
+          announcement: "Key deleted.",
         })
       ),
       Command.resolveAll(
@@ -267,6 +269,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: created,
           maybeCredential: Option.none(),
+          announcement: "Resource created.",
         })
       ),
       Command.resolveAll(
@@ -288,8 +291,7 @@ describe("dashboard update", () => {
         saving(
           modifyFields(listed, {
             editor: (editor) => Dialog.open(editor).model,
-            maybeForm: () =>
-              Option.some(Form.addResource(listing.overview.resources)),
+            maybeForm: () => Option.some(Form.addResource()),
           })
         )
       ),
@@ -353,41 +355,6 @@ describe("dashboard update", () => {
     );
   });
 
-  it("adding a resource the listing already holds is refused in the editor", () => {
-    story(
-      update,
-      given(listed),
-      message(
-        Message.ClickedOpenForm({
-          form: Form.addResource(listing.overview.resources),
-        })
-      ),
-      Command.resolve(
-        UiDialog.ShowDialog,
-        UiDialog.Message.SucceededShowDialog()
-      ),
-      message(editing(Form.Message.UpdatedResourceName({ value: "Again" }))),
-      message(
-        editing(
-          Form.Message.UpdatedResourceIdentifier({
-            value: " https://api.fixture.invalid ",
-          })
-        )
-      ),
-      message(Message.SubmittedForm()),
-      Command.expectNone(),
-      model((next) => {
-        expect(
-          Option.map(refusalAt(next, "Editor"), ({ reason }) => reason)
-        ).toStrictEqual(
-          Option.some(
-            "A Resource with this identifier exists already: edit it instead."
-          )
-        );
-      })
-    );
-  });
-
   it("a form that does not read as a change is refused in the editor", () => {
     story(
       update,
@@ -433,6 +400,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: rotate,
           maybeCredential: Option.some(secret),
+          announcement: "Secret rotated. Store it now.",
         })
       ),
       Command.expectExact(
@@ -480,6 +448,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: deleteKey,
           maybeCredential: Option.none(),
+          announcement: "Key deleted.",
         })
       ),
       model((next) => {
@@ -526,7 +495,7 @@ describe("dashboard update", () => {
       given(rereading(listed)),
       message(
         Message.ClickedOpenForm({
-          form: Form.addResource(listing.overview.resources),
+          form: Form.addResource(),
         })
       ),
       Command.expectNone(),

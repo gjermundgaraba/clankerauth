@@ -104,6 +104,7 @@ describe("dashboard view", () => {
         Message.SucceededSaveChange({
           change: deleteKey,
           maybeCredential: Option.none(),
+          announcement: "Key deleted.",
         })
       ),
       closeDialog,

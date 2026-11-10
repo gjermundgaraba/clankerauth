@@ -182,7 +182,7 @@ export const confirmationOf = (change: Change): Option.Option<Confirmation> =>
 
 export const announcementOf = (change: Change): string =>
   Change.match(change, {
-    PutResource: () => "Resource saved.",
+    PutResource: () => "Resource updated.",
     DeleteResource: () => "Resource deleted.",
     CreateKey: () => "API key created. Store it now.",
     RenameKey: () => "Key renamed.",

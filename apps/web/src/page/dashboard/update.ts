@@ -14,7 +14,6 @@ import * as Update from "foldkit/update";
 
 import type { Change, Credential } from "./change.ts";
 import {
-  announcementOf,
   confirmationOf,
   credentialId,
   isVoidedBy,
@@ -218,7 +217,8 @@ const closeConfirm = (model: Model): UpdateReturn =>
 const saved = (
   model: Model,
   change: Change,
-  maybeCredential: Option.Option<Credential>
+  maybeCredential: Option.Option<Credential>,
+  announcement: string
 ): UpdateReturn =>
   Update.combine(
     modifyFields(model, {
@@ -233,7 +233,7 @@ const saved = (
       (stepModel) => ({
         model: stepModel,
         commands: [
-          Announcer.Announce({ text: announcementOf(change) }),
+          Announcer.Announce({ text: announcement }),
           ...Array.fromOption(
             Option.map(maybeCredential, (credential) =>
               Focus.Focus({ id: copyIdOf(credential) })
@@ -311,8 +311,8 @@ export const update = (model: Model, message: Message) =>
     }),
     SubmittedForm: () => submitted(model),
     ClickedChange: ({ change }) => requested(model, change),
-    SucceededSaveChange: ({ change, maybeCredential }) =>
-      saved(model, change, maybeCredential),
+    SucceededSaveChange: ({ change, maybeCredential, announcement }) =>
+      saved(model, change, maybeCredential, announcement),
     FailedSaveChange: ({ reason }) => refused(model, reason),
     ClickedDismissCredentials: () => ({
       model: modifyFields(model, { credentials: () => [] }),
