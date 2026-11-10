@@ -34,7 +34,7 @@ import {
   ResourceCatalog,
 } from "../resources/catalog.ts";
 import { SchemaRepairRequired } from "./errors.ts";
-import { issuerIdentifier, Settings } from "./settings.ts";
+import { issuerIdentifier, providerBasePath, Settings } from "./settings.ts";
 import type { IssuerSettings } from "./settings.ts";
 import { signer } from "./signing.ts";
 
@@ -143,6 +143,7 @@ const providerOptions = (
   const options = {
     appName: "clankerauth",
     baseURL: settings.baseURL,
+    basePath: providerBasePath,
     secret: Redacted.value(settings.secret),
     database: { db: kysely, type: "sqlite", transaction: true },
     trustedOrigins: [settings.baseURL],

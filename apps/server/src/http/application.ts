@@ -15,7 +15,7 @@ import {
 import { forwardAuthRoutes } from "../forward-auth/forward-auth.ts";
 import { provider, respond } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
-import { Settings } from "../issuer/settings.ts";
+import { providerBasePath, Settings } from "../issuer/settings.ts";
 import { requestPolicy } from "../platform/node-http.ts";
 import { Database } from "../platform/sqlite.ts";
 import { exactlyOneResource, ResourceCatalog } from "../resources/catalog.ts";
@@ -38,6 +38,8 @@ const publicPaths = new Set([
   "/.well-known/oauth-authorization-server",
 ]);
 
+const providerMetadataPath = `/.well-known/oauth-authorization-server${providerBasePath}`;
+
 const corsPaths = new Set([
   "/.well-known/oauth-protected-resource",
   "/jwks",
@@ -46,14 +48,14 @@ const corsPaths = new Set([
   "/oauth2/revoke",
   "/oauth2/introspect",
   "/.well-known/oauth-authorization-server",
-  "/.well-known/oauth-authorization-server/api/auth",
+  providerMetadataPath,
 ]);
 
 const cacheablePaths = new Set([
   "/jwks",
   "/.well-known/oauth-protected-resource",
   "/.well-known/oauth-authorization-server",
-  "/.well-known/oauth-authorization-server/api/auth",
+  providerMetadataPath,
 ]);
 
 const spaRoutes = new Set(documentPaths);
@@ -125,12 +127,12 @@ export const application = (
       const bridge = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const url = new URL(request.url, settings.baseURL);
-        const path = url.pathname.replace(/^\/api\/auth/u, "");
 
-        if (
-          !publicPaths.has(path) &&
-          path !== "/.well-known/oauth-authorization-server/api/auth"
-        ) {
+        const path = url.pathname.startsWith(providerBasePath)
+          ? url.pathname.slice(providerBasePath.length)
+          : url.pathname;
+
+        if (!publicPaths.has(path) && path !== providerMetadataPath) {
           return notFound;
         }
 
@@ -353,7 +355,7 @@ export const application = (
             Effect.catch(respond)
           )
         ),
-        HttpRouter.add("*", "/api/auth/*", bridge),
+        HttpRouter.add("*", `${providerBasePath}/*`, bridge),
         HttpRouter.add("*", "/.well-known/*", bridge),
         staticRoutes
       ).pipe(
