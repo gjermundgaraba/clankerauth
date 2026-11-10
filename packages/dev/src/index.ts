@@ -212,14 +212,10 @@ const makeWorkspace = Effect.fnUntraced(function* (
   const resources = Context.get(issuer, Resources);
   const keys = Context.get(issuer, ApiKeys);
 
-  if ((yield* account.find) === undefined) {
-    yield* account.create(owner).pipe(Effect.mapError(provisioningFailed));
-  }
-
-  const userId = yield* account.find.pipe(
-    Effect.flatMap(Effect.fromNullishOr),
-    Effect.mapError(provisioningFailed)
-  );
+  const userId =
+    (yield* account.find) ??
+    (yield* account.create(owner).pipe(Effect.mapError(provisioningFailed)))
+      .userId;
 
   const asOwner = <A, E>(
     operation: Effect.Effect<A, E, CurrentOwner | Scope.Scope>

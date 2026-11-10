@@ -14,7 +14,7 @@ export const setupActions = Effect.map(OwnerAccount, (owner) => ({
   setupOwner: Effect.fn("Administration.setup")(function* (
     input: typeof SetupInput.Type
   ) {
-    const cookies = yield* owner.create(input);
+    const { cookies } = yield* owner.create(input);
 
     yield* (yield* ResponseCookies).add(cookies);
 

@@ -23,7 +23,7 @@ export class OwnerAccount extends Context.Service<
       readonly email: string;
       readonly password: string;
     }) => Effect.Effect<
-      string[],
+      { readonly userId: string; readonly cookies: string[] },
       OwnerExists | ProviderRefused | InternalServerError
     >;
     readonly caller: (
@@ -67,7 +67,7 @@ export class OwnerAccount extends Context.Service<
               return yield* OwnerExists.of();
             }
 
-            const { headers } = yield* provider(
+            const { headers, response } = yield* provider(
               async () =>
                 await auth.api.signUpEmail({
                   body: {
@@ -80,7 +80,10 @@ export class OwnerAccount extends Context.Service<
               { refused: refusal, conflict: OwnerExists.of }
             );
 
-            return headers.getSetCookie();
+            return {
+              userId: response.user.id,
+              cookies: headers.getSetCookie(),
+            };
           },
           (effect) => setup.withPermit(effect)
         ),
