@@ -7,10 +7,6 @@ saveExact: true
 catalog:
   "@effect/platform-browser": 4.1.3
   "@effect/platform-node": 4.1.3
-  # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
-  # it by caret, and a newer one requires a newer effect, so npm would install a second effect
-  # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.1.3
   "@effect/vitest": 4.1.3
   foldkit: 0.170.0
   "@foldkit/ui": 0.170.0

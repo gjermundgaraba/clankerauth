@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
-    "@effect/platform-node-shared": "catalog:",
     "@gjermundgaraba/clankerauth-sdk": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
     "effect": "catalog:"
