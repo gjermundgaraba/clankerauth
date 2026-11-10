@@ -31,10 +31,7 @@ export class OwnerAccount extends Context.Service<
       email: string,
       writable: boolean
     ) => Owner;
-    /**
-     * A full-length session for the owner, as its `Cookie` header, minted without the
-     * rate-limited sign-in; for the embedding development issuer, never served over HTTP.
-     */
+    /** For the embedding development issuer, never served over HTTP. */
     readonly session: (
       userId: string
     ) => Effect.Effect<Redacted.Redacted, InternalServerError>;

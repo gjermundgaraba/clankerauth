@@ -26,13 +26,13 @@ export const providerSessionFor = (context: ProviderContext, origin: string) =>
     );
 
     const cookie = yield* provider(
-      async () => await signedSessionCookie(context, session.token, false)
+      async () => await signedSessionCookie(context, session.token)
     );
 
     return Redacted.make(new Headers({ origin, cookie }));
   });
 
-/** A full-length session, as a sign-in creates, minted without the rate-limited sign-in. */
+/** An owner session, as its `Cookie` header, minted without the rate-limited sign-in. */
 export const ownerSessionFor = (context: ProviderContext) =>
   Effect.fn("OwnerAccount.session")(function* (userId: string) {
     const { token } = yield* provider(
@@ -40,8 +40,6 @@ export const ownerSessionFor = (context: ProviderContext) =>
     );
 
     return Redacted.make(
-      yield* provider(
-        async () => await signedSessionCookie(context, token, true)
-      )
+      yield* provider(async () => await signedSessionCookie(context, token))
     );
   }, Effect.uninterruptible);

@@ -132,14 +132,11 @@ it.live(
   () =>
     Effect.gen(function* () {
       const owner = yield* createOwner;
-      const { auth, context } = yield* Issuer;
+      const { auth } = yield* Issuer;
       const owners = yield* OwnerAccount;
 
       for (let attempt = 0; attempt < 7; attempt += 1) {
         const cookie = Redacted.value(yield* owners.session(owner));
-        expect(cookie).not.toContain(
-          context.authCookies.dontRememberToken.name
-        );
 
         const session = yield* Effect.promise(
           async () =>
