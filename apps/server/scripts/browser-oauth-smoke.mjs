@@ -1,16 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 import { createServer as createViteServer } from "vite";
+
+import { issuerProcess } from "./issuer-process.mjs";
 
 const directory = await mkdtemp(
   path.join(tmpdir(), "clankerauth-browser-oauth-")
@@ -49,82 +47,20 @@ await fixture.listen();
 
 const clientOrigin = `http://127.0.0.1:${fixture.httpServer.address().port}`;
 
-const reservation = createServer();
+const issuerServer = await issuerProcess({
+  main: fileURLToPath(new URL("../dist/main.mjs", import.meta.url)),
+  directory,
+  env: { CLANKERAUTH_MCP_ALLOWED_ORIGINS: clientOrigin },
+});
 
-reservation.listen(0, "127.0.0.1");
-
-await once(reservation, "listening");
-
-const { port } = reservation.address();
-
-reservation.close();
-
-await once(reservation, "close");
-
-const issuer = `http://127.0.0.1:${port}`;
+const issuer = issuerServer.baseURL;
 
 const password = randomBytes(24).toString("hex");
-
-const child = spawn(
-  process.execPath,
-  [fileURLToPath(new URL("../dist/main.mjs", import.meta.url))],
-  {
-    cwd: directory,
-    env: {
-      ...process.env,
-      CLANKERAUTH_BASE_URL: issuer,
-      CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-      CLANKERAUTH_DATABASE: path.join(directory, "clankerauth.sqlite"),
-      CLANKERAUTH_HOST: "127.0.0.1",
-      CLANKERAUTH_PORT: String(port),
-      CLANKERAUTH_MCP_ALLOWED_ORIGINS: clientOrigin,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  }
-);
-
-let output = "";
-
-child.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-
-child.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-
-const isHealthy = async () => {
-  try {
-    const health = await fetch(`${issuer}/healthz`, {
-      signal: AbortSignal.timeout(500),
-    });
-
-    return health.ok;
-  } catch {
-    return false;
-  }
-};
 
 let browser;
 
 try {
-  let ready = false;
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (child.exitCode !== null) {
-      throw new Error(`Server exited during startup: ${output}`);
-    }
-
-    ready = await isHealthy();
-
-    if (ready) {
-      break;
-    }
-
-    await setTimeout(50);
-  }
-
-  assert.ok(ready, `Server did not become ready: ${output}`);
+  await issuerServer.start();
 
   const setup = await fetch(`${issuer}/api/setupOwner`, {
     method: "POST",
@@ -239,12 +175,7 @@ try {
 } finally {
   await browser?.close();
 
-  if (child.exitCode === null && child.signalCode === null) {
-    const exited = once(child, "exit");
-    child.kill("SIGTERM");
-    await exited;
-  }
-
+  await issuerServer.stop();
   await fixture.close();
   await rm(directory, { recursive: true, force: true });
 }

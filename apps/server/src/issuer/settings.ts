@@ -16,6 +16,13 @@ export interface IssuerSettings {
   cookieDomain: string | undefined;
 }
 
+/** Where the provider serves its routes under the service's origin. */
+export const providerBasePath = "/api/auth";
+
+/** The OAuth issuer: the provider's base path under the service's origin. */
+export const issuerIdentifier = (baseURL: string) =>
+  `${baseURL}${providerBasePath}`;
+
 export const withinDomain = (hostname: string, domain: string) =>
   hostname === domain || hostname.endsWith(`.${domain}`);
 

@@ -1,4 +1,5 @@
 import {
+  ApplicationType,
   ClientAuthMethod,
   KeyPermissions,
 } from "@gjermundgaraba/clankerauth-admin-api";
@@ -34,7 +35,7 @@ const ClientDraft = Schema.Struct({
   name: Schema.String,
   redirectUris: Schema.String,
   resources: Schema.Array(Schema.String),
-  isNative: Schema.Boolean,
+  applicationType: ApplicationType,
   authMethod: ClientAuthMethod,
 });
 
@@ -156,7 +157,7 @@ const clientDraftOf = (
   name: client.client_name ?? "",
   redirectUris: Array.join(client.redirect_uris, "\n"),
   resources,
-  isNative: client.application_type === "native",
+  applicationType: client.application_type === "native" ? "native" : "web",
   authMethod: "none",
 });
 
@@ -167,7 +168,7 @@ export const registerClient = (): Model =>
       name: "",
       redirectUris: "",
       resources: [],
-      isNative: false,
+      applicationType: "web",
       authMethod: "none",
     },
   });
@@ -277,7 +278,9 @@ export const update = (form: Model, message: Message): Model =>
       ),
     ToggledClientNative: ({ isChecked }) =>
       editClientDraft(form, (draft) =>
-        modifyFields(draft, { isNative: () => isChecked })
+        modifyFields(draft, {
+          applicationType: () => (isChecked ? "native" : "web"),
+        })
       ),
     SelectedClientAuthMethod: ({ method }) =>
       editClientDraft(form, (draft) =>
@@ -312,31 +315,12 @@ const expiryOf = (
     })
   );
 
-const applicationTypeOf = (draft: ClientDraft) =>
-  draft.isNative ? "native" : "web";
-
-const DUPLICATE_RESOURCE =
-  "A Resource with this identifier exists already: edit it instead.";
-
-const resourceChangeOf = (
-  mode: typeof ResourceMode.Type,
-  draft: ResourceDraft,
-  existing: readonly string[]
-): Result.Result<Change, string> => {
-  const fields = {
+const resourceChangeOf = (draft: ResourceDraft): Change =>
+  Change.PutResource({
     identifier: draft.identifier.trim(),
     name: draft.name.trim(),
     scopes: splitWords(draft.scopes),
-  };
-
-  return ResourceMode.match(mode, {
-    Add: () =>
-      Array.contains(existing, fields.identifier)
-        ? Result.fail(DUPLICATE_RESOURCE)
-        : Result.succeed(Change.PutResource(fields)),
-    Edit: () => Result.succeed(Change.PutResource(fields)),
   });
-};
 
 const keyChangeOf = (
   mode: typeof KeyMode.Type,
@@ -368,7 +352,7 @@ const clientChangeOf = (
           name: draft.name.trim(),
           redirectUris,
           resources: draft.resources,
-          applicationType: applicationTypeOf(draft),
+          applicationType: draft.applicationType,
           authMethod: draft.authMethod,
         })
       ),
@@ -378,7 +362,7 @@ const clientChangeOf = (
           clientId,
           name: draft.name.trim(),
           redirectUris,
-          applicationType: applicationTypeOf(draft),
+          applicationType: draft.applicationType,
         })
       ),
     Access: ({ clientId, allowed }) =>
@@ -391,12 +375,9 @@ const clientChangeOf = (
       ),
   });
 
-export const changeOf = (
-  form: Model,
-  resources: readonly string[]
-): Result.Result<Change, string> =>
+export const changeOf = (form: Model): Result.Result<Change, string> =>
   Model.match(form, {
-    Resource: ({ mode, draft }) => resourceChangeOf(mode, draft, resources),
+    Resource: ({ draft }) => Result.succeed(resourceChangeOf(draft)),
     Key: ({ mode, draft }) => keyChangeOf(mode, draft),
     Client: ({ mode, draft }) => clientChangeOf(mode, draft),
   });

@@ -1,9 +1,9 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as Authentication from "@gjermundgaraba/effect-actions/Authentication";
-import { Effect, Schema } from "effect";
-import { FetchHttpClient } from "effect/http";
-import type { HttpClient } from "effect/http";
-import { SignJWT } from "jose";
+import type { Duration } from "effect";
+import { Clock, Deferred, Effect, Schema } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
 import { Resource } from "../src/effect-actions.ts";
 import { ProviderUnavailable } from "../src/errors.ts";
@@ -102,3 +102,117 @@ export const signList = async (
     .setIssuedAt(iat)
     .setExpirationTime(iat + KeyList.lifetime)
     .sign(privateKey);
+
+export const grantOf = (
+  scopes: string[],
+  expiresAt: number | null = null
+): KeyList.Grant => ({ keyId: "key", ownerId: "owner", scopes, expiresAt });
+
+export const issuer = "https://issuer.example/api/auth";
+
+export const audience = "https://notes.example/";
+
+/** An Ed25519 signing key and its public JWK, under the key id `fixture`. */
+export const keyPair = Effect.gen(function* () {
+  const pair = yield* Effect.promise(
+    async () => await generateKeyPair("EdDSA")
+  );
+
+  const jwk = {
+    ...(yield* Effect.promise(async () => await exportJWK(pair.publicKey))),
+    kid: "fixture",
+    alg: "EdDSA",
+  };
+
+  return { pair, jwk };
+});
+
+interface Upstream {
+  unavailable: boolean;
+  hold: Deferred.Deferred<undefined> | undefined;
+  latency: { jwks?: Duration.Input; lists?: Duration.Input };
+}
+
+/**
+ * An issuer served from memory on the test clock: it signs a key list of `granted`, as it
+ * stands, at every read, and counts its reads before answering. `upstream` steers what it
+ * does next: answer 503 while `unavailable`, wait for `hold`, or answer after `latency`.
+ */
+export const listIssuer = (
+  grants: Iterable<readonly [string, KeyList.Grant]>
+) =>
+  Effect.gen(function* () {
+    const { pair, jwk } = yield* keyPair;
+    const granted = new Map(grants);
+    const reads = { jwks: 0, lists: 0 };
+
+    const upstream: Upstream = {
+      unavailable: false,
+      hold: undefined,
+      latency: {},
+    };
+
+    const client = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        const jwks = request.url.endsWith("/jwks");
+        reads[jwks ? "jwks" : "lists"] += 1;
+
+        const { unavailable, hold } = upstream;
+
+        if (hold !== undefined) {
+          yield* Deferred.await(hold);
+        }
+
+        const latency = upstream.latency[jwks ? "jwks" : "lists"];
+
+        if (latency !== undefined) {
+          yield* Effect.sleep(latency);
+        }
+
+        if (unavailable) {
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response("{}", { status: 503 })
+          );
+        }
+
+        if (jwks) {
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json({ keys: [jwk] })
+          );
+        }
+
+        const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+
+        const list = yield* Effect.promise(
+          async () =>
+            await signList(
+              pair.privateKey,
+              issuer,
+              audience,
+              new Map(granted),
+              seconds
+            )
+        );
+
+        return HttpClientResponse.fromWeb(request, Response.json({ list }));
+      })
+    );
+
+    const token = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Effect.promise(
+        async () =>
+          await new SignJWT({ client_id: "web", scope: "read" })
+            .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "fixture" })
+            .setIssuer(issuer)
+            .setAudience(audience)
+            .setSubject("owner")
+            .setIssuedAt(Math.floor(now / 1000))
+            .setExpirationTime(Math.floor(now / 1000) + 3600)
+            .sign(pair.privateKey)
+      )
+    );
+
+    return { granted, reads, upstream, client, token };
+  });

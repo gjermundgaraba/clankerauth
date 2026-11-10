@@ -6,6 +6,7 @@ import {
   ApiKeys,
   CimdTransport,
   Clients,
+  issuerIdentifier,
   issuerServices,
   listen,
   nodeHandler,
@@ -19,6 +20,7 @@ import {
   CurrentOwner,
   ResourceInput,
 } from "@gjermundgaraba/clankerauth-admin-api";
+import { returnToParameter } from "@gjermundgaraba/clankerauth-sdk/session";
 import {
   Context,
   Data,
@@ -106,47 +108,6 @@ const provisioningFailed = (cause: unknown) =>
   });
 
 const decodeResources = Schema.decodeEffect(Schema.Array(ResourceInput));
-
-const ownerSession = Effect.fn("Dev.ownerSession")(function* <E>(
-  issuerUrl: string,
-  forwardOrigin: string | undefined,
-  signedIn: Effect.Effect<string, E>,
-  appOrigin: string
-) {
-  if (forwardOrigin === undefined) {
-    return yield* new ForwardAuthError({
-      message:
-        "A forward-auth session needs a cookieDomain; the issuer serves none",
-    });
-  }
-
-  const client = yield* HttpClient.HttpClient;
-  const session = yield* signedIn;
-  const destination = new URL("/", appOrigin).href;
-
-  const sealed = yield* client.get(
-    `${issuerUrl}/forward-auth/continue?rd=${encodeURIComponent(destination)}`,
-    { headers: { cookie: session } }
-  );
-
-  yield* sealed.text;
-
-  const jar = Cookies.merge(
-    Cookies.setAllUnsafe(
-      Cookies.empty,
-      Object.entries(Cookies.parseHeader(session))
-    ),
-    sealed.cookies
-  );
-
-  return {
-    cookie: Cookies.toCookieHeader(jar),
-    cookies: Object.entries(Cookies.toRecord(jar)).map(([name, value]) => ({
-      name,
-      value,
-    })),
-  };
-});
 
 const platform = Layer.mergeAll(
   NodeFileSystem.layer,
@@ -251,41 +212,32 @@ const makeWorkspace = Effect.fnUntraced(function* (
   const resources = Context.get(issuer, Resources);
   const keys = Context.get(issuer, ApiKeys);
 
+  const userId =
+    (yield* account.find) ??
+    (yield* account.create(owner).pipe(Effect.mapError(provisioningFailed)))
+      .userId;
+
   const asOwner = <A, E>(
-    operation: (
-      userId: string
-    ) => Effect.Effect<A, E, CurrentOwner | Scope.Scope>
+    operation: Effect.Effect<A, E, CurrentOwner | Scope.Scope>
   ) =>
     Effect.uninterruptible(
       Effect.scoped(
-        Effect.gen(function* () {
-          const userId = yield* account.find;
-
-          if (userId === undefined) {
-            return yield* Effect.die(new Error("Owner setup failed"));
-          }
-
-          return yield* operation(userId).pipe(
-            Effect.provideService(
-              CurrentOwner,
-              account.caller(userId, owner.email, true)
-            )
-          );
-        })
+        operation.pipe(
+          Effect.provideService(
+            CurrentOwner,
+            account.caller(userId, owner.email, true)
+          )
+        )
       )
     ).pipe(Effect.mapError(provisioningFailed));
 
-  if ((yield* account.find) === undefined) {
-    yield* account.create(owner).pipe(Effect.mapError(provisioningFailed));
-  }
-
-  yield* asOwner(() =>
+  yield* asOwner(
     Effect.forEach(declared, (resource) => resources.put(resource), {
       discard: true,
     })
   );
 
-  const registered = yield* asOwner(() =>
+  const registered = yield* asOwner(
     Effect.gen(function* () {
       if (
         identity.clientId !== undefined &&
@@ -327,21 +279,56 @@ const makeWorkspace = Effect.fnUntraced(function* (
     });
   }
 
-  const forwardOrigin = options.cookieDomain === undefined ? undefined : url;
-
-  const signedIn = Effect.gen(function* () {
-    const userId = yield* account.find;
-
-    if (userId === undefined) {
-      return yield* Effect.die(new Error("Owner setup failed"));
+  const ownerSession = Effect.fn("Dev.ownerSession")(function* (
+    appOrigin: string
+  ) {
+    if (options.cookieDomain === undefined) {
+      return yield* new ForwardAuthError({
+        message:
+          "A forward-auth session needs a cookieDomain; the issuer serves none",
+      });
     }
 
-    return Redacted.value(yield* account.session(userId));
-  }).pipe(Effect.mapError(({ message }) => new ForwardAuthError({ message })));
+    const session = Redacted.value(
+      yield* account
+        .session(userId)
+        .pipe(
+          Effect.mapError(({ message }) => new ForwardAuthError({ message }))
+        )
+    );
+
+    const continueUrl = new URL("/forward-auth/continue", url);
+    continueUrl.searchParams.set(
+      returnToParameter,
+      new URL("/", appOrigin).href
+    );
+
+    const sealed = yield* (yield* HttpClient.HttpClient).get(continueUrl, {
+      headers: { cookie: session },
+    });
+
+    yield* sealed.text;
+
+    const jar = Cookies.merge(
+      Cookies.setAllUnsafe(
+        Cookies.empty,
+        Object.entries(Cookies.parseHeader(session))
+      ),
+      sealed.cookies
+    );
+
+    return {
+      cookie: Cookies.toCookieHeader(jar),
+      cookies: Object.entries(Cookies.toRecord(jar)).map(([name, value]) => ({
+        name,
+        value,
+      })),
+    };
+  });
 
   return {
     details: {
-      issuer: `${url}/api/auth`,
+      issuer: issuerIdentifier(url),
       clientId: registered.client_id,
       clientSecret,
       owner,
@@ -353,7 +340,7 @@ const makeWorkspace = Effect.fnUntraced(function* (
       readonly name?: string;
       readonly permissions: Record<string, string[]>;
     }) =>
-      asOwner(() =>
+      asOwner(
         Effect.map(
           keys.create({
             name: input.name ?? "development",
@@ -363,18 +350,12 @@ const makeWorkspace = Effect.fnUntraced(function* (
           (created) => created.key
         )
       ),
-    ownerSession: (appOrigin: string) =>
-      ownerSession(url, forwardOrigin, signedIn, appOrigin),
+    ownerSession,
     ownerToken: Effect.fn("Dev.ownerToken")(function* (input: {
       readonly resource: string;
       readonly appOrigin: string;
     }) {
-      const { cookie } = yield* ownerSession(
-        url,
-        forwardOrigin,
-        signedIn,
-        input.appOrigin
-      );
+      const { cookie } = yield* ownerSession(input.appOrigin);
 
       const client = yield* HttpClient.HttpClient;
       const app = new URL(input.appOrigin);

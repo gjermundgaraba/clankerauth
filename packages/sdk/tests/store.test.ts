@@ -1,19 +1,13 @@
 import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import type { Duration } from "effect";
 import { Clock, Deferred, Effect, Fiber, Logger, Result } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
 import { ProviderUnavailable, Unauthorized } from "../src/errors.ts";
 import { Verifier } from "../src/index.ts";
-import { signList } from "./support.ts";
-
-const issuer = "https://issuer.example/api/auth";
-
-const resource = "https://notes.example/";
+import { audience, grantOf, issuer, listIssuer } from "./support.ts";
 
 const key = `clankerauth_${"k".repeat(64)}`;
 
@@ -34,115 +28,16 @@ const capture = (logs: Array<readonly unknown[]>) =>
     }),
   ]);
 
-interface Upstream {
-  unavailable: boolean;
-  hold: Deferred.Deferred<undefined> | undefined;
-  latency: { jwks?: Duration.Input; lists?: Duration.Input };
-}
-
-const fixture = Effect.gen(function* () {
-  const pair = yield* Effect.promise(
-    async () => await generateKeyPair("EdDSA")
-  );
-
-  const jwk = {
-    ...(yield* Effect.promise(async () => await exportJWK(pair.publicKey))),
-    kid: "fixture",
-    alg: "EdDSA",
-  };
-
-  const reads = { jwks: 0, lists: 0 };
-
-  const upstream: Upstream = {
-    unavailable: false,
-    hold: undefined,
-    latency: {},
-  };
-
-  const client = HttpClient.make((request) =>
-    Effect.gen(function* () {
-      const jwks = request.url.endsWith("/jwks");
-
-      if (jwks) {
-        reads.jwks += 1;
-      } else {
-        reads.lists += 1;
-      }
-
-      const { unavailable, hold } = upstream;
-
-      if (hold !== undefined) {
-        yield* Deferred.await(hold);
-      }
-
-      const latency = upstream.latency[jwks ? "jwks" : "lists"];
-
-      if (latency !== undefined) {
-        yield* Effect.sleep(latency);
-      }
-
-      if (unavailable) {
-        return HttpClientResponse.fromWeb(
-          request,
-          new Response("{}", { status: 503 })
-        );
-      }
-
-      if (jwks) {
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json({ keys: [jwk] })
-        );
-      }
-
-      const seconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
-
-      const list = yield* Effect.promise(
-        async () =>
-          await signList(
-            pair.privateKey,
-            issuer,
-            resource,
-            [
-              [
-                key,
-                {
-                  keyId: "key",
-                  ownerId: "owner",
-                  scopes: ["read"],
-                  expiresAt: null,
-                },
-              ],
-            ],
-            seconds
-          )
-      );
-
-      return HttpClientResponse.fromWeb(request, Response.json({ list }));
-    })
-  );
-
-  const token = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-    Effect.promise(
-      async () =>
-        await new SignJWT({ client_id: "web", scope: "read" })
-          .setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid: "fixture" })
-          .setIssuer(issuer)
-          .setAudience(resource)
-          .setSubject("owner")
-          .setIssuedAt(Math.floor(now / 1000))
-          .setExpirationTime(Math.floor(now / 1000) + 3600)
-          .sign(pair.privateKey)
-    )
-  );
-
-  const verifier = (store: Verifier.Store) =>
-    Verifier.make({ issuer, resource, store }).pipe(
-      Effect.provideService(HttpClient.HttpClient, client)
-    );
-
-  return { reads, upstream, token, verifier };
-});
+const fixture = Effect.map(
+  listIssuer([[key, grantOf(["read"])]]),
+  ({ client, ...issued }) => ({
+    ...issued,
+    verifier: (store: Verifier.Store) =>
+      Verifier.make({ issuer, resource: audience, store }).pipe(
+        Effect.provideService(HttpClient.HttpClient, client)
+      ),
+  })
+);
 
 it.effect(
   "verifiers over one store share what was read: a hit reads nothing, a miss or an expiry reads and writes back",
@@ -259,7 +154,7 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
 
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
       assert.equal(
-        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        store.keyLists.get(JSON.stringify([issuer, audience]))?.failure,
         undefined
       );
       assert.ok(Result.isSuccess(yield* verify(jwt)));
@@ -365,7 +260,7 @@ it.effect(
         keyId: "key",
       });
       assert.equal(
-        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        store.keyLists.get(JSON.stringify([issuer, audience]))?.failure,
         "jwks.timeout"
       );
     })

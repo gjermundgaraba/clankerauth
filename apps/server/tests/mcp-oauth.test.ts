@@ -9,27 +9,27 @@ import { expect, vi } from "vite-plus/test";
 
 import { nodeHandler } from "../src/http/application.ts";
 import { Issuer } from "../src/issuer/issuer.ts";
-import { OwnerAccount } from "../src/owner/owner.ts";
 import { listen } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { Resources } from "../src/resources/resources.ts";
 import {
   administrationResource,
-  decodeJson,
   mcpOAuthGrant,
   oauthToken,
   Tokens,
 } from "./mcp-oauth-helper.ts";
-import type { TestHandler } from "./mcp-oauth-helper.ts";
 import { administrationTools, webMcpRequest, withMcpClient } from "./mcp.ts";
 import {
   advanceDate,
+  decodeJson,
   issuerGeneration,
-  signIn,
+  signedInOwner,
   testSettings,
   testWebApplication,
+  text,
   WebApplication,
 } from "./test-issuer.ts";
+import type { TestHandler } from "./test-issuer.ts";
 
 const baseURL = "http://localhost:3000";
 
@@ -52,19 +52,9 @@ class Dashboard extends Context.Service<
 const signedIn = Layer.effect(
   Dashboard,
   Effect.gen(function* () {
-    yield* (yield* OwnerAccount).create({
-      email: "owner@example.internal",
-      password: "test-only password123",
-    });
-
     const handle = yield* WebApplication;
 
-    const cookie = yield* signIn(handle, baseURL, {
-      email: "owner@example.internal",
-      password: "test-only password123",
-    });
-
-    return { handle, cookie };
+    return { handle, cookie: yield* signedInOwner(handle, baseURL) };
   })
 );
 
@@ -75,9 +65,6 @@ const send = (request: Request) =>
   Effect.flatMap(Dashboard, ({ handle }) =>
     Effect.promise(async () => await handle(request))
   );
-
-const text = (response: Response) =>
-  Effect.promise(async () => await response.clone().text());
 
 const admin = (action: string, body: TestRequestBody) =>
   Effect.flatMap(Dashboard, ({ cookie }) =>

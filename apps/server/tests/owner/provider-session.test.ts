@@ -11,21 +11,15 @@ class CleanupFailed extends Data.TaggedError("CleanupFailed") {}
 
 const baseURL = "https://clankerauth.example.internal";
 
-const createOwner = Effect.gen(function* () {
-  const owners = yield* OwnerAccount;
-
-  yield* owners.create({
-    email: "owner@example.internal",
-    password: "test password123",
-  });
-  const owner = yield* owners.find;
-
-  if (owner === undefined) {
-    return yield* Effect.die("Missing test owner");
-  }
-
-  return owner;
-});
+const createOwner = Effect.map(
+  OwnerAccount.use((owners) =>
+    owners.create({
+      email: "owner@example.internal",
+      password: "test password123",
+    })
+  ),
+  ({ userId }) => userId
+);
 
 it.live.each([false, true])(
   "stopping the issuer waits for provider session cleanup (failure: %s)",

@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout } from "node:timers/promises";
 
 import { ClientListResult } from "@gjermundgaraba/clankerauth-admin-api";
 import { Schema } from "effect";
+
+import { issuerProcess } from "./issuer-process.mjs";
 
 const packageDirectory = process.argv.at(2);
 
@@ -22,77 +20,12 @@ const root = path.resolve(packageDirectory);
 
 const directory = mkdtempSync(path.join(tmpdir(), "clankerauth-package-"));
 
-const reservation = createServer();
-
-reservation.listen(0, "127.0.0.1");
-
-await once(reservation, "listening");
-
-const { port } = reservation.address();
-
-reservation.close();
-
-await once(reservation, "close");
-
-const baseURL = `http://127.0.0.1:${port}`;
-
-const env = {
-  ...process.env,
-  CLANKERAUTH_BASE_URL: baseURL,
-  CLANKERAUTH_BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
-  CLANKERAUTH_DATABASE: path.join(directory, "clankerauth.sqlite"),
-  CLANKERAUTH_HOST: "127.0.0.1",
-  CLANKERAUTH_PORT: String(port),
-};
+const { baseURL, start, stop } = await issuerProcess({
+  main: path.join(root, "dist/main.mjs"),
+  directory,
+});
 
 const password = randomBytes(24).toString("hex");
-
-/** @type {import("node:child_process").ChildProcess | undefined} */
-let child;
-
-const isHealthy = async () => {
-  try {
-    const health = await fetch(`${baseURL}/healthz`, {
-      signal: AbortSignal.timeout(500),
-    });
-
-    return health.ok;
-  } catch {
-    return false;
-  }
-};
-
-const start = async () => {
-  child = spawn(process.execPath, [path.join(root, "dist/main.mjs")], {
-    cwd: directory,
-    env,
-    stdio: "ignore",
-  });
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (child.exitCode !== null) {
-      throw new Error("Production server exited during startup");
-    }
-
-    if (await isHealthy()) {
-      return;
-    }
-
-    await setTimeout(50);
-  }
-
-  throw new Error("Production server did not become ready");
-};
-
-const stop = async () => {
-  if (child && child.exitCode === null && child.signalCode === null) {
-    const exited = once(child, "exit");
-    child.kill("SIGTERM");
-    await exited;
-  }
-
-  child = undefined;
-};
 
 const decodeMetadata = Schema.decodeUnknownSync(
   Schema.Struct({

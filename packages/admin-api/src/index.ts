@@ -214,8 +214,6 @@ export const ClientBlockInput = Schema.Struct({
 });
 
 export const Client = Schema.Struct({
-  onboarding: Schema.optional(Schema.Literals(["managed", "dcr", "cimd"])),
-  blocked: Schema.optional(Schema.Boolean),
   client_id: Schema.String,
   client_name: Schema.optional(Schema.String),
   redirect_uris: Schema.Array(Schema.String),
@@ -229,6 +227,14 @@ export const ClientCredentials = Client.pipe(
   Schema.fieldsAssign({
     client_secret: Schema.optional(Schema.String),
     client_secret_expires_at: Schema.optional(Schema.Finite),
+  })
+);
+
+/** A client as the listing shows it: how it was registered, and whether it is blocked. */
+export const ClientSummary = Client.pipe(
+  Schema.fieldsAssign({
+    onboarding: Schema.Literals(["managed", "dcr", "cimd"]),
+    blocked: Schema.Boolean,
   })
 );
 
@@ -378,7 +384,7 @@ export const IssuerActions = [
 ] as const;
 
 export const ClientListResult = Schema.Struct({
-  clients: Schema.Array(Client),
+  clients: Schema.Array(ClientSummary),
   resources: Schema.Array(ResourceSummary),
   clientAccess: Schema.Array(ClientAccess),
   connections: Schema.Array(Connection),

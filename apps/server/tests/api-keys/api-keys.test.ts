@@ -32,15 +32,16 @@ import { listen } from "../../src/platform/node-http.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import {
   administrationResource,
-  decodeJson,
   Jwks,
   mcpOAuthGrant,
 } from "../mcp-oauth-helper.ts";
 import { administrationTools, webMcpRequest, withMcpClient } from "../mcp.ts";
 import {
+  decodeJson,
   requireStatus,
-  signIn,
+  signedInOwner,
   testWebApplication,
+  text,
   WebApplication,
 } from "../test-issuer.ts";
 
@@ -95,9 +96,6 @@ const call = (
   headers: Record<string, string> = {}
 ) => Effect.flatMap(OwnerCookie, (cookie) => send(cookie, path, body, headers));
 
-const text = (response: Response) =>
-  Effect.promise(async () => await response.text());
-
 const keyList = (target = resource) =>
   call("/api/keyList", { resource: target }, { cookie: "" });
 
@@ -128,18 +126,10 @@ const verify = (key: string, target = resource) =>
     return Result.isSuccess(result) ? result.success : result.failure._tag;
   });
 
-const signedInOwner = Layer.effect(
+const ownerWithResource = Layer.effect(
   OwnerCookie,
   Effect.gen(function* () {
-    yield* (yield* OwnerAccount).create({
-      email: "owner@example.internal",
-      password: "test-only password123",
-    });
-
-    const cookie = yield* signIn(yield* WebApplication, origin, {
-      email: "owner@example.internal",
-      password: "test-only password123",
-    });
+    const cookie = yield* signedInOwner(yield* WebApplication, origin);
 
     const put = yield* send(cookie, "/api/putResource", {
       identifier: resource,
@@ -168,7 +158,7 @@ const ownerBearer = Layer.effect(
 );
 
 const apiKeysIssuer = () =>
-  signedInOwner.pipe(
+  ownerWithResource.pipe(
     Layer.provideMerge(testWebApplication({ baseURL: origin }))
   );
 

@@ -16,7 +16,6 @@ import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { expect, vi } from "vite-plus/test";
 
 import {
-  createNodeServer,
   listen,
   peerHeader,
   requestPolicy,
@@ -108,9 +107,6 @@ it.live(
           );
         })
       );
-
-      expect(createNodeServer().requestTimeout).toBe(15_000);
-      expect(createNodeServer().headersTimeout).toBe(10_000);
 
       const response = yield* Effect.promise(
         async () =>

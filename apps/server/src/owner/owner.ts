@@ -4,14 +4,14 @@ import type {
   Owner,
   ProviderRefused,
 } from "@gjermundgaraba/clankerauth-admin-api";
-import { Context, Effect, Layer, Redacted, Schema, Semaphore } from "effect";
+import type { Redacted } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
 
-import { signedSessionCookie } from "../issuer/cookies.ts";
 import { provider, refusal } from "../issuer/errors.ts";
 import { Issuer } from "../issuer/issuer.ts";
 import { Settings } from "../issuer/settings.ts";
 import { Database, persisted } from "../platform/sqlite.ts";
-import { providerSessionFor } from "./provider-session.ts";
+import { ownerSessionFor, providerSessionFor } from "./provider-session.ts";
 
 const decodeOwnerRow = persisted(Schema.Struct({ id: Schema.String }));
 
@@ -23,7 +23,7 @@ export class OwnerAccount extends Context.Service<
       readonly email: string;
       readonly password: string;
     }) => Effect.Effect<
-      string[],
+      { readonly userId: string; readonly cookies: string[] },
       OwnerExists | ProviderRefused | InternalServerError
     >;
     readonly caller: (
@@ -31,10 +31,7 @@ export class OwnerAccount extends Context.Service<
       email: string,
       writable: boolean
     ) => Owner;
-    /**
-     * A full-length session for the owner, as its `Cookie` header, minted without the
-     * rate-limited sign-in; for the embedding development issuer, never served over HTTP.
-     */
+    /** For the embedding development issuer, never served over HTTP. */
     readonly session: (
       userId: string
     ) => Effect.Effect<Redacted.Redacted, InternalServerError>;
@@ -70,7 +67,7 @@ export class OwnerAccount extends Context.Service<
               return yield* OwnerExists.of();
             }
 
-            const { headers } = yield* provider(
+            const { headers, response } = yield* provider(
               async () =>
                 await auth.api.signUpEmail({
                   body: {
@@ -83,7 +80,10 @@ export class OwnerAccount extends Context.Service<
               { refused: refusal, conflict: OwnerExists.of }
             );
 
-            return headers.getSetCookie();
+            return {
+              userId: response.user.id,
+              cookies: headers.getSetCookie(),
+            };
           },
           (effect) => setup.withPermit(effect)
         ),
@@ -93,17 +93,7 @@ export class OwnerAccount extends Context.Service<
           writable,
           providerHeaders: providerSession(userId),
         }),
-        session: Effect.fn("OwnerAccount.session")(function* (userId: string) {
-          const { token } = yield* provider(
-            async () => await context.internalAdapter.createSession(userId)
-          );
-
-          return Redacted.make(
-            yield* provider(
-              async () => await signedSessionCookie(context, token)
-            )
-          );
-        }, Effect.uninterruptible),
+        session: ownerSessionFor(context),
       };
     })
   );

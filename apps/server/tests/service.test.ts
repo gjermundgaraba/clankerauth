@@ -17,18 +17,15 @@ import { OwnerAccount } from "../src/owner/owner.ts";
 import { peerHeader } from "../src/platform/node-http.ts";
 import { Database } from "../src/platform/sqlite.ts";
 import { ResourceCatalog } from "../src/resources/catalog.ts";
-import {
-  administrationResource,
-  decodeJson,
-  Jwks,
-  Tokens,
-} from "./mcp-oauth-helper.ts";
+import { administrationResource, Jwks, Tokens } from "./mcp-oauth-helper.ts";
 import {
   advanceDate,
   cookieJar,
+  decodeJson,
   issuerGeneration,
   requireStatus,
   testSettings,
+  text,
   WebApplication,
 } from "./test-issuer.ts";
 
@@ -95,9 +92,6 @@ const sql = (
   Effect.flatMap(Database, (database) => database.sql(strings, ...parameters));
 
 const json = decodeJson(Schema.Json);
-
-const text = (response: Response) =>
-  Effect.promise(async () => await response.clone().text());
 
 const request = (
   path: string,
@@ -512,6 +506,10 @@ describe("first-run setup", () => {
 
       const malformed: ReadonlyArray<readonly [string, string]> = [
         ["application/json", "{"],
+        [
+          "application/json",
+          JSON.stringify({ email, password: { sensitive: password } }),
+        ],
         ["text/plain", JSON.stringify({ email, password })],
         [
           "application/x-www-form-urlencoded",

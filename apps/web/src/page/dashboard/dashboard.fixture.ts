@@ -1,6 +1,7 @@
 import { Result, Schema } from "effect";
 import { modifyFields } from "foldkit/struct";
 
+import { Change } from "./change.ts";
 import { Listing, listingQuery } from "./listing.ts";
 import { Message } from "./message.ts";
 import type { Model } from "./model.ts";
@@ -62,6 +63,11 @@ export const listing = Schema.decodeSync(Listing)({
   ],
 });
 
+export const deleteKey = Change.DeleteKey({
+  keyId: "fixture-key",
+  name: "Automation",
+});
+
 export const listed = settled(init().model, readOf(FIRST_READ, listing));
 
 export const staleListed = settled(
@@ -81,6 +87,8 @@ export const catalog = Schema.decodeSync(Listing)({
         client_name: "Managed client",
         redirect_uris: ["https://fixture.invalid/callback"],
         token_endpoint_auth_method: "client_secret_basic",
+        onboarding: "managed",
+        blocked: false,
       },
       {
         client_id: "https://client.fixture.invalid/metadata.json",
@@ -88,6 +96,7 @@ export const catalog = Schema.decodeSync(Listing)({
         redirect_uris: ["https://fixture.invalid/callback"],
         token_endpoint_auth_method: "none",
         onboarding: "cimd",
+        blocked: false,
       },
     ],
     resources: [

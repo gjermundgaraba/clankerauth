@@ -5,6 +5,7 @@ export { Clients } from "./clients/clients.ts";
 export { nodeHandler } from "./http/application.ts";
 
 export {
+  issuerIdentifier,
   Settings,
   validateSettings,
   type IssuerSettings,

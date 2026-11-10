@@ -16,13 +16,16 @@ import { peerHeader } from "../../src/platform/node-http.ts";
 import { Database } from "../../src/platform/sqlite.ts";
 import { ResourceCatalog } from "../../src/resources/catalog.ts";
 import { Resources } from "../../src/resources/resources.ts";
-import { decodeJson, Tokens } from "../mcp-oauth-helper.ts";
+import { Tokens } from "../mcp-oauth-helper.ts";
 import {
+  decodeJson,
   issuerGeneration,
+  owner,
   requireStatus,
-  signIn,
+  signedInOwner,
   testIssuer,
   testSettings,
+  text,
 } from "../test-issuer.ts";
 
 const baseURL = "http://localhost:4183";
@@ -34,11 +37,6 @@ const clientId = "https://client.example/oauth/metadata.json";
 const callback = "http://127.0.0.1:4184/callback";
 
 const verifier = "a".repeat(43);
-
-const owner = {
-  email: "owner@example.com",
-  password: "test-password-long-enough",
-};
 
 interface AuthRequestBody {
   readonly [key: string]: string | boolean | null | readonly string[];
@@ -145,9 +143,6 @@ const RegisteredClient = Schema.Struct({
 });
 
 const ConsentRedirect = Schema.Struct({ url: Schema.String });
-
-const text = (response: Response) =>
-  Effect.promise(async () => await response.clone().text());
 
 const authorization = (
   id: string,
@@ -277,13 +272,11 @@ const managed = Effect.gen(function* () {
 const ownerWithResource = Layer.effect(
   OwnerCookie,
   Effect.gen(function* () {
-    yield* (yield* OwnerAccount).create(owner);
     const { auth } = yield* Issuer;
 
-    const cookie = yield* signIn(
+    const cookie = yield* signedInOwner(
       async (incoming) => await auth.handler(incoming),
-      baseURL,
-      owner
+      baseURL
     );
 
     yield* createResource(resource, "Test resource", ["resource:read"]).pipe(

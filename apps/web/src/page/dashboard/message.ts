@@ -21,6 +21,7 @@ export const Message = defineMessageUnion({
   SucceededSaveChange: {
     change: Change,
     maybeCredential: Schema.Option(Credential),
+    announcement: Schema.String,
   },
   FailedSaveChange: { reason: Schema.String },
   ClickedDismissCredentials: {},

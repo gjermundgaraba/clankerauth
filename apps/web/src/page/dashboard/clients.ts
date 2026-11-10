@@ -1,4 +1,7 @@
-import type { Client, Connection } from "@gjermundgaraba/clankerauth-admin-api";
+import type {
+  ClientSummary,
+  Connection,
+} from "@gjermundgaraba/clankerauth-admin-api";
 import {
   Button,
   Chip,
@@ -19,7 +22,7 @@ import { Message } from "./message.ts";
 import { itemButtonView, momentOf } from "./parts.ts";
 import type { SectionContext } from "./parts.ts";
 
-type ClientView = typeof Client.Type;
+type ClientView = typeof ClientSummary.Type;
 
 type ConnectionView = typeof Connection.Type;
 
@@ -33,7 +36,7 @@ const ONBOARDING_LABELS = {
 } as const;
 
 const isManaged = ({ onboarding }: ClientView): boolean =>
-  onboarding === undefined || onboarding === "managed";
+  onboarding === "managed";
 
 const nameOf = ({ client_id, client_name }: ClientView): string =>
   client_name ?? client_id;
@@ -170,11 +173,7 @@ const clientButtons = (
   allowed: readonly string[],
   h: HtmlBuilder<Message>
 ): readonly Html[] => {
-  const {
-    client_id: clientId,
-    blocked = false,
-    token_endpoint_auth_method,
-  } = client;
+  const { client_id: clientId, blocked, token_endpoint_auth_method } = client;
 
   const isConfidential = token_endpoint_auth_method !== "none";
 
@@ -250,9 +249,9 @@ const clientPanel = (
               },
               {
                 label: "registration",
-                value: [ONBOARDING_LABELS[client.onboarding ?? "managed"]],
+                value: [ONBOARDING_LABELS[client.onboarding]],
               },
-              ...(client.blocked === true
+              ...(client.blocked
                 ? [
                     {
                       label: "status",

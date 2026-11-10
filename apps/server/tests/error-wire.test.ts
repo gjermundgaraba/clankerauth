@@ -12,8 +12,11 @@ import { expect } from "vite-plus/test";
 
 import { provider, refusal, respond } from "../src/issuer/errors.ts";
 import { peerHeader } from "../src/platform/node-http.ts";
-import { decodeJson } from "./mcp-oauth-helper.ts";
-import { testWebApplication, WebApplication } from "./test-issuer.ts";
+import {
+  decodeJson,
+  testWebApplication,
+  WebApplication,
+} from "./test-issuer.ts";
 
 it.effect(
   "an internal failure keeps its cause for diagnostics and never puts it on the wire",

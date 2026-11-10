@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { Effect, Schema } from "effect";
+import { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { peerHeader } from "../src/platform/node-http.ts";
+import type { TestHandler } from "./test-issuer.ts";
 
 export const administrationResource = (baseURL: string) => ({
   identifier: `${baseURL}/`,
@@ -11,16 +12,6 @@ export const administrationResource = (baseURL: string) => ({
   scopes: ["clankerauth:read", "clankerauth:write"],
   builtIn: true,
 });
-
-export type TestHandler = (request: Request) => Promise<Response>;
-
-export const decodeJson =
-  <S extends Schema.Decoder<unknown>>(schema: S) =>
-  (response: Response) =>
-    Effect.flatMap(
-      Effect.promise(async () => await response.clone().text()),
-      Schema.decodeUnknownEffect(Schema.fromJsonString(schema))
-    );
 
 export const Tokens = Schema.Struct({
   access_token: Schema.String,

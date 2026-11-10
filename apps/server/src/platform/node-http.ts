@@ -12,9 +12,6 @@ import {
 
 export const peerHeader = "x-clankerauth-peer";
 
-export const createNodeServer = (listener?: RequestListener) =>
-  createServer({ requestTimeout: 15_000, headersTimeout: 10_000 }, listener);
-
 export interface Listener {
   readonly port: number;
   readonly serve: (
@@ -32,9 +29,12 @@ export const listen = Effect.fn("NodeHttp.listen")(function* (
 ): Effect.fn.Return<Listener, Error, Scope.Scope> {
   let handler = unavailable;
 
-  const server = createNodeServer((incoming, outgoing) => {
-    handler(incoming, outgoing);
-  });
+  const server = createServer(
+    { requestTimeout: 15_000, headersTimeout: 10_000 },
+    (incoming, outgoing) => {
+      handler(incoming, outgoing);
+    }
+  );
 
   const stop: Effect.Effect<void> = Effect.callback((resume) => {
     server.close(() => {

@@ -19,6 +19,7 @@ import { EDITOR_FORM_ID, NOT_REFRESHED, REFUSAL_ID } from "./constant.ts";
 import {
   SECOND_READ,
   THIRD_READ,
+  deleteKey,
   failedReadOf,
   listed,
   listing,
@@ -54,11 +55,6 @@ const disable = Change.SetKeyEnabled({
   isEnabled: false,
 });
 
-const deleteKey = Change.DeleteKey({
-  keyId: "fixture-key",
-  name: "Automation",
-});
-
 const editing = (formMessage: Form.Message) =>
   Message.GotFormMessage({ message: formMessage });
 
@@ -80,7 +76,11 @@ const created = Change.PutResource({
 });
 
 const submittingCreated = [
-  message(Message.ClickedOpenForm({ form: Form.addResource() })),
+  message(
+    Message.ClickedOpenForm({
+      form: Form.addResource(),
+    })
+  ),
   Command.resolve(UiDialog.ShowDialog, UiDialog.Message.SucceededShowDialog()),
   message(
     editing(Form.Message.UpdatedResourceName({ value: " Fixture API " }))
@@ -130,6 +130,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: disable,
           maybeCredential: Option.none(),
+          announcement: "Key disabled.",
         })
       ),
       model((next) => {
@@ -193,6 +194,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: deleteKey,
           maybeCredential: Option.none(),
+          announcement: "Key deleted.",
         })
       ),
       Command.resolveAll(
@@ -267,6 +269,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: created,
           maybeCredential: Option.none(),
+          announcement: "Resource created.",
         })
       ),
       Command.resolveAll(
@@ -352,37 +355,6 @@ describe("dashboard update", () => {
     );
   });
 
-  it("adding a resource the listing already holds is refused in the editor", () => {
-    story(
-      update,
-      given(listed),
-      message(Message.ClickedOpenForm({ form: Form.addResource() })),
-      Command.resolve(
-        UiDialog.ShowDialog,
-        UiDialog.Message.SucceededShowDialog()
-      ),
-      message(editing(Form.Message.UpdatedResourceName({ value: "Again" }))),
-      message(
-        editing(
-          Form.Message.UpdatedResourceIdentifier({
-            value: " https://api.fixture.invalid ",
-          })
-        )
-      ),
-      message(Message.SubmittedForm()),
-      Command.expectNone(),
-      model((next) => {
-        expect(
-          Option.map(refusalAt(next, "Editor"), ({ reason }) => reason)
-        ).toStrictEqual(
-          Option.some(
-            "A Resource with this identifier exists already: edit it instead."
-          )
-        );
-      })
-    );
-  });
-
   it("a form that does not read as a change is refused in the editor", () => {
     story(
       update,
@@ -428,6 +400,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: rotate,
           maybeCredential: Option.some(secret),
+          announcement: "Secret rotated. Store it now.",
         })
       ),
       Command.expectExact(
@@ -475,6 +448,7 @@ describe("dashboard update", () => {
         Message.SucceededSaveChange({
           change: deleteKey,
           maybeCredential: Option.none(),
+          announcement: "Key deleted.",
         })
       ),
       model((next) => {
@@ -519,7 +493,11 @@ describe("dashboard update", () => {
     story(
       update,
       given(rereading(listed)),
-      message(Message.ClickedOpenForm({ form: Form.addResource() })),
+      message(
+        Message.ClickedOpenForm({
+          form: Form.addResource(),
+        })
+      ),
       Command.expectNone(),
       model((next) => {
         expect(next.maybeForm).toStrictEqual(Option.none());

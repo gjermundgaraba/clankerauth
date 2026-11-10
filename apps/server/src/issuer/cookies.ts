@@ -10,6 +10,10 @@ export const seal = (key: string, data: string) =>
 export const unseal = (key: string, data: string) =>
   Effect.tryPromise(async () => await symmetricDecrypt({ key, data }));
 
+/**
+ * The `Cookie` header that presents a session, with the provider's don't-remember cookie,
+ * so `getSession` never extends a session the issuer minted itself.
+ */
 export const signedSessionCookie = async (
   context: ProviderContext,
   token: string
