@@ -20,8 +20,11 @@ import { Verifier } from "../src/index.ts";
 import * as KeyList from "../src/key-list.ts";
 import { CurrentPrincipal } from "../src/session.ts";
 import {
+  audience,
   grantOf,
+  issuer,
   json,
+  keyPair,
   listIssuer,
   Login,
   Notes,
@@ -104,9 +107,6 @@ it.effect(
         kid: "second",
         alg: "EdDSA",
       };
-
-      const issuer = "https://issuer.example/api/auth";
-      const audience = "https://notes.example/";
 
       const sign = (kid: string, key: CryptoKey) =>
         Effect.promise(
@@ -211,11 +211,10 @@ it.effect(
       const key = `clankerauth_${"k".repeat(64)}`;
       const reader = `clankerauth_${"r".repeat(64)}`;
 
-      const { issuer, audience, granted, reads, upstream, client } =
-        yield* listIssuer([
-          [key, grantOf(["read", "write"])],
-          [reader, grantOf(["read"])],
-        ]);
+      const { granted, reads, upstream, client } = yield* listIssuer([
+        [key, grantOf(["read", "write"])],
+        [reader, grantOf(["read"])],
+      ]);
 
       const resource = yield* resourceOf({
         issuer,
@@ -308,8 +307,9 @@ it.effect(
       const unknown = `clankerauth_${"u".repeat(64)}`;
       const grant = grantOf(["read"]);
 
-      const { issuer, audience, granted, reads, upstream, client } =
-        yield* listIssuer([[known, grant]]);
+      const { granted, reads, upstream, client } = yield* listIssuer([
+        [known, grant],
+      ]);
 
       const resource = yield* resourceOf({
         issuer,
@@ -353,7 +353,7 @@ it.effect(
 it.effect("a list read shortly before it expires decides only until then", () =>
   Effect.gen(function* () {
     const key = `clankerauth_${"k".repeat(64)}`;
-    const { pair, jwk, issuer, audience } = yield* listIssuer([]);
+    const { pair, jwk } = yield* keyPair;
 
     const list = yield* Effect.promise(
       async () =>
@@ -438,9 +438,6 @@ it.effect(
         kid: "issuer",
         alg: "EdDSA",
       };
-
-      const issuer = "https://issuer.example/api/auth";
-      const audience = "https://notes.example/";
 
       const token = yield* Effect.promise(
         async () =>

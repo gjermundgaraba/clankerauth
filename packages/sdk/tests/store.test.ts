@@ -7,11 +7,7 @@ import { TestClock } from "effect/testing";
 
 import { ProviderUnavailable, Unauthorized } from "../src/errors.ts";
 import { Verifier } from "../src/index.ts";
-import { grantOf, listIssuer } from "./support.ts";
-
-const issuer = "https://issuer.example/api/auth";
-
-const resource = "https://notes.example/";
+import { audience, grantOf, issuer, listIssuer } from "./support.ts";
 
 const key = `clankerauth_${"k".repeat(64)}`;
 
@@ -37,7 +33,7 @@ const fixture = Effect.map(
   ({ client, ...issued }) => ({
     ...issued,
     verifier: (store: Verifier.Store) =>
-      Verifier.make({ issuer, resource, store }).pipe(
+      Verifier.make({ issuer, resource: audience, store }).pipe(
         Effect.provideService(HttpClient.HttpClient, client)
       ),
   })
@@ -158,7 +154,7 @@ it.effect.each(["slow read fails", "fast read fails"] as const)(
 
       assert.deepEqual(reads, { jwks: 2, lists: 2 });
       assert.equal(
-        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        store.keyLists.get(JSON.stringify([issuer, audience]))?.failure,
         undefined
       );
       assert.ok(Result.isSuccess(yield* verify(jwt)));
@@ -264,7 +260,7 @@ it.effect(
         keyId: "key",
       });
       assert.equal(
-        store.keyLists.get(JSON.stringify([issuer, resource]))?.failure,
+        store.keyLists.get(JSON.stringify([issuer, audience]))?.failure,
         "jwks.timeout"
       );
     })

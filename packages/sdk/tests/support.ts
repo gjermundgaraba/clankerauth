@@ -108,8 +108,26 @@ export const grantOf = (
   expiresAt: number | null = null
 ): KeyList.Grant => ({ keyId: "key", ownerId: "owner", scopes, expiresAt });
 
-/** What the in-memory issuer does next: fail with 503, wait for `hold`, or answer late. */
-export interface Upstream {
+export const issuer = "https://issuer.example/api/auth";
+
+export const audience = "https://notes.example/";
+
+/** An Ed25519 signing key and its public JWK, under the key id `fixture`. */
+export const keyPair = Effect.gen(function* () {
+  const pair = yield* Effect.promise(
+    async () => await generateKeyPair("EdDSA")
+  );
+
+  const jwk = {
+    ...(yield* Effect.promise(async () => await exportJWK(pair.publicKey))),
+    kid: "fixture",
+    alg: "EdDSA",
+  };
+
+  return { pair, jwk };
+});
+
+interface Upstream {
   unavailable: boolean;
   hold: Deferred.Deferred<undefined> | undefined;
   latency: { jwks?: Duration.Input; lists?: Duration.Input };
@@ -117,25 +135,14 @@ export interface Upstream {
 
 /**
  * An issuer served from memory on the test clock: it signs a key list of `granted`, as it
- * stands, at every read, counts its reads before answering, and does what `upstream` says.
+ * stands, at every read, and counts its reads before answering. `upstream` steers what it
+ * does next: answer 503 while `unavailable`, wait for `hold`, or answer after `latency`.
  */
 export const listIssuer = (
   grants: Iterable<readonly [string, KeyList.Grant]>
 ) =>
   Effect.gen(function* () {
-    const issuer = "https://issuer.example/api/auth";
-    const audience = "https://notes.example/";
-
-    const pair = yield* Effect.promise(
-      async () => await generateKeyPair("EdDSA")
-    );
-
-    const jwk = {
-      ...(yield* Effect.promise(async () => await exportJWK(pair.publicKey))),
-      kid: "fixture",
-      alg: "EdDSA",
-    };
-
+    const { pair, jwk } = yield* keyPair;
     const granted = new Map(grants);
     const reads = { jwks: 0, lists: 0 };
 
@@ -207,15 +214,5 @@ export const listIssuer = (
       )
     );
 
-    return {
-      issuer,
-      audience,
-      pair,
-      jwk,
-      granted,
-      reads,
-      upstream,
-      client,
-      token,
-    };
+    return { granted, reads, upstream, client, token };
   });
