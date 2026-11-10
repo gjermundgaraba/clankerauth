@@ -17,8 +17,10 @@ vp add effect
 The `/session` and `/effect-actions` entry points also need effect-actions, an optional peer. Install this range: the SDK's declarations are built against it, and under `skipLibCheck` they silently degrade to `any` with another.
 
 ```sh
-vp add @gjermundgaraba/effect-actions@^0.30.0
+vp add @gjermundgaraba/effect-actions@^0.31.0
 ```
+
+effect-actions 0.31 needs Effect 4.1.3 or a later 4.1 patch.
 
 ## Entry points
 

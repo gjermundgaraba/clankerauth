@@ -67,7 +67,7 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@gjermundgaraba/effect-actions": "^0.30.0",
+    "@gjermundgaraba/effect-actions": "^0.31.0",
     "effect": "~4.1.1"
   },
   "peerDependenciesMeta": {
