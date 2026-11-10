@@ -7,6 +7,7 @@ import { webMcpRequest } from "./mcp.ts";
 import {
   signedInOwner,
   testWebApplication,
+  text,
   WebApplication,
 } from "./test-issuer.ts";
 import type { TestHandler } from "./test-issuer.ts";
@@ -181,10 +182,7 @@ it.live(
         authorization: `Bearer ${tokens.access_token}`,
       });
 
-      expect(
-        response.status,
-        yield* Effect.promise(async () => await response.clone().text())
-      ).toBe(200);
+      expect(response.status, yield* text(response)).toBe(200);
       expectCors(response, clientOrigin);
       expect(
         (yield* list(handle, { origin: clientOrigin, cookie })).status
