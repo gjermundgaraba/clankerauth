@@ -23,7 +23,7 @@ catalog:
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.5.1
   vite-plus: 1.5.1
-  playwright: 1.64.1
+  playwright: 1.65.0
   kysely: 0.29.8
   "@better-auth/cimd": 1.7.19
   "@better-auth/core": 1.7.19
