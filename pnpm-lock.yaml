@@ -204,8 +204,8 @@ catalogs:
       specifier: 0.29.0
       version: 0.29.0
     '@gjermundgaraba/components':
-      specifier: 0.7.0
-      version: 0.7.0
+      specifier: 0.8.0
+      version: 0.8.0
     '@gjermundgaraba/effect-actions':
       specifier: 0.31.0
       version: 0.31.0
@@ -427,7 +427,7 @@ importers:
         version: link:../../packages/sdk
       '@gjermundgaraba/components':
         specifier: 'catalog:'
-        version: 0.7.0(@effect/platform-browser@4.1.3(effect@4.1.3))(@foldkit/ui@0.170.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)))(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))
+        version: 0.8.0(@effect/platform-browser@4.1.3(effect@4.1.3))(@foldkit/ui@0.170.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)))(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.31.0(effect@4.1.3)
@@ -818,16 +818,16 @@ packages:
       foldkit: '>=0.167.0'
       vite: ^8.0.0
 
-  '@gjermundgaraba/components@0.7.0':
-    resolution: {integrity: sha512-NOdg6WeVOUUGbmGNW/PzOgsqASNvr+/By+T9czKPK21+rfNBy7hcAaKP3rsZZxRLUrYUypnSOuR2HvgU2KPGZw==}
+  '@gjermundgaraba/components@0.8.0':
+    resolution: {integrity: sha512-/8bcF1lwCgG6Qvg1mKd+b7X1sIx8wgUIVfBD6RwtvgAmVTz7Q3iIl7KfswD7rgJkAwnPi5umCucOjIhY/FvGGQ==}
     peerDependencies:
       '@effect/platform-browser': ^4.0.0
       '@foldkit/ui': ^0.170.0
       effect: ^4.0.0
       foldkit: ^0.170.0
 
-  '@gjermundgaraba/design-tokens@0.7.0':
-    resolution: {integrity: sha512-h/Z//KMEmbyvEJydsddbb5Dx0uDnJJES4UD6TvDOzM273MgIuzTq2yczs2bFIQ6kH7Vu/YdPKYj/+VXjRJUMyg==}
+  '@gjermundgaraba/design-tokens@0.8.0':
+    resolution: {integrity: sha512-uuD5HWKuA1wgB9nY/n/c30UbBZICuOZZr2835ZouB4G6k7ujXib/qZ1g+OyD3g8KSonHc1MtD87k+H6/9IJlxA==}
 
   '@gjermundgaraba/effect-actions@0.31.0':
     resolution: {integrity: sha512-3aOILY3L1tdy1DP3GGAOSuCkNFz6rgIArg3q1FNvASi3Wszp/4s95mLXIirfN8I34ZiHwO1CuQXRKYCvqA22+A==}
@@ -835,11 +835,11 @@ packages:
     peerDependencies:
       effect: ~4.1.3
 
-  '@gjermundgaraba/fonts@0.7.0':
-    resolution: {integrity: sha512-wXg6tKDthJLy1yxdLZacIpfTgJnVlhWkxso+D1z9Z7YEZj/at6J8BwfLONhX9X/FzWI+oxYDl0GwJEE11+vENA==}
+  '@gjermundgaraba/fonts@0.8.0':
+    resolution: {integrity: sha512-nDjIfEWjCnkSrmD/sFynEyPdu2Or9iWnPkoOAmIN42LROmThKKlG6xb03bxrYzT1k24HRG9DzVh1wS9jrgRHPQ==}
 
-  '@gjermundgaraba/icons@0.7.0':
-    resolution: {integrity: sha512-zcwmZIIlokU/y9bvO0LD7eh2Nu2gaUvdHvhRCDnyf2Uo9bQUdyvJyD10b0KU3QiOFCGCHffE+fWhpGUt8YHobg==}
+  '@gjermundgaraba/icons@0.8.0':
+    resolution: {integrity: sha512-E3srwljJvcbvCE7/Ajjfa9cjCp9J38GcWIxMt+kSz0ycWykmT/9JctjriawuT3SEZ8wFrqXSWgWoXlvsjDJP8Q==}
     peerDependencies:
       effect: ^4.0.0
       foldkit: ^0.170.0
@@ -2802,7 +2802,7 @@ snapshots:
       - redis
       - utf-8-validate
 
-  '@gjermundgaraba/components@0.7.0(@effect/platform-browser@4.1.3(effect@4.1.3))(@foldkit/ui@0.170.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)))(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))':
+  '@gjermundgaraba/components@0.8.0(@effect/platform-browser@4.1.3(effect@4.1.3))(@foldkit/ui@0.170.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)))(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))':
     dependencies:
       '@codemirror/commands': 6.11.1
       '@codemirror/lang-markdown': 6.5.2
@@ -2812,24 +2812,24 @@ snapshots:
       '@codemirror/view': 6.43.15
       '@effect/platform-browser': 4.1.3(effect@4.1.3)
       '@foldkit/ui': 0.170.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))
-      '@gjermundgaraba/design-tokens': 0.7.0
-      '@gjermundgaraba/fonts': 0.7.0
-      '@gjermundgaraba/icons': 0.7.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))
+      '@gjermundgaraba/design-tokens': 0.8.0
+      '@gjermundgaraba/fonts': 0.8.0
+      '@gjermundgaraba/icons': 0.8.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))
       '@lezer/common': 1.5.5
       '@lezer/markdown': 1.8.1
       diff: 9.0.0
       effect: 4.1.3
       foldkit: 0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)
 
-  '@gjermundgaraba/design-tokens@0.7.0': {}
+  '@gjermundgaraba/design-tokens@0.8.0': {}
 
   '@gjermundgaraba/effect-actions@0.31.0(effect@4.1.3)':
     dependencies:
       effect: 4.1.3
 
-  '@gjermundgaraba/fonts@0.7.0': {}
+  '@gjermundgaraba/fonts@0.8.0': {}
 
-  '@gjermundgaraba/icons@0.7.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))':
+  '@gjermundgaraba/icons@0.8.0(effect@4.1.3)(foldkit@0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3))':
     dependencies:
       effect: 4.1.3
       foldkit: 0.170.0(@effect/platform-browser@4.1.3(effect@4.1.3))(effect@4.1.3)
