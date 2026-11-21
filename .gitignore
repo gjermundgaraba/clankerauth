@@ -9,3 +9,5 @@ data/
 .amp/portals/
 .amp/in/
 .vitest/
+
+.agents/repos/
